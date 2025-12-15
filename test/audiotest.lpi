@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <ProjectOptions>
+    <Version Value="12"/>
+    <PathDelim Value="\"/>
+    <General>
+      <Flags>
+        <MainUnitHasCreateFormStatements Value="False"/>
+        <MainUnitHasTitleStatement Value="False"/>
+        <MainUnitHasScaledStatement Value="False"/>
+      </Flags>
+      <SessionStorage Value="InProjectDir"/>
+      <Title Value="audiotest"/>
+      <UseAppBundle Value="False"/>
+      <ResourceType Value="res"/>
+    </General>
+    <BuildModes>
+      <Item Name="Default" Default="True"/>
+      <Item Name="Debug">
+        <CompilerOptions>
+          <Version Value="11"/>
+          <PathDelim Value="\"/>
+          <Target>
+            <Filename Value="audiotest"/>
+          </Target>
+          <SearchPaths>
+            <IncludeFiles Value="$(ProjOutDir)"/>
+            <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
+          </SearchPaths>
+          <Parsing>
+            <SyntaxOptions>
+              <IncludeAssertionCode Value="True"/>
+            </SyntaxOptions>
+          </Parsing>
+          <CodeGeneration>
+            <Checks>
+              <IOChecks Value="True"/>
+              <RangeChecks Value="True"/>
+              <OverflowChecks Value="True"/>
+              <StackChecks Value="True"/>
+            </Checks>
+            <VerifyObjMethodCallValidity Value="True"/>
+          </CodeGeneration>
+          <Linking>
+            <Debugging>
+              <DebugInfoType Value="dsDwarf3"/>
+              <UseHeaptrc Value="True"/>
+              <TrashVariables Value="True"/>
+              <UseExternalDbgSyms Value="True"/>
+            </Debugging>
+          </Linking>
+        </CompilerOptions>
+      </Item>
+      <Item Name="Release">
+        <CompilerOptions>
+          <Version Value="11"/>
+          <PathDelim Value="\"/>
+          <Target>
+            <Filename Value="audiotest"/>
+          </Target>
+          <SearchPaths>
+            <IncludeFiles Value="$(ProjOutDir)"/>
+            <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
+          </SearchPaths>
+          <CodeGeneration>
+            <SmartLinkUnit Value="True"/>
+            <Optimizations>
+              <OptimizationLevel Value="3"/>
+            </Optimizations>
+          </CodeGeneration>
+          <Linking>
+            <Debugging>
+              <GenerateDebugInfo Value="False"/>
+              <RunWithoutDebug Value="True"/>
+            </Debugging>
+            <LinkSmart Value="True"/>
+          </Linking>
+        </CompilerOptions>
+      </Item>
+    </BuildModes>
+    <PublishOptions>
+      <Version Value="2"/>
+      <UseFileFilters Value="True"/>
+    </PublishOptions>
+    <RunParams>
+      <FormatVersion Value="2"/>
+    </RunParams>
+    <RequiredPackages>
+      <Item>
+        <PackageName Value="LCL"/>
+      </Item>
+    </RequiredPackages>
+    <Units>
+      <Unit>
+        <Filename Value="audiotest.lpr"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="AudioTest"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaiaudiofoundation.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiAudioFoundation"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaiaudiotypes.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiAudioTypes"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaiwavegenerator.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiWaveGenerator"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaiadsrprocessor.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiADSRProcessor"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaiplatformdetector.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiPlatformDetector"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaiaudiochip.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiAudioChip"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaistereoprocessor.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiStereoProcessor"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaifmprocessor.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiFMProcessor"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaiclassicprocessor.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiClassicProcessor"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaiwavetableprocessor.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiWavetableProcessor"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaisynthesisengine.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiSynthesisEngine"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaiwavetableloader.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiWavetableLoader"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaimiditypes.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiMIDITypes"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaimidisequencer.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiMIDISequencer"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaimidifoundation.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiMIDIFoundation"/>
+      </Unit>
+      <Unit>
+        <Filename Value="sedaimidiparser.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="SedaiMIDIParser"/>
+      </Unit>
+    </Units>
+  </ProjectOptions>
+  <CompilerOptions>
+    <Version Value="11"/>
+    <PathDelim Value="\"/>
+    <Target>
+      <Filename Value="audiotest"/>
+    </Target>
+    <SearchPaths>
+      <IncludeFiles Value="$(ProjOutDir)"/>
+      <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
+    </SearchPaths>
+    <Linking>
+      <Debugging>
+        <DebugInfoType Value="dsDwarf3"/>
+      </Debugging>
+    </Linking>
+  </CompilerOptions>
+  <Debugging>
+    <Exceptions>
+      <Item>
+        <Name Value="EAbort"/>
+      </Item>
+      <Item>
+        <Name Value="ECodetoolError"/>
+      </Item>
+      <Item>
+        <Name Value="EFOpenError"/>
+      </Item>
+    </Exceptions>
+  </Debugging>
+</CONFIG>
