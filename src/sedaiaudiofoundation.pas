@@ -91,6 +91,8 @@ function GetWavetableCacheInfo: string;
 
 procedure PlayLoadedWavetable(AFreq: Single; const AWavetableName: string);
 function PlayLoadedWavetableAdv(AFreq: Single; const AWavetableName: string): Integer;
+procedure PlayCustomWavetable(AFreq: Single; const ACustomWavetable: TWavetable);
+function PlayCustomWavetableAdv(AFreq: Single; const ACustomWavetable: TWavetable): Integer;
 
 procedure PrintWavetableInfo(const AFilename: string);
 procedure ListLoadedWavetables;
@@ -942,20 +944,73 @@ begin
   AWavetable := TSedaiWavetableLoader.FindWavetableByName(AWavetableName);
   if AWavetable.IsLoaded then
   begin
-    WriteLn('Playing loaded wavetable: ', AWavetableName, ' at ', AFreq:0:2, ' Hz');
-    PlayWavetable(AFreq, 'serum');
+    WriteLn('   >>> Playing AKWF: ', AWavetableName, ' (', AWavetable.SampleLength, ' samples)');
+    GlobalAudioChip.PlayCustomWavetableNote(AFreq, AWavetable);
   end
   else
   begin
-    WriteLn('WARNING: Wavetable not loaded, using built-in: ', AWavetableName);
-    PlayWavetable(AFreq, 'serum');
+    // NO FALLBACK! If wavetable not loaded, report error and do nothing
+    WriteLn('ERROR: Wavetable "', AWavetableName, '" NOT FOUND in cache - NOT PLAYING');
   end;
 end;
 
 function PlayLoadedWavetableAdv(AFreq: Single; const AWavetableName: string): Integer;
+var
+  AWavetable: TWavetable;
 begin
-  PlayLoadedWavetable(AFreq, AWavetableName);
-  Result := 0;
+  Result := -1;
+  if not Assigned(GlobalAudioChip) then
+  begin
+    WriteLn('ERROR: Audio not initialized');
+    Exit;
+  end;
+
+  AWavetable := TSedaiWavetableLoader.FindWavetableByName(AWavetableName);
+  if AWavetable.IsLoaded then
+  begin
+    WriteLn('   >>> Playing AKWF: ', AWavetableName, ' (', AWavetable.SampleLength, ' samples)');
+    Result := GlobalAudioChip.PlayCustomWavetableNoteAdvanced(AFreq, AWavetable);
+  end
+  else
+  begin
+    // NO FALLBACK! If wavetable not loaded, report error and return -1
+    WriteLn('ERROR: Wavetable "', AWavetableName, '" NOT FOUND in cache - NOT PLAYING');
+  end;
+end;
+
+procedure PlayCustomWavetable(AFreq: Single; const ACustomWavetable: TWavetable);
+begin
+  if not Assigned(GlobalAudioChip) then
+  begin
+    WriteLn('ERROR: Audio not initialized');
+    Exit;
+  end;
+
+  if ACustomWavetable.IsLoaded then
+    GlobalAudioChip.PlayCustomWavetableNote(AFreq, ACustomWavetable)
+  else
+  begin
+    WriteLn('WARNING: Custom wavetable not loaded, using built-in');
+    PlayWavetable(AFreq, 'serum');
+  end;
+end;
+
+function PlayCustomWavetableAdv(AFreq: Single; const ACustomWavetable: TWavetable): Integer;
+begin
+  Result := -1;
+  if not Assigned(GlobalAudioChip) then
+  begin
+    WriteLn('ERROR: Audio not initialized');
+    Exit;
+  end;
+
+  if ACustomWavetable.IsLoaded then
+    Result := GlobalAudioChip.PlayCustomWavetableNoteAdvanced(AFreq, ACustomWavetable)
+  else
+  begin
+    WriteLn('WARNING: Custom wavetable not loaded, using built-in');
+    Result := PlayWavetableAdv(AFreq, 'serum');
+  end;
 end;
 
 procedure PrintWavetableInfo(const AFilename: string);

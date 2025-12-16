@@ -1,5 +1,9 @@
 # Sedai Audio Foundation
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Maurizio%20Cammalleri-0077B5?logo=linkedin)](https://www.linkedin.com/in/maurizio-cammalleri-80a89a11/)
+[![Substack](https://img.shields.io/badge/Substack-Maurizio%20Cammalleri-FF6719?logo=substack)](https://cammalleri.substack.com/)
+
 > **DISCLAIMER**: This library is in advanced development stage but **not yet ready for any use**. The API is unstable, many features are incomplete or broken, and there are known bugs. However, we encourage you to try it out and report any bugs or suggest improvements! Your feedback is valuable to help us improve the library.
 
 A professional-grade, modular audio synthesis and MIDI playback library written in Free Pascal.
@@ -8,10 +12,14 @@ A professional-grade, modular audio synthesis and MIDI playback library written 
 
 Sedai Audio Foundation provides a comprehensive audio synthesis framework with:
 
-- **3 Independent Synthesis Engines**: Classic (Subtractive), FM, and Wavetable
+- **4 Independent Synthesis Engines**:
+  - **Additive Synthesis**: Harmonic spectrum synthesis with up to 32 harmonics, inharmonicity control for bells and metallic sounds
+  - **Subtractive Synthesis**: Classic analog-style synthesis with oscillators, filters, and LFO modulation
+  - **FM Synthesis**: DX7-style 6-operator frequency modulation with 5 algorithms
+  - **Wavetable Synthesis**: Modern wavetable synthesis with morphing and multi-format support
 - **Real-time MIDI Playback**: Standard MIDI file support with 16-channel polyphony
 - **Audio Effects**: Delay, Reverb, Chorus, Flanger, Distortion
-- **Advanced Filters**: 6 filter types with multi-pole cascading
+- **Advanced Filters**: 6 filter types with multi-pole cascading (12dB, 24dB, 48dB/octave)
 - **40+ Built-in Presets**: Ready-to-use sounds for all synthesis types
 - **Cross-Platform**: Works on Linux and Windows via SDL2
 
@@ -618,9 +626,30 @@ end;
 
 ---
 
+## Roadmap
+
+The following synthesis techniques are planned for future versions:
+
+| Technique | Description | Status |
+|-----------|-------------|--------|
+| **IFFT Synthesis** | Inverse Fast Fourier Transform for spectral manipulation and resynthesis | Planned |
+| **Granular Synthesis** | Time-stretching and pitch-shifting through micro-sound grains | Planned |
+| **Physical Modeling** | Realistic instrument simulation using mathematical models of physical systems | Planned |
+
+---
+
 ## License
 
-Same license as the main Sedai Audio Foundation project.
+This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
+
+You are free to use, modify, and distribute this software under the terms of the GPL-3.0 license. See the [LICENSE](LICENSE) file for details.
+
+### Commercial Licensing
+
+For commercial use or proprietary licensing options, please contact the author:
+
+**Maurizio Cammalleri**
+Email: maurizio.cammalleri@gmail.com
 
 ---
 

@@ -30,7 +30,7 @@ interface
 uses
   Classes, SysUtils, ctypes,
   SedaiAudioTypes, SedaiSynthesisEngine,
-  SedaiStereoProcessor, SDL2;
+  SedaiStereoProcessor, SedaiWavetableLoader, SDL2;
 
 // MIDI Integration support - SIMPLIFIED
 type
@@ -65,11 +65,14 @@ type
                         ADurationMs: Integer = 1000);
     procedure PlayWavetableNote(AFreq: Single; const AWavetableType: string = 'serum';
                                ADurationMs: Integer = 1000);
+    procedure PlayCustomWavetableNote(AFreq: Single; const ACustomWavetable: TWavetable;
+                                     ADurationMs: Integer = 1000);
 
     // Advanced voice control
     function PlayNoteAdvanced(AFreq: Single; const APreset: string): Integer;
     function PlayFMNoteAdvanced(AFreq: Single; const APreset: string): Integer;
     function PlayWavetableNoteAdvanced(AFreq: Single; const AWavetableType: string): Integer;
+    function PlayCustomWavetableNoteAdvanced(AFreq: Single; const ACustomWavetable: TWavetable): Integer;
 
     procedure NoteOff(AVoiceIndex: Integer);
     procedure SetVoicePan(AVoiceIndex: Integer; APan: TPanPosition);
@@ -349,6 +352,31 @@ begin
     WriteLn('WARNING: No free voices available');
 end;
 
+procedure TSedaiAudioChip.PlayCustomWavetableNote(AFreq: Single;
+  const ACustomWavetable: TWavetable; ADurationMs: Integer);
+var
+  VoiceIndex: Integer;
+begin
+  if not FIsInitialized then
+  begin
+    WriteLn('WARNING: Audio not initialized');
+    Exit;
+  end;
+
+  if not ACustomWavetable.IsLoaded then
+  begin
+    WriteLn('WARNING: Custom wavetable not loaded, using default');
+    PlayWavetableNote(AFreq, 'serum', ADurationMs);
+    Exit;
+  end;
+
+  VoiceIndex := FSynthEngine.AllocateVoice;
+  if VoiceIndex >= 0 then
+    FSynthEngine.PlayWavetableCustom(VoiceIndex, AFreq, ACustomWavetable)
+  else
+    WriteLn('WARNING: No free voices available');
+end;
+
 // Advanced methods returning voice index
 function TSedaiAudioChip.PlayNoteAdvanced(AFreq: Single; const APreset: string): Integer;
 begin
@@ -386,6 +414,23 @@ begin
   Result := FSynthEngine.AllocateVoice;
   if Result >= 0 then
     FSynthEngine.PlayWavetable(Result, AFreq, WTType);
+end;
+
+function TSedaiAudioChip.PlayCustomWavetableNoteAdvanced(AFreq: Single;
+  const ACustomWavetable: TWavetable): Integer;
+begin
+  Result := -1;
+  if not FIsInitialized then Exit;
+
+  if not ACustomWavetable.IsLoaded then
+  begin
+    WriteLn('WARNING: Custom wavetable not loaded');
+    Exit;
+  end;
+
+  Result := FSynthEngine.AllocateVoice;
+  if Result >= 0 then
+    FSynthEngine.PlayWavetableCustom(Result, AFreq, ACustomWavetable);
 end;
 
 // Voice control

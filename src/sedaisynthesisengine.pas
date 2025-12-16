@@ -29,7 +29,8 @@ interface
 
 uses
   Classes, SysUtils, SedaiAudioTypes,
-  SedaiClassicProcessor, SedaiFMProcessor, SedaiWavetableProcessor;
+  SedaiClassicProcessor, SedaiFMProcessor, SedaiWavetableProcessor,
+  SedaiWavetableLoader;
 
 type
   // Synthesis engine types
@@ -76,6 +77,9 @@ type
     procedure PlayWavetable(AVoiceIndex: Integer; AFreq: Single;
                            const AWavetableType: TWavetableType;
                            AAmplitude: Single = 0.3);
+    procedure PlayWavetableCustom(AVoiceIndex: Integer; AFreq: Single;
+                                  const ACustomWavetable: TWavetable;
+                                  AAmplitude: Single = 0.3);
 
     // Processing - CLEAR SEPARATION
     function ProcessVoice(AVoiceIndex: Integer; ASampleRate: Single;
@@ -270,6 +274,26 @@ begin
         wtPPG: WavetableSynth := TSedaiWavetableProcessor.CreatePPG;
         else WavetableSynth := TSedaiWavetableProcessor.CreateSerum;
       end;
+
+      TSedaiWavetableProcessor.StartWavetableAttack(WavetableSynth);
+      IsActive := True;
+    end;
+  end;
+end;
+
+procedure TSedaiSynthesisEngine.PlayWavetableCustom(AVoiceIndex: Integer; AFreq: Single;
+  const ACustomWavetable: TWavetable; AAmplitude: Single);
+begin
+  if (AVoiceIndex >= 0) and (AVoiceIndex < FVoiceCount) then
+  begin
+    with FVoices[AVoiceIndex] do
+    begin
+      EngineType := setWavetable;
+      Frequency := AFreq;
+      Amplitude := AAmplitude;
+
+      // Use custom wavetable from loaded file (e.g., AKWF)
+      WavetableSynth := TSedaiWavetableProcessor.CreateFromCustomWavetable(ACustomWavetable);
 
       TSedaiWavetableProcessor.StartWavetableAttack(WavetableSynth);
       IsActive := True;

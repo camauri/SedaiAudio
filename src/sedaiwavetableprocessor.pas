@@ -31,14 +31,7 @@ uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiADSRProcessor;
 
 type
-  // Wavetable structure
-  TWavetable = record
-    Name: string;
-    WaveCount: Integer;
-    SampleLength: Integer;
-    Samples: array of array of Single; // [wave][sample]
-    IsLoaded: Boolean;
-  end;
+  // Note: TWavetable is defined in SedaiAudioTypes
 
   // Wavetable oscillator
   TWavetableOscillator = record
@@ -95,6 +88,9 @@ type
     class function CreateOrgan: TWavetableSynthesis;
     class function CreateEvolving: TWavetableSynthesis;
     class function CreateDigitalChaos: TWavetableSynthesis;
+
+    // Custom wavetable from external data (e.g., loaded WAV files)
+    class function CreateFromCustomWavetable(const AWavetable: TWavetable): TWavetableSynthesis;
 
     // Control
     class procedure StartWavetableAttack(var AWTSynth: TWavetableSynthesis);
@@ -686,6 +682,37 @@ begin
 
   Result.OscillatorCount := 2;
   Result.MixMode := 2; // Ring modulation for extra chaos
+end;
+
+// Create synth from custom/loaded wavetable (e.g., AKWF files)
+class function TSedaiWavetableProcessor.CreateFromCustomWavetable(const AWavetable: TWavetable): TWavetableSynthesis;
+begin
+  InitializeWavetableSynth(Result);
+
+  if not AWavetable.IsLoaded then
+  begin
+    // Fallback to Serum if wavetable not loaded
+    Result.Oscillators[0].Wavetable := CreateBuiltinWavetable(wtSerum);
+  end
+  else
+  begin
+    // Use the custom wavetable
+    Result.Oscillators[0].Wavetable := AWavetable;
+  end;
+
+  Result.Oscillators[0].IsActive := True;
+  Result.Oscillators[0].Amplitude := 0.7;
+  Result.Oscillators[0].FreqRatio := 1.0;
+  Result.Oscillators[0].WavePosition := 0.0;
+
+  // Good generic ADSR for custom wavetables
+  Result.Oscillators[0].ADSR := CreateADSR(
+    0.01,  // Fast attack
+    0.1,   // Medium decay
+    0.9,   // High sustain
+    0.3    // Medium release
+  );
+  Result.OscillatorCount := 1;
 end;
 
 // Control methods

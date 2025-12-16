@@ -120,6 +120,7 @@ var
   AFile: TFileStream;
   AHeader: array[0..11] of Byte;
   AHeaderStr: string;
+  ASampleCount: Integer;
 begin
   Result := wtfUnknown;
 
@@ -148,13 +149,19 @@ begin
 
           if AHeaderStr = 'RIFF' then
           begin
-            // Check if it's a wavetable-sized WAV (multiple of 2048 samples)
-            if ((AFile.Size - 44) mod (2048 * 4)) = 0 then // 32-bit samples
+            // Calculate approximate sample count (assume 16-bit)
+            ASampleCount := (AFile.Size - 44) div 2;
+
+            // AKWF files are typically 512 samples (single-cycle)
+            // Serum wavetables are multiples of 2048 samples
+            if ASampleCount < 2048 then
+              Result := wtfGeneric  // Single-cycle waveform (AKWF, etc.)
+            else if ((AFile.Size - 44) mod (2048 * 4)) = 0 then // 32-bit, exact multiple
               Result := wtfSerum
-            else if ((AFile.Size - 44) mod (2048 * 2)) = 0 then // 16-bit samples
+            else if ((AFile.Size - 44) mod (2048 * 2)) = 0 then // 16-bit, exact multiple
               Result := wtfVital
             else
-              Result := wtfGeneric;
+              Result := wtfGeneric;  // Not a standard wavetable format
           end;
         end;
       finally
@@ -416,28 +423,117 @@ begin
 end;
 
 // Load generic WAV file as single-wave wavetable
+// This handles AKWF files (512 samples) and other single-cycle waveforms
 class function TSedaiWavetableLoader.LoadGenericWave(const AFilename: string): TWavetable;
 var
+  AFile: TFileStream;
+  AWavHeader: array[0..43] of Byte;
+  ASampleCount: Integer;
+  ABitsPerSample, ANumChannels: Word;
+  ASamples16: array of SmallInt;
+  ASamples8: array of Byte;
   i: Integer;
-  APhase: Single;
 begin
-  // Simplified generic WAV loader
   FillChar(Result, SizeOf(TWavetable), 0);
   Result.Name := ChangeFileExt(ExtractFileName(AFilename), '');
-  Result.WaveCount := 1;
-  Result.SampleLength := 2048;
 
-  SetLength(Result.Samples, 1, 2048);
+  try
+    AFile := TFileStream.Create(AFilename, fmOpenRead);
+    try
+      // Read WAV header
+      if AFile.Size < 44 then
+      begin
+        WriteLn('ERROR: WAV file too small: ', AFilename);
+        Exit;
+      end;
 
-  // Generate a simple sine wave for demo
-  for i := 0 to 2047 do
-  begin
-    APhase := (i / 2048.0) * 2.0 * Pi;
-    Result.Samples[0][i] := Sin(APhase);
+      AFile.ReadBuffer(AWavHeader, 44);
+
+      // Parse WAV header to get format info
+      // Bytes 22-23: NumChannels (1=mono, 2=stereo)
+      // Bytes 34-35: BitsPerSample (8 or 16)
+      ANumChannels := AWavHeader[22] or (AWavHeader[23] shl 8);
+      ABitsPerSample := AWavHeader[34] or (AWavHeader[35] shl 8);
+
+      // Calculate sample count based on bits per sample
+      if ABitsPerSample = 16 then
+        ASampleCount := (AFile.Size - 44) div 2
+      else if ABitsPerSample = 8 then
+        ASampleCount := AFile.Size - 44
+      else
+      begin
+        WriteLn('ERROR: Unsupported bits per sample: ', ABitsPerSample);
+        Exit;
+      end;
+
+      // Handle stereo by taking only left channel
+      if ANumChannels = 2 then
+        ASampleCount := ASampleCount div 2;
+
+      if ASampleCount <= 0 then
+      begin
+        WriteLn('ERROR: No samples in WAV file: ', AFilename);
+        Exit;
+      end;
+
+      // AKWF files are single-cycle waveforms
+      // Store as a single wave with the actual sample length
+      Result.WaveCount := 1;
+      Result.SampleLength := ASampleCount;
+      SetLength(Result.Samples, 1, ASampleCount);
+
+      // Read and convert samples
+      if ABitsPerSample = 16 then
+      begin
+        if ANumChannels = 1 then
+        begin
+          // Mono 16-bit - read directly
+          SetLength(ASamples16, ASampleCount);
+          AFile.ReadBuffer(ASamples16[0], ASampleCount * 2);
+          for i := 0 to ASampleCount - 1 do
+            Result.Samples[0][i] := ASamples16[i] / 32768.0;
+        end
+        else
+        begin
+          // Stereo 16-bit - read left channel only
+          SetLength(ASamples16, ASampleCount * 2);
+          AFile.ReadBuffer(ASamples16[0], ASampleCount * 4);
+          for i := 0 to ASampleCount - 1 do
+            Result.Samples[0][i] := ASamples16[i * 2] / 32768.0; // Left channel
+        end;
+      end
+      else // 8-bit
+      begin
+        if ANumChannels = 1 then
+        begin
+          SetLength(ASamples8, ASampleCount);
+          AFile.ReadBuffer(ASamples8[0], ASampleCount);
+          for i := 0 to ASampleCount - 1 do
+            Result.Samples[0][i] := (ASamples8[i] - 128) / 128.0;
+        end
+        else
+        begin
+          SetLength(ASamples8, ASampleCount * 2);
+          AFile.ReadBuffer(ASamples8[0], ASampleCount * 2);
+          for i := 0 to ASampleCount - 1 do
+            Result.Samples[0][i] := (ASamples8[i * 2] - 128) / 128.0;
+        end;
+      end;
+
+      Result.IsLoaded := True;
+      WriteLn('  Single-cycle waveform loaded: ', Result.Name,
+              ' (', ASampleCount, ' samples, ', ABitsPerSample, '-bit)');
+
+    finally
+      AFile.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      WriteLn('ERROR loading WAV file: ', E.Message);
+      Result.IsLoaded := False;
+    end;
   end;
-
-  Result.IsLoaded := True;
-  WriteLn('  Generic WAV loaded (simulated): ', Result.Name);
 end;
 
 // Scan directory for wavetable files - FIXED VERSION
