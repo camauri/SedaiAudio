@@ -44,7 +44,7 @@ Sedai Audio Foundation provides a comprehensive audio synthesis framework with:
 | **Sample Rate** | 44100 Hz (CD quality) |
 | **Bit Depth** | 32-bit floating point internal processing |
 | **Buffer Size** | 1024 samples (~23ms latency) |
-| **Voice Polyphony** | 32-128 voices (configurable) |
+| **Voice Polyphony** | 32 default (unlimited, hardware-dependent) |
 
 ### Synthesis Technologies
 
@@ -421,22 +421,6 @@ chmod +x build.sh
 .\build.ps1 -Help
 ```
 
-#### Windows (Command Prompt)
-
-```batch
-REM Build with system FPC
-build.bat
-
-REM Build with custom FPC path
-build.bat --fpc "C:\FPC\3.2.2\bin\i386-win32\fpc.exe"
-
-REM Build only demos
-build.bat --demos-only
-
-REM Clean build artifacts
-build.bat --clean
-```
-
 ### Manual Compilation
 
 ```bash
@@ -790,7 +774,7 @@ end;
 - **Source Files**: 27+ files (units + programs)
 - **Synthesis Engines**: 5 (Classic, FM, Wavetable, Additive, SID Evo)
 - **Dependencies**: SDL2 only
-- **Voice Polyphony**: 32 default (configurable up to 128)
+- **Voice Polyphony**: 32 default (unlimited, hardware-dependent)
 - **Sample Rate**: 44100 Hz
 - **Audio Buffer**: 1024 samples
 - **SID Evo Waveforms**: 12 (4 classic + 8 extended)
