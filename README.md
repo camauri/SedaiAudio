@@ -12,12 +12,14 @@ A professional-grade, modular audio synthesis and MIDI playback library written 
 
 Sedai Audio Foundation provides a comprehensive audio synthesis framework with:
 
-- **4 Independent Synthesis Engines**:
+- **5 Independent Synthesis Engines**:
   - **Additive Synthesis**: Harmonic spectrum synthesis with up to 32 harmonics, inharmonicity control for bells and metallic sounds
   - **Subtractive Synthesis**: Classic analog-style synthesis with oscillators, filters, and LFO modulation
   - **FM Synthesis**: DX7-style 6-operator frequency modulation with 5 algorithms
   - **Wavetable Synthesis**: Modern wavetable synthesis with morphing and multi-format support
+  - **SID Evo**: Commodore 64 SID-inspired synthesis with 12 waveforms and chiptune capabilities
 - **Real-time MIDI Playback**: Standard MIDI file support with 16-channel polyphony
+- **GoatTracker Player**: Native playback of GoatTracker v2 .sng files with full command support
 - **Audio Effects**: Delay, Reverb, Chorus, Flanger, Distortion
 - **Advanced Filters**: 6 filter types with multi-pole cascading (12dB, 24dB, 48dB/octave)
 - **40+ Built-in Presets**: Ready-to-use sounds for all synthesis types
@@ -52,6 +54,13 @@ Sedai Audio Foundation provides a comprehensive audio synthesis framework with:
 | **FM (Frequency Modulation)** | DX7-style 6-operator FM synthesis |
 | **Wavetable** | Modern wavetable synthesis with morphing |
 | **Additive** | Harmonic spectrum synthesis |
+| **SID Evo** | C64 SID-inspired with 12 waveforms (4 classic + 8 extended) |
+
+### Tracker Formats
+
+| Format | Description |
+|--------|-------------|
+| **GoatTracker v2** | Native .sng file playback with wavetable commands |
 
 ### Signal Processing
 
@@ -136,6 +145,8 @@ Sedai Audio Foundation provides a comprehensive audio synthesis framework with:
 | **SedaiMIDISequencer** | Real-time MIDI playback |
 | **SedaiMIDIFoundation** | High-level MIDI API |
 | **SedaiWavetableLoader** | Multi-format wavetable loader |
+| **SedaiSIDEvo** | SID-inspired synthesis engine with 12 waveforms |
+| **SedaiGoatTracker** | GoatTracker v2 .sng file player |
 
 ---
 
@@ -171,6 +182,138 @@ Sedai Audio Foundation provides a comprehensive audio synthesis framework with:
 **Presets**: serum, wasp, ppg, vocal, metallic, glass, organ, evolving, digitalchaos
 
 **Supported Wavetable Formats**: Serum (.wav, 2048 samples/frame), Vital (.wav), Surge/SurgeXT (.wt), Generic WAV
+
+### SID Evo Synthesis
+
+A Commodore 64 SID-inspired synthesis engine with extended capabilities. Provides authentic chiptune sounds while adding modern waveforms for creative flexibility.
+
+#### Classic SID Waveforms (4)
+
+| Flag | Waveform | Description |
+|------|----------|-------------|
+| `$01` | **Triangle** | Classic mellow tone |
+| `$02` | **Sawtooth** | Rich harmonics, brassy sound |
+| `$04` | **Pulse** | Square/PWM, classic chiptune |
+| `$08` | **Noise** | White noise for percussion |
+
+#### Extended "Evo" Waveforms (8)
+
+| Flag | Waveform | Description |
+|------|----------|-------------|
+| `$10` | **Sine** | Pure sine wave |
+| `$20` | **Supersaw** | Multiple detuned saws (trance/EDM) |
+| `$40` | **PWM** | Auto-modulating pulse width |
+| `$80` | **Half-Sine** | Half-rectified sine (bass) |
+| `$0100` | **Full-Sine** | Full-rectified sine (warm distortion) |
+| `$0200` | **Formant** | Vocal-like formant synthesis |
+| `$0400` | **Metallic** | Metallic/bell-like tones |
+| `$8000` | **Custom** | User-defined wavetable |
+
+**Features**:
+- Waveforms can be combined via OR bitmask (like the original SID)
+- 3 independent voices with ADSR envelopes
+- Pulse width modulation support
+- Master volume control
+- Hard restart capability
+
+---
+
+## GoatTracker Player
+
+Native playback support for GoatTracker v2 .sng files, the popular Commodore 64 music tracker.
+
+### Supported Features
+
+- Full song structure (orderlist, patterns, instruments, wavetables)
+- 3-channel playback with per-channel mute control
+- Loop detection and seamless looping
+- Real-time tempo control
+
+### Pattern Commands
+
+| Command | Name | Description |
+|---------|------|-------------|
+| `$01` | Portamento Up | Slide pitch up |
+| `$02` | Portamento Down | Slide pitch down |
+| `$03` | Tone Portamento | Slide to target note |
+| `$04` | Vibrato | Pitch vibrato effect |
+| `$05` | Attack/Decay | Set ADSR attack/decay |
+| `$06` | Sustain/Release | Set ADSR sustain/release |
+| `$07` | Waveform | Set voice waveform |
+| `$08` | Wavetable Pointer | Set wavetable start position |
+| `$09` | Pulse Width | Set pulse width |
+| `$0A` | Pulse Width Modulation | Modulate pulse width |
+| `$0B` | Filter Control | Filter on/off and settings |
+| `$0C` | Filter Cutoff | Set filter cutoff frequency |
+| `$0D` | Master Volume | Set global volume |
+| `$0E` | Funk Tempo | Set funk-style tempo |
+| `$0F` | Tempo | Set playback speed |
+
+### Wavetable Commands
+
+| Command | Name | Description |
+|---------|------|-------------|
+| `$F0` | Portamento Up | Continuous pitch slide up |
+| `$F1` | Portamento Down | Continuous pitch slide down |
+| `$F2` | Tone Portamento | Slide to target note |
+| `$F3` | Vibrato | Apply vibrato effect |
+| `$F4` | Set Attack/Decay | Set ADSR AD values |
+| `$F5` | Set Sustain/Release | Set ADSR SR values |
+| `$F6` | Set Waveform | Change voice waveform |
+| `$F7` | Delay | Wait N frames |
+| `$F8` | (Reserved) | - |
+| `$F9` | (Reserved) | - |
+| `$FA` | Set Vibrato Params | Configure vibrato depth/speed |
+| `$FB` | Goto | Jump to wavetable position |
+| `$FC` | End | Stop wavetable processing |
+| `$FD` | Set Master Volume | Change global volume |
+| `$FE` | (Reserved) | - |
+
+### Demo Player Controls
+
+```
+SPACE  - Pause/Resume playback
+R      - Restart song from beginning
+L      - Toggle loop mode
+V      - Toggle pattern command verbose output
+W      - Toggle wavetable command verbose output
+S      - Print SpeedTable contents
+1/2/3  - Mute/unmute channel 1/2/3
+Q      - Quit player
+```
+
+### Usage Example
+
+```pascal
+program GoatTrackerDemo;
+
+uses
+  SedaiSIDEvo, SedaiGoatTracker;
+
+var
+  SIDEvo: TSedaiSIDEvo;
+  GTPlayer: TSedaiGoatTracker;
+begin
+  SIDEvo := TSedaiSIDEvo.Create(44100);
+  GTPlayer := TSedaiGoatTracker.Create(SIDEvo);
+
+  if GTPlayer.LoadSong('mysong.sng') then
+  begin
+    GTPlayer.Play;
+
+    while GTPlayer.IsPlaying do
+    begin
+      GTPlayer.Process;  // Call each frame
+      Sleep(20);         // ~50 Hz update rate
+    end;
+
+    GTPlayer.Stop;
+  end;
+
+  GTPlayer.Free;
+  SIDEvo.Free;
+end.
+```
 
 ---
 
@@ -393,6 +536,32 @@ Demonstrates additive synthesis with harmonic control.
 - ADSR envelope visualization
 
 **Note**: This demo does NOT require audio output.
+
+### sng_player
+
+Interactive GoatTracker v2 .sng file player with SID Evo synthesis.
+
+```bash
+./sng_player mysong.sng
+```
+
+**Features**:
+- Full GoatTracker song playback
+- Real-time channel muting (keys 1/2/3)
+- Pause/resume and restart controls
+- Loop mode toggle
+- Verbose mode for debugging pattern and wavetable commands
+- SpeedTable inspection
+
+**Controls**:
+- `SPACE` - Pause/Resume
+- `R` - Restart song
+- `L` - Toggle loop mode
+- `V` - Toggle pattern verbose output
+- `W` - Toggle wavetable verbose output
+- `S` - Print SpeedTable
+- `1`/`2`/`3` - Mute/unmute channels
+- `Q` - Quit
 
 ---
 
@@ -617,12 +786,14 @@ end;
 
 ## Code Metrics
 
-- **Total Lines**: ~11,500 lines of Pascal code
-- **Source Files**: 25 files (22 units + 3 programs)
+- **Total Lines**: ~15,000+ lines of Pascal code
+- **Source Files**: 27+ files (units + programs)
+- **Synthesis Engines**: 5 (Classic, FM, Wavetable, Additive, SID Evo)
 - **Dependencies**: SDL2 only
 - **Voice Polyphony**: 32 default (configurable up to 128)
 - **Sample Rate**: 44100 Hz
 - **Audio Buffer**: 1024 samples
+- **SID Evo Waveforms**: 12 (4 classic + 8 extended)
 
 ---
 

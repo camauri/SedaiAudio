@@ -110,6 +110,7 @@ type
 
     // Control
     class procedure StartClassicAttack(var AClassicSynth: TClassicSynthesis);
+    class procedure StartClassicAttackHard(var AClassicSynth: TClassicSynthesis);  // SID-style hard reset
     class procedure StartClassicRelease(var AClassicSynth: TClassicSynthesis);
 
     // Status check - returns True if all oscillators have finished release (ADSR in Idle)
@@ -191,8 +192,8 @@ begin
         if Phase >= 2.0 * Pi then
           Phase := Phase - 2.0 * Pi;
 
-        // Generate oscillator output
-        AOscOutput := TSedaiWaveGenerator.GenerateWaveform(WaveType, Phase);
+        // Generate oscillator output (use PulseWidth for square waves)
+        AOscOutput := TSedaiWaveGenerator.GenerateWaveformPW(WaveType, Phase, PulseWidth);
 
         // Apply ADSR and amplitude
         AOscOutput := AOscOutput * Amplitude * ADSR.Level;
@@ -293,6 +294,15 @@ var
 begin
   for i := 0 to AClassicSynth.OscillatorCount - 1 do
     TSedaiADSRProcessor.StartADSRAttack(AClassicSynth.Oscillators[i].ADSR);
+end;
+
+class procedure TSedaiClassicProcessor.StartClassicAttackHard(var AClassicSynth: TClassicSynthesis);
+var
+  i: Integer;
+begin
+  // Hard reset: always reset ADSR level to zero for authentic SID trills/arpeggios
+  for i := 0 to AClassicSynth.OscillatorCount - 1 do
+    TSedaiADSRProcessor.StartADSRAttackHard(AClassicSynth.Oscillators[i].ADSR);
 end;
 
 class procedure TSedaiClassicProcessor.StartClassicRelease(var AClassicSynth: TClassicSynthesis);

@@ -29,7 +29,7 @@ interface
 
 uses
   Classes, SysUtils, ctypes,
-  SedaiAudioTypes, SedaiSynthesisEngine,
+  SedaiAudioTypes, SedaiSynthesisEngine, SedaiFilters,
   SedaiStereoProcessor, SedaiWavetableLoader, SDL2;
 
 // MIDI Integration support - SIMPLIFIED
@@ -74,8 +74,24 @@ type
     function PlayWavetableNoteAdvanced(AFreq: Single; const AWavetableType: string): Integer;
     function PlayCustomWavetableNoteAdvanced(AFreq: Single; const ACustomWavetable: TWavetable): Integer;
 
+    // Fixed voice control (no auto-allocation)
+    procedure PlayOnVoice(AVoiceIndex: Integer; AFreq: Single; const APreset: string);
+    procedure ReleaseVoice(AVoiceIndex: Integer);
+
     procedure NoteOff(AVoiceIndex: Integer);
+    procedure RetriggerVoice(AVoiceIndex: Integer);
+    procedure RetriggerVoiceHard(AVoiceIndex: Integer);  // SID-style hard reset for trills
     procedure SetVoicePan(AVoiceIndex: Integer; APan: TPanPosition);
+    procedure SetVoiceFrequency(AVoiceIndex: Integer; AFreq: Single);
+    procedure SetVoiceADSR(AVoiceIndex: Integer; AAttack, ADecay, ASustain, ARelease: Single);
+    procedure SetVoicePulseWidth(AVoiceIndex: Integer; APulseWidth: Single);
+
+    // Per-voice filter control
+    procedure SetVoiceFilter(AVoiceIndex: Integer; AEnabled: Boolean;
+                            AFilterType: TFilterType; AFreq, AQ: Single;
+                            ASlope: TFilterSlope);
+    procedure SetVoiceFilterEnabled(AVoiceIndex: Integer; AEnabled: Boolean);
+    procedure SetVoiceFilterParams(AVoiceIndex: Integer; AFreq, AQ: Single);
 
     // System control
     procedure StopAll;
@@ -99,14 +115,15 @@ procedure UnifiedAudioCallback(UserData: Pointer; Stream: pcuint8; Len: LongInt)
 
 implementation
 
-// UNIFIED AUDIO CALLBACK - WORKING
+// UNIFIED AUDIO CALLBACK - STEREO OUTPUT
 procedure UnifiedAudioCallback(UserData: Pointer; Stream: pcuint8; Len: LongInt); cdecl;
 var
   Chip: TSedaiAudioChip;
-  SampleCount, i: Integer;
-  Sample: Single;
-  OutputSample: SmallInt;
+  FrameCount, i: Integer;
+  LeftSample, RightSample: Single;
+  LeftOutput, RightOutput: SmallInt;
   DeltaTime, TotalDeltaTime: Single;
+  StereoBuffer: PSmallInt;
 begin
   Chip := TSedaiAudioChip(UserData);
   if not Assigned(Chip) then
@@ -116,9 +133,11 @@ begin
     Exit;
   end;
 
-  SampleCount := Len div SizeOf(SmallInt);
+  // Stereo: each frame = 2 samples (L + R), so frame count = len / 4
+  FrameCount := Len div (2 * SizeOf(SmallInt));
   DeltaTime := 1.0 / Chip.FSampleRate;
-  TotalDeltaTime := DeltaTime * SampleCount;
+  TotalDeltaTime := DeltaTime * FrameCount;
+  StereoBuffer := PSmallInt(Stream);
 
   // STEP 1: UPDATE MIDI SEQUENCER FIRST (CRITICAL!)
   if Assigned(GlobalMIDIUpdateProc) then
@@ -133,27 +152,35 @@ begin
     end;
   end;
 
-  // STEP 2: GENERATE AUDIO SAMPLES
+  // STEP 2: GENERATE STEREO AUDIO SAMPLES
   try
-    for i := 0 to SampleCount - 1 do
+    for i := 0 to FrameCount - 1 do
     begin
-      // Generate sample using synthesis engine
-      Sample := Chip.FSynthEngine.ProcessAllVoices(Chip.FSampleRate, DeltaTime);
-      Sample := Sample * Chip.FMasterVolume;
+      // Generate stereo sample using synthesis engine
+      Chip.FSynthEngine.ProcessAllVoicesStereo(Chip.FSampleRate, DeltaTime,
+                                                LeftSample, RightSample);
+
+      // Apply master volume
+      LeftSample := LeftSample * Chip.FMasterVolume;
+      RightSample := RightSample * Chip.FMasterVolume;
 
       // Hard clip to prevent damage
-      if Sample > 1.0 then Sample := 1.0
-      else if Sample < -1.0 then Sample := -1.0;
+      if LeftSample > 1.0 then LeftSample := 1.0
+      else if LeftSample < -1.0 then LeftSample := -1.0;
+      if RightSample > 1.0 then RightSample := 1.0
+      else if RightSample < -1.0 then RightSample := -1.0;
 
-      // Convert to 16-bit
-      OutputSample := Round(Sample * 32767);
-      PSmallInt(Stream)[i] := OutputSample;
+      // Convert to 16-bit stereo (interleaved L/R)
+      LeftOutput := Round(LeftSample * 32767);
+      RightOutput := Round(RightSample * 32767);
+      StereoBuffer[i * 2] := LeftOutput;
+      StereoBuffer[i * 2 + 1] := RightOutput;
     end;
   except
     on E: Exception do
     begin
       // Fill remainder with silence on error
-      FillChar(PSmallInt(Stream)[0], Len, 0);
+      FillChar(Stream^, Len, 0);
     end;
   end;
 end;
@@ -215,7 +242,7 @@ begin
   FillChar(DesiredSpec, SizeOf(DesiredSpec), 0);
   DesiredSpec.freq := FSampleRate;
   DesiredSpec.format := AUDIO_S16SYS;
-  DesiredSpec.channels := 1; // Mono
+  DesiredSpec.channels := 2; // Stereo
   DesiredSpec.samples := 1024;
   DesiredSpec.callback := @UnifiedAudioCallback; // FIXED: Use unified callback
   DesiredSpec.userdata := Self;
@@ -433,6 +460,23 @@ begin
     FSynthEngine.PlayWavetableCustom(Result, AFreq, ACustomWavetable);
 end;
 
+// Fixed voice control - plays on specific voice index (no auto-allocation)
+procedure TSedaiAudioChip.PlayOnVoice(AVoiceIndex: Integer; AFreq: Single;
+  const APreset: string);
+begin
+  if not FIsInitialized then Exit;
+  if AVoiceIndex < 0 then Exit;
+
+  // Play directly on the specified voice
+  FSynthEngine.PlayClassic(AVoiceIndex, AFreq, APreset);
+end;
+
+procedure TSedaiAudioChip.ReleaseVoice(AVoiceIndex: Integer);
+begin
+  if FIsInitialized then
+    FSynthEngine.ReleaseVoice(AVoiceIndex);
+end;
+
 // Voice control
 procedure TSedaiAudioChip.NoteOff(AVoiceIndex: Integer);
 begin
@@ -440,10 +484,62 @@ begin
     FSynthEngine.NoteOff(AVoiceIndex);
 end;
 
+procedure TSedaiAudioChip.RetriggerVoice(AVoiceIndex: Integer);
+begin
+  if FIsInitialized then
+    FSynthEngine.RetriggerVoice(AVoiceIndex);
+end;
+
+procedure TSedaiAudioChip.RetriggerVoiceHard(AVoiceIndex: Integer);
+begin
+  if FIsInitialized then
+    FSynthEngine.RetriggerVoiceHard(AVoiceIndex);
+end;
+
 procedure TSedaiAudioChip.SetVoicePan(AVoiceIndex: Integer; APan: TPanPosition);
 begin
   if FIsInitialized then
     FSynthEngine.SetVoicePan(AVoiceIndex, APan);
+end;
+
+procedure TSedaiAudioChip.SetVoiceFrequency(AVoiceIndex: Integer; AFreq: Single);
+begin
+  if FIsInitialized then
+    FSynthEngine.SetVoiceFrequency(AVoiceIndex, AFreq);
+end;
+
+procedure TSedaiAudioChip.SetVoiceADSR(AVoiceIndex: Integer;
+  AAttack, ADecay, ASustain, ARelease: Single);
+begin
+  if FIsInitialized then
+    FSynthEngine.SetVoiceADSR(AVoiceIndex, AAttack, ADecay, ASustain, ARelease);
+end;
+
+procedure TSedaiAudioChip.SetVoicePulseWidth(AVoiceIndex: Integer; APulseWidth: Single);
+begin
+  if FIsInitialized then
+    FSynthEngine.SetVoicePulseWidth(AVoiceIndex, APulseWidth);
+end;
+
+// Per-voice filter control
+procedure TSedaiAudioChip.SetVoiceFilter(AVoiceIndex: Integer; AEnabled: Boolean;
+                                         AFilterType: TFilterType; AFreq, AQ: Single;
+                                         ASlope: TFilterSlope);
+begin
+  if FIsInitialized then
+    FSynthEngine.SetVoiceFilter(AVoiceIndex, AEnabled, AFilterType, AFreq, AQ, ASlope);
+end;
+
+procedure TSedaiAudioChip.SetVoiceFilterEnabled(AVoiceIndex: Integer; AEnabled: Boolean);
+begin
+  if FIsInitialized then
+    FSynthEngine.SetVoiceFilterEnabled(AVoiceIndex, AEnabled);
+end;
+
+procedure TSedaiAudioChip.SetVoiceFilterParams(AVoiceIndex: Integer; AFreq, AQ: Single);
+begin
+  if FIsInitialized then
+    FSynthEngine.SetVoiceFilterParams(AVoiceIndex, AFreq, AQ);
 end;
 
 // System control

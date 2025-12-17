@@ -61,6 +61,7 @@ type
 
     // Utility functions
     class function GenerateWaveform(AWaveType: TWaveType; APhase: Single): Single;
+    class function GenerateWaveformPW(AWaveType: TWaveType; APhase: Single; APulseWidth: Single): Single;
     class function NormalizePhase(APhase: Single): Single;
     class procedure InitializeNoise(ASeed: Cardinal = 0);
 
@@ -279,6 +280,21 @@ begin
     wtTriangle: Result := GenerateTriangle(APhase);
     wtNoise:    Result := GenerateNoise;
     wtFM:       Result := 0.0; // FM is handled separately in audio processor
+  else
+    Result := 0.0;
+  end;
+end;
+
+// Generate waveform with pulse width support (for square/pulse waves)
+class function TSedaiWaveGenerator.GenerateWaveformPW(AWaveType: TWaveType; APhase: Single; APulseWidth: Single): Single;
+begin
+  case AWaveType of
+    wtSine:     Result := GenerateSine(APhase);
+    wtSquare:   Result := GeneratePulse(APhase, APulseWidth);  // Use pulse with variable width
+    wtSawtooth: Result := GenerateSawtooth(APhase);
+    wtTriangle: Result := GenerateTriangle(APhase);
+    wtNoise:    Result := GenerateNoise;
+    wtFM:       Result := 0.0;
   else
     Result := 0.0;
   end;

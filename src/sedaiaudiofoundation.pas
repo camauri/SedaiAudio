@@ -29,7 +29,7 @@ interface
 
 uses
   Classes, SysUtils, ctypes, SDL2, Math,
-  SedaiAudioTypes, SedaiAudioChip, SedaiWavetableLoader;
+  SedaiAudioTypes, SedaiAudioChip, SedaiWavetableLoader, SedaiFilters;
 
 // NEW: MIDI Integration support
 type
@@ -47,7 +47,8 @@ var
 // ========================================================================
 
 // System initialization
-function InitAudio(AVoices: Integer = 32): Boolean;
+// AVoices: number of voices to allocate (default 64, max 256, must be multiple of 8)
+function InitAudio(AVoices: Integer = 64): Boolean;
 procedure ShutdownAudio;
 
 // Classic synthesis (subtractive)
@@ -109,6 +110,22 @@ function PlayWavetableAdv(AFreq: Single; const APreset: string = 'serum'): Integ
 procedure NoteOff(AVoiceIndex: Integer);
 procedure NoteRelease(AVoiceIndex: Integer);
 procedure SetVoicePan(AVoiceIndex: Integer; APan: Single);
+procedure SetVoiceFrequency(AVoiceIndex: Integer; AFreq: Single);
+
+// Fixed voice control - plays on specific voice (no auto-allocation)
+procedure PlayOnVoice(AVoiceIndex: Integer; AFreq: Single; const APreset: string = 'sine');
+procedure ReleaseVoice(AVoiceIndex: Integer);
+procedure RetriggerVoice(AVoiceIndex: Integer);      // Re-trigger attack without reinitializing preset
+procedure RetriggerVoiceHard(AVoiceIndex: Integer);  // SID-style hard reset for trills (always resets ADSR)
+procedure SetVoiceADSR(AVoiceIndex: Integer; AAttack, ADecay, ASustain, ARelease: Single);
+procedure SetVoicePulseWidth(AVoiceIndex: Integer; APulseWidth: Single);
+
+// Per-voice filter control
+procedure SetVoiceFilter(AVoiceIndex: Integer; AEnabled: Boolean;
+                        AFilterType: TFilterType; AFreq, AQ: Single;
+                        ASlope: TFilterSlope);
+procedure SetVoiceFilterEnabled(AVoiceIndex: Integer; AEnabled: Boolean);
+procedure SetVoiceFilterParams(AVoiceIndex: Integer; AFreq, AQ: Single);
 
 // ========================================================================
 // MIDI VOICE MANAGEMENT API
@@ -261,7 +278,7 @@ implementation
 
 const
   // MIDI voice pool configuration
-  MIDI_MAX_VOICES = 128;
+  MIDI_MAX_VOICES = 256;
 
   // Note names for MIDI_NOTE_TO_NAME
   NOTE_NAMES: array[0..11] of string = (
@@ -1105,6 +1122,89 @@ procedure SetVoicePan(AVoiceIndex: Integer; APan: Single);
 begin
   if Assigned(GlobalAudioChip) then
     GlobalAudioChip.SetVoicePan(AVoiceIndex, APan)
+  else
+    WriteLn('ERROR: Audio not initialized');
+end;
+
+procedure SetVoiceFrequency(AVoiceIndex: Integer; AFreq: Single);
+begin
+  if Assigned(GlobalAudioChip) then
+    GlobalAudioChip.SetVoiceFrequency(AVoiceIndex, AFreq)
+  else
+    WriteLn('ERROR: Audio not initialized');
+end;
+
+procedure PlayOnVoice(AVoiceIndex: Integer; AFreq: Single; const APreset: string);
+begin
+  if Assigned(GlobalAudioChip) then
+    GlobalAudioChip.PlayOnVoice(AVoiceIndex, AFreq, APreset)
+  else
+    WriteLn('ERROR: Audio not initialized');
+end;
+
+procedure ReleaseVoice(AVoiceIndex: Integer);
+begin
+  if Assigned(GlobalAudioChip) then
+    GlobalAudioChip.ReleaseVoice(AVoiceIndex)
+  else
+    WriteLn('ERROR: Audio not initialized');
+end;
+
+procedure RetriggerVoice(AVoiceIndex: Integer);
+begin
+  if Assigned(GlobalAudioChip) then
+    GlobalAudioChip.RetriggerVoice(AVoiceIndex)
+  else
+    WriteLn('ERROR: Audio not initialized');
+end;
+
+procedure RetriggerVoiceHard(AVoiceIndex: Integer);
+begin
+  if Assigned(GlobalAudioChip) then
+    GlobalAudioChip.RetriggerVoiceHard(AVoiceIndex)
+  else
+    WriteLn('ERROR: Audio not initialized');
+end;
+
+procedure SetVoiceADSR(AVoiceIndex: Integer; AAttack, ADecay, ASustain, ARelease: Single);
+begin
+  if Assigned(GlobalAudioChip) then
+    GlobalAudioChip.SetVoiceADSR(AVoiceIndex, AAttack, ADecay, ASustain, ARelease)
+  else
+    WriteLn('ERROR: Audio not initialized');
+end;
+
+procedure SetVoicePulseWidth(AVoiceIndex: Integer; APulseWidth: Single);
+begin
+  if Assigned(GlobalAudioChip) then
+    GlobalAudioChip.SetVoicePulseWidth(AVoiceIndex, APulseWidth)
+  else
+    WriteLn('ERROR: Audio not initialized');
+end;
+
+// Per-voice filter control
+procedure SetVoiceFilter(AVoiceIndex: Integer; AEnabled: Boolean;
+                        AFilterType: TFilterType; AFreq, AQ: Single;
+                        ASlope: TFilterSlope);
+begin
+  if Assigned(GlobalAudioChip) then
+    GlobalAudioChip.SetVoiceFilter(AVoiceIndex, AEnabled, AFilterType, AFreq, AQ, ASlope)
+  else
+    WriteLn('ERROR: Audio not initialized');
+end;
+
+procedure SetVoiceFilterEnabled(AVoiceIndex: Integer; AEnabled: Boolean);
+begin
+  if Assigned(GlobalAudioChip) then
+    GlobalAudioChip.SetVoiceFilterEnabled(AVoiceIndex, AEnabled)
+  else
+    WriteLn('ERROR: Audio not initialized');
+end;
+
+procedure SetVoiceFilterParams(AVoiceIndex: Integer; AFreq, AQ: Single);
+begin
+  if Assigned(GlobalAudioChip) then
+    GlobalAudioChip.SetVoiceFilterParams(AVoiceIndex, AFreq, AQ)
   else
     WriteLn('ERROR: Audio not initialized');
 end;

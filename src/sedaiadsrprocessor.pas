@@ -39,6 +39,7 @@ type
     // Core ADSR processing
     class procedure ProcessADSR(var AADSR: TADSR; ADeltaTime: Single; ACurve: TADSRCurve = acExponential);
     class procedure StartADSRAttack(var AADSR: TADSR);
+    class procedure StartADSRAttackHard(var AADSR: TADSR);  // Always reset to zero (SID-style)
     class procedure StartADSRRelease(var AADSR: TADSR);
     class procedure ForceADSRPhase(var AADSR: TADSR; APhase: TADSRPhase);
 
@@ -190,7 +191,7 @@ begin
   end;
 end;
 
-// Start ADSR from attack phase
+// Start ADSR from attack phase (soft - preserves level for anti-click)
 class procedure TSedaiADSRProcessor.StartADSRAttack(var AADSR: TADSR);
 begin
   AADSR.Phase := apAttack;
@@ -200,6 +201,15 @@ begin
   if AADSR.Level < 0.001 then
     AADSR.Level := 0.0;
   // Otherwise keep current level and attack from there
+end;
+
+// Start ADSR from attack phase (hard reset - SID-style for trills/arpeggios)
+// Always resets level to zero for authentic retrigger behavior
+class procedure TSedaiADSRProcessor.StartADSRAttackHard(var AADSR: TADSR);
+begin
+  AADSR.Phase := apAttack;
+  AADSR.Timer := 0.0;
+  AADSR.Level := 0.0;  // Always reset to zero for proper trills
 end;
 
 // Trigger release phase

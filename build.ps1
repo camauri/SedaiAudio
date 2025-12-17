@@ -163,6 +163,11 @@ if ($Help) {
     Write-Host "    demo_filters_effects Filters and effects demo"
     Write-Host "    demo_midi_player     MIDI player demo"
     Write-Host "    demo_presets         Presets demo"
+    Write-Host "    demo_sidevo          SID Evo synthesizer demo"
+    Write-Host "    demo_sidevo_full     SID Evo full demo with SIDDump playback"
+    Write-Host "    demo_siddump         SIDDump text file player"
+    Write-Host "    sid_test_suite       SID Evo comprehensive test suite"
+    Write-Host "    sng_player           GoatTracker .sng file player"
     Write-Host ""
     Write-Host "EXAMPLES:" -ForegroundColor Yellow
     Write-Host "    .\build.ps1                           # Build all"
@@ -666,6 +671,36 @@ $allTargets = @{
         Source = 'demo_presets.pas'
         SourceDir = $TestDir
         Output = 'demo_presets.exe'
+        IsTest = $true
+    }
+    'demo_sidevo' = @{
+        Source = 'demo_sidevo.lpr'
+        SourceDir = $TestDir
+        Output = 'demo_sidevo.exe'
+        IsTest = $true
+    }
+    'demo_sidevo_full' = @{
+        Source = 'demo_sidevo_full.lpr'
+        SourceDir = $TestDir
+        Output = 'demo_sidevo_full.exe'
+        IsTest = $true
+    }
+    'demo_siddump' = @{
+        Source = 'demo_siddump.lpr'
+        SourceDir = $TestDir
+        Output = 'demo_siddump.exe'
+        IsTest = $true
+    }
+    'sid_test_suite' = @{
+        Source = 'sid_test_suite.lpr'
+        SourceDir = $TestDir
+        Output = 'sid_test_suite.exe'
+        IsTest = $true
+    }
+    'sng_player' = @{
+        Source = 'sng_player.lpr'
+        SourceDir = $TestDir
+        Output = 'sng_player.exe'
         IsTest = $true
     }
 }
