@@ -30,7 +30,7 @@ interface
 uses
   Classes, SysUtils, SedaiAudioTypes,
   SedaiClassicProcessor, SedaiFMProcessor, SedaiWavetableProcessor,
-  SedaiWavetableLoader;
+  SedaiWavetableLoader, SedaiFilters;
 
 type
   // Synthesis engine types
@@ -51,6 +51,10 @@ type
     Amplitude: Single;
     PanPosition: TPanPosition;
     VoiceIndex: Integer;
+
+    // Per-voice filter
+    FilterEnabled: Boolean;
+    Filter: TMultiPoleFilter;
   end;
 
   { TSedaiSynthesisEngine }
@@ -85,11 +89,26 @@ type
     function ProcessVoice(AVoiceIndex: Integer; ASampleRate: Single;
                          ADeltaTime: Single): Single;
     function ProcessAllVoices(ASampleRate: Single; ADeltaTime: Single): Single;
+    procedure ProcessAllVoicesStereo(ASampleRate: Single; ADeltaTime: Single;
+                                      out ALeftSample, ARightSample: Single);
 
     // Voice control
     procedure NoteOn(AVoiceIndex: Integer);
     procedure NoteOff(AVoiceIndex: Integer);
+    procedure RetriggerVoice(AVoiceIndex: Integer);      // Re-trigger attack without reinitializing preset
+    procedure RetriggerVoiceHard(AVoiceIndex: Integer);  // Hard reset ADSR to zero (SID-style for trills)
     procedure SetVoicePan(AVoiceIndex: Integer; APan: TPanPosition);
+    procedure SetVoiceFrequency(AVoiceIndex: Integer; AFreq: Single);
+    procedure SetVoiceADSR(AVoiceIndex: Integer; AAttack, ADecay, ASustain, ARelease: Single);
+    procedure SetVoicePulseWidth(AVoiceIndex: Integer; APulseWidth: Single);
+
+    // Per-voice filter control
+    procedure SetVoiceFilter(AVoiceIndex: Integer; AEnabled: Boolean;
+                            AFilterType: TFilterType; AFreq, AQ: Single;
+                            ASlope: TFilterSlope);
+    procedure SetVoiceFilterEnabled(AVoiceIndex: Integer; AEnabled: Boolean);
+    procedure SetVoiceFilterParams(AVoiceIndex: Integer; AFreq, AQ: Single);
+    procedure ResetVoiceFilter(AVoiceIndex: Integer);
 
     // Status
     function GetActiveVoiceCount: Integer;
@@ -123,6 +142,10 @@ begin
     TSedaiClassicProcessor.InitializeClassicSynth(FVoices[i].ClassicSynth);
     TSedaiFMProcessor.InitializeFM(FVoices[i].FMSynth, fmSimple);
     TSedaiWavetableProcessor.InitializeWavetableSynth(FVoices[i].WavetableSynth);
+
+    // Initialize per-voice filter (disabled by default)
+    FVoices[i].FilterEnabled := False;
+    FVoices[i].Filter := TSedaiFilters.CreateMultiPoleFilter(ftLowPass, 10000.0, 0.707, fs24dB, 44100);
   end;
 end;
 
@@ -354,6 +377,14 @@ begin
         end;
     end;
 
+    // Apply per-voice filter if enabled
+    if FilterEnabled then
+    begin
+      Result := TSedaiFilters.ProcessMultiPoleSample(Filter, Result);
+      // DEBUG: Verify filter is being applied (check first stage freq)
+      // WriteLn('Filter applied: Freq=', Filter.Stages[0].Frequency:0:1, ' Q=', Filter.Stages[0].Q:0:2);
+    end;
+
     // Auto-release voice when ADSR is complete (all oscillators in Idle phase)
     if AReleaseComplete then
       IsActive := False;
@@ -382,6 +413,44 @@ begin
   else if Result < -1.0 then Result := -1.0;
 end;
 
+// Process all voices with stereo panning
+procedure TSedaiSynthesisEngine.ProcessAllVoicesStereo(ASampleRate: Single;
+  ADeltaTime: Single; out ALeftSample, ARightSample: Single);
+var
+  i: Integer;
+  VoiceSample: Single;
+  APan, ALeftGain, ARightGain: Single;
+begin
+  ALeftSample := 0.0;
+  ARightSample := 0.0;
+
+  for i := 0 to FVoiceCount - 1 do
+  begin
+    if FVoices[i].IsActive then
+    begin
+      VoiceSample := ProcessVoice(i, ASampleRate, ADeltaTime);
+
+      // Apply constant-power panning
+      // Pan: -1.0 = full left, 0.0 = center, 1.0 = full right
+      APan := FVoices[i].PanPosition;
+      // Convert linear pan to equal-power pan (constant power)
+      // Left = cos(pan * pi/4 + pi/4), Right = sin(pan * pi/4 + pi/4)
+      // Simplified: Left = sqrt((1 - pan) / 2), Right = sqrt((1 + pan) / 2)
+      ALeftGain := Sqrt((1.0 - APan) * 0.5);
+      ARightGain := Sqrt((1.0 + APan) * 0.5);
+
+      ALeftSample := ALeftSample + VoiceSample * ALeftGain;
+      ARightSample := ARightSample + VoiceSample * ARightGain;
+    end;
+  end;
+
+  // Simple normalization to prevent clipping
+  if ALeftSample > 1.0 then ALeftSample := 1.0
+  else if ALeftSample < -1.0 then ALeftSample := -1.0;
+  if ARightSample > 1.0 then ARightSample := 1.0
+  else if ARightSample < -1.0 then ARightSample := -1.0;
+end;
+
 // Voice control
 procedure TSedaiSynthesisEngine.NoteOn(AVoiceIndex: Integer);
 begin
@@ -407,10 +476,90 @@ begin
   end;
 end;
 
+procedure TSedaiSynthesisEngine.RetriggerVoice(AVoiceIndex: Integer);
+begin
+  // Re-trigger the attack phase without reinitializing the preset (soft)
+  // Preserves current level to avoid clicks
+  if (AVoiceIndex >= 0) and (AVoiceIndex < FVoiceCount) then
+  begin
+    case FVoices[AVoiceIndex].EngineType of
+      setClassic: TSedaiClassicProcessor.StartClassicAttack(FVoices[AVoiceIndex].ClassicSynth);
+      setFM: TSedaiFMProcessor.StartFMAttack(FVoices[AVoiceIndex].FMSynth);
+      setWavetable: TSedaiWavetableProcessor.StartWavetableAttack(FVoices[AVoiceIndex].WavetableSynth);
+    end;
+    FVoices[AVoiceIndex].IsActive := True;
+  end;
+end;
+
+procedure TSedaiSynthesisEngine.RetriggerVoiceHard(AVoiceIndex: Integer);
+begin
+  // Re-trigger with hard reset - always resets ADSR level to zero
+  // This is the authentic SID behavior needed for trills and arpeggios
+  if (AVoiceIndex >= 0) and (AVoiceIndex < FVoiceCount) then
+  begin
+    case FVoices[AVoiceIndex].EngineType of
+      setClassic: TSedaiClassicProcessor.StartClassicAttackHard(FVoices[AVoiceIndex].ClassicSynth);
+      setFM: TSedaiFMProcessor.StartFMAttack(FVoices[AVoiceIndex].FMSynth);  // TODO: Add hard version for FM
+      setWavetable: TSedaiWavetableProcessor.StartWavetableAttack(FVoices[AVoiceIndex].WavetableSynth);  // TODO: Add hard version
+    end;
+    FVoices[AVoiceIndex].IsActive := True;
+  end;
+end;
+
 procedure TSedaiSynthesisEngine.SetVoicePan(AVoiceIndex: Integer; APan: TPanPosition);
 begin
   if (AVoiceIndex >= 0) and (AVoiceIndex < FVoiceCount) then
     FVoices[AVoiceIndex].PanPosition := ClampPan(APan);
+end;
+
+procedure TSedaiSynthesisEngine.SetVoiceFrequency(AVoiceIndex: Integer; AFreq: Single);
+begin
+  if (AVoiceIndex >= 0) and (AVoiceIndex < FVoiceCount) then
+    FVoices[AVoiceIndex].Frequency := AFreq;
+end;
+
+procedure TSedaiSynthesisEngine.SetVoiceADSR(AVoiceIndex: Integer;
+  AAttack, ADecay, ASustain, ARelease: Single);
+var
+  i: Integer;
+begin
+  if (AVoiceIndex < 0) or (AVoiceIndex >= FVoiceCount) then Exit;
+
+  // Update ADSR for all oscillators in the classic synth
+  with FVoices[AVoiceIndex] do
+  begin
+    if EngineType = setClassic then
+    begin
+      for i := 0 to High(ClassicSynth.Oscillators) do
+      begin
+        ClassicSynth.Oscillators[i].ADSR.Attack := AAttack;
+        ClassicSynth.Oscillators[i].ADSR.Decay := ADecay;
+        ClassicSynth.Oscillators[i].ADSR.Sustain := ASustain;
+        ClassicSynth.Oscillators[i].ADSR.Release := ARelease;
+      end;
+    end;
+  end;
+end;
+
+procedure TSedaiSynthesisEngine.SetVoicePulseWidth(AVoiceIndex: Integer; APulseWidth: Single);
+var
+  i: Integer;
+begin
+  if (AVoiceIndex < 0) or (AVoiceIndex >= FVoiceCount) then Exit;
+
+  // Clamp pulse width
+  if APulseWidth < 0.01 then APulseWidth := 0.01;
+  if APulseWidth > 0.99 then APulseWidth := 0.99;
+
+  // Update pulse width for all oscillators in the classic synth
+  with FVoices[AVoiceIndex] do
+  begin
+    if EngineType = setClassic then
+    begin
+      for i := 0 to High(ClassicSynth.Oscillators) do
+        ClassicSynth.Oscillators[i].PulseWidth := APulseWidth;
+    end;
+  end;
 end;
 
 // Status functions
@@ -481,6 +630,74 @@ end;
 function TSedaiSynthesisEngine.GetMaxVoices: Integer;
 begin
   Result := FVoiceCount;  // oppure Length(FVoices)
+end;
+
+// ============================================================================
+// PER-VOICE FILTER CONTROL
+// ============================================================================
+
+procedure TSedaiSynthesisEngine.SetVoiceFilter(AVoiceIndex: Integer; AEnabled: Boolean;
+                                               AFilterType: TFilterType; AFreq, AQ: Single;
+                                               ASlope: TFilterSlope);
+var
+  AOldFilter: TMultiPoleFilter;
+  i: Integer;
+  APreserveState: Boolean;
+begin
+  if (AVoiceIndex < 0) or (AVoiceIndex >= FVoiceCount) then Exit;
+
+  with FVoices[AVoiceIndex] do
+  begin
+    // Check if we should preserve filter state (same type and slope)
+    APreserveState := FilterEnabled and
+                      (Filter.FilterType = AFilterType) and
+                      (Filter.NumStages > 0);
+
+    if APreserveState then
+      AOldFilter := Filter;
+
+    FilterEnabled := AEnabled;
+    if AEnabled then
+    begin
+      // Create new filter with specified parameters
+      Filter := TSedaiFilters.CreateMultiPoleFilter(AFilterType, AFreq, AQ, ASlope, 44100);
+
+      // Preserve filter state to avoid clicks when updating parameters
+      if APreserveState and (AOldFilter.NumStages = Filter.NumStages) then
+      begin
+        for i := 0 to Filter.NumStages - 1 do
+          Filter.Stages[i].State := AOldFilter.Stages[i].State;
+      end;
+    end;
+  end;
+end;
+
+procedure TSedaiSynthesisEngine.SetVoiceFilterEnabled(AVoiceIndex: Integer; AEnabled: Boolean);
+begin
+  if (AVoiceIndex < 0) or (AVoiceIndex >= FVoiceCount) then Exit;
+  FVoices[AVoiceIndex].FilterEnabled := AEnabled;
+end;
+
+procedure TSedaiSynthesisEngine.SetVoiceFilterParams(AVoiceIndex: Integer; AFreq, AQ: Single);
+begin
+  if (AVoiceIndex < 0) or (AVoiceIndex >= FVoiceCount) then Exit;
+
+  with FVoices[AVoiceIndex] do
+  begin
+    if FilterEnabled then
+      TSedaiFilters.UpdateMultiPoleFilter(Filter, AFreq, AQ);
+  end;
+end;
+
+procedure TSedaiSynthesisEngine.ResetVoiceFilter(AVoiceIndex: Integer);
+begin
+  if (AVoiceIndex < 0) or (AVoiceIndex >= FVoiceCount) then Exit;
+
+  with FVoices[AVoiceIndex] do
+  begin
+    if FilterEnabled then
+      TSedaiFilters.ResetMultiPoleFilter(Filter);
+  end;
 end;
 
 end.
