@@ -150,8 +150,6 @@ end;
 class function TSedaiFilters.ProcessBiquadSample(var AFilter: TBiquadFilter; ASample: Single): Single;
 var
   y: Single;
-const
-  DENORMAL_FIX = 1.0e-18;  // Tiny value to prevent denormals
 begin
   with AFilter do
   begin
@@ -161,13 +159,6 @@ begin
          Coeffs.a2 * State.x2 -
          Coeffs.b1 * State.y1 -
          Coeffs.b2 * State.y2;
-
-    // Anti-denormal: add tiny DC offset to prevent CPU slowdown from denormal numbers
-    y := y + DENORMAL_FIX;
-
-    // Soft clamp to prevent runaway resonance
-    if y > 4.0 then y := 4.0
-    else if y < -4.0 then y := -4.0;
 
     // Update state
     State.x2 := State.x1;
@@ -193,7 +184,7 @@ class function TSedaiFilters.CreateMultiPoleFilter(AType: TFilterType; AFreq, AQ
                                                    ASlope: TFilterSlope; ASampleRate: Single): TMultiPoleFilter;
 var
   i: Integer;
-  AStageQ: Single;
+  AQPerStage: Single;
 begin
   Result.FilterType := AType;
 
@@ -204,34 +195,33 @@ begin
     fs48dB: Result.NumStages := 4;
   end;
 
-  // For multi-stage filters:
-  // - First stage uses user's Q (for resonance character)
-  // - Subsequent stages use Butterworth Q (0.707) for clean slope
+  // For multi-stage filters, adjust Q to maintain response
+  // Using Butterworth alignment: Q = 0.707 for each stage
+  if Result.NumStages > 1 then
+    AQPerStage := 0.707
+  else
+    AQPerStage := AQ;
+
+  // Create all stages with same parameters
   for i := 0 to Result.NumStages - 1 do
-  begin
-    if i = 0 then
-      AStageQ := AQ  // First stage: user's resonance
-    else
-      AStageQ := 0.707;  // Other stages: Butterworth for slope
-    Result.Stages[i] := CreateBiquadFilter(AType, AFreq, AStageQ, ASampleRate);
-  end;
+    Result.Stages[i] := CreateBiquadFilter(AType, AFreq, AQPerStage, ASampleRate);
 end;
 
 // Update multi-pole filter parameters
 class procedure TSedaiFilters.UpdateMultiPoleFilter(var AFilter: TMultiPoleFilter; AFreq, AQ: Single);
 var
   i: Integer;
-  AStageQ: Single;
+  AQPerStage: Single;
 begin
-  // First stage uses user's Q (resonance), others use Butterworth
+  if AFilter.NumStages > 1 then
+    AQPerStage := 0.707
+  else
+    AQPerStage := AQ;
+
   for i := 0 to AFilter.NumStages - 1 do
   begin
-    if i = 0 then
-      AStageQ := AQ
-    else
-      AStageQ := 0.707;
     AFilter.Stages[i].Frequency := AFreq;
-    AFilter.Stages[i].Q := AStageQ;
+    AFilter.Stages[i].Q := AQPerStage;
     UpdateFilterCoeffs(AFilter.Stages[i]);
   end;
 end;
@@ -317,7 +307,6 @@ begin
 end;
 
 // Audio EQ Cookbook formulas - Band Pass Filter
-// Using "constant 0 dB peak gain" variant for consistent volume across Q values
 class procedure TSedaiFilters.CalculateBandPassCoeffs(var ACoeffs: TBiquadCoeffs; AFreq, AQ, ASampleRate: Single);
 var
   omega, sn, cs, alpha: Single;
@@ -328,11 +317,9 @@ begin
   cs := Cos(omega);
   alpha := sn / (2.0 * AQ);
 
-  // BPF with constant 0 dB peak gain (peak gain = 1, independent of Q)
-  // This ensures volume stays consistent as Q changes
-  b0 := AQ * alpha;  // = sn/2 - peak normalized
+  b0 := alpha;
   b1 := 0.0;
-  b2 := -AQ * alpha; // = -sn/2
+  b2 := -alpha;
   a0_temp := 1.0 + alpha;
   a1_temp := -2.0 * cs;
   a2_temp := 1.0 - alpha;
