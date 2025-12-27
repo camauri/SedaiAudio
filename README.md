@@ -5,9 +5,9 @@
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Maurizio%20Cammalleri-0077B5?logo=linkedin)](https://www.linkedin.com/in/maurizio-cammalleri-80a89a11/)
 [![Substack](https://img.shields.io/badge/Substack-Maurizio%20Cammalleri-FF6719?logo=substack)](https://cammalleri.substack.com/)
 
-> **DISCLAIMER**: This library is in advanced development stage but **not yet ready for any use**. The API is unstable, many features are incomplete or broken, and there are known bugs. However, we encourage you to try it out and report any bugs or suggest improvements! Your feedback is valuable to help us improve the library.
-
 A professional-grade, modular audio synthesis and MIDI playback library written in Free Pascal.
+
+> **DISCLAIMER**: This library is in advanced development stage but **not yet ready for any use**. The API is unstable, many features are incomplete or broken, and there are known bugs. However, we encourage you to try it out and report any bugs or suggest improvements! Your feedback is valuable to help us improve the library.
 
 ## ⚠️ Branch Information
 
