@@ -1,0 +1,87 @@
+# ============================================================================
+# SEDAI AUDIO FOUNDATION - .gitignore
+# ============================================================================
+# Only include: sources (.pas, .lpr, .inc), scripts (.ps1, .sh, .bat),
+# documentation (.md, .txt), and wavetable samples (.wav, .wt)
+# ============================================================================
+
+# Free Pascal compiled files
+*.o
+*.ppu
+*.compiled
+*.rst
+*.rsj
+*.a
+*.so
+*.dylib
+
+# Executables
+*.exe
+
+# DLLs (users download SDL2 separately)
+*.dll
+
+# Lazarus project files
+*.lps
+*.lpi.bak
+backup/
+
+# Build directories (contain compiled files)
+lib/
+bin/
+
+# working dirs
+assets/
+demo/
+deps/
+fpc/
+src.bak/
+src.old/
+temp/
+test.bak/
+test.old/
+utils/
+
+# working files
+ARCHITECTURE_PROPOSAL.md
+TODO.md
+
+# Free Pascal Compiler (users install separately)
+fpc/
+
+# IDE/Editor directories
+__history/
+__recovery/
+.vscode/
+.idea/
+.claude/
+
+# IDE files
+*.cbp
+*.layout
+*.depend
+
+# Linker files
+link.res
+ppas.bat
+ppas.sh
+
+# Editor temporary files
+*~
+*.swp
+*.swo
+*.bak
+
+# OS files
+.DS_Store
+._*
+Thumbs.db
+desktop.ini
+
+# Korg proprietary format (not redistributable)
+**/korg_format/
+
+# Miscellaneous
+*.log
+*.tmp
+nul
