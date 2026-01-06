@@ -86,6 +86,10 @@ type
     procedure SetChannels(AValue: Integer);
     procedure SetMode(AValue: TBackendMode);
 
+    // Thread synchronization - use these when modifying audio state from main thread
+    procedure Lock;
+    procedure Unlock;
+
     property State: TBackendState read FState;
     property Mode: TBackendMode read FMode write SetMode;
     property SampleRate: Cardinal read FSampleRate;
@@ -93,6 +97,7 @@ type
     property Channels: Integer read FChannels;
     property CallbackCount: QWord read FCallbackCount;
     property QueuedSamples: QWord read FQueuedSamples;
+    property DeviceID: TSDL_AudioDeviceID read FDeviceID;  // For SDL_LockAudioDevice
   end;
 
 implementation
@@ -383,6 +388,18 @@ begin
     SDL_ClearQueuedAudio(FDeviceID);
     FQueuedSamples := 0;
   end;
+end;
+
+procedure TSedaiAudioBackend.Lock;
+begin
+  if FDeviceID <> 0 then
+    SDL_LockAudioDevice(FDeviceID);
+end;
+
+procedure TSedaiAudioBackend.Unlock;
+begin
+  if FDeviceID <> 0 then
+    SDL_UnlockAudioDevice(FDeviceID);
 end;
 
 end.

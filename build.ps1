@@ -38,6 +38,9 @@
 .PARAMETER Debug
     Build with debug info instead of release optimizations
 
+.PARAMETER NoBanner
+    Suppress the ASCII art banner (useful when called from other scripts)
+
 .PARAMETER CPU
     Target CPU: x86_64, i386, aarch64 (default: x86_64)
 
@@ -85,6 +88,7 @@ param(
     [switch]$Clean,
     [switch]$CleanOnly,
     [switch]$Debug,
+    [switch]$NoBanner,
     [string]$FpcPath = '',
     [string]$Target = '',
     [string[]]$Define = @(),
@@ -575,7 +579,9 @@ function Clean-Build {
 # Main Script
 # ============================================================================
 
-Show-Banner
+if (-not $NoBanner) {
+    Show-Banner
+}
 
 # Find FPC
 $fpc = Find-FPC -CustomPath $FpcPath

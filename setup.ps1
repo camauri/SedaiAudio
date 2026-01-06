@@ -5,9 +5,9 @@
 .DESCRIPTION
     This script sets up the development environment for SedaiAudio Foundation:
     - Creates required directory structure (bin, lib, deps)
+    - Downloads and installs Free Pascal Compiler (if not present)
     - Downloads SDL2 Pascal bindings (required for compilation)
     - Downloads SDL2 runtime DLLs (required for execution)
-    - Optionally downloads and installs Free Pascal Compiler
 
     Copyright (c) 2025 Maurizio Cammalleri
     Released under GNU GPL v3 or Commercial License
@@ -15,8 +15,8 @@
 .PARAMETER Help
     Show help message
 
-.PARAMETER InstallFpc
-    Download and install FPC (optional - skip if you already have FPC)
+.PARAMETER SkipFpc
+    Skip FPC installation (use if you already have FPC installed)
 
 .PARAMETER ForceFpc
     Force reinstallation of FPC even if already present
@@ -37,8 +37,9 @@
     Clean existing directories before setup
 
 .EXAMPLE
-    .\setup.ps1                    # Full setup (recommended)
-    .\setup.ps1 -InstallFpc        # Setup + install FPC
+    .\setup.ps1                    # Full setup with FPC (recommended)
+    .\setup.ps1 -SkipFpc           # Setup without FPC (if already installed)
+    .\setup.ps1 -ForceFpc          # Force reinstall FPC
     .\setup.ps1 -ForceSDL2         # Force reinstall SDL2 bindings
     .\setup.ps1 -ForceRuntime      # Force reinstall SDL2 runtime
     .\setup.ps1 -Clean             # Clean and reinstall everything
@@ -46,7 +47,7 @@
 
 param(
     [switch]$Help,
-    [switch]$InstallFpc,
+    [switch]$SkipFpc,
     [switch]$ForceFpc,
     [switch]$ForceSDL2,
     [switch]$ForceRuntime,
@@ -79,7 +80,7 @@ if ($Help) {
     Write-Host ""
     Write-Host "OPTIONS:" -ForegroundColor Yellow
     Write-Host "    -Help           Show this help message"
-    Write-Host "    -InstallFpc     Download and install FPC compiler (optional)"
+    Write-Host "    -SkipFpc        Skip FPC installation (if already installed)"
     Write-Host "    -ForceFpc       Force reinstallation of FPC"
     Write-Host "    -ForceSDL2      Force reinstallation of SDL2 bindings"
     Write-Host "    -ForceRuntime   Force reinstallation of SDL2 runtime DLLs"
@@ -88,16 +89,17 @@ if ($Help) {
     Write-Host "    -Clean          Clean directories before setup"
     Write-Host ""
     Write-Host "EXAMPLES:" -ForegroundColor Yellow
-    Write-Host "    .\setup.ps1                    # Full setup (recommended)"
-    Write-Host "    .\setup.ps1 -InstallFpc        # Setup + install FPC"
+    Write-Host "    .\setup.ps1                    # Full setup with FPC (recommended)"
+    Write-Host "    .\setup.ps1 -SkipFpc           # Setup without FPC installation"
+    Write-Host "    .\setup.ps1 -ForceFpc          # Force reinstall FPC"
     Write-Host "    .\setup.ps1 -ForceSDL2         # Force reinstall SDL2 bindings"
     Write-Host "    .\setup.ps1 -ForceRuntime      # Force reinstall SDL2 DLLs"
-    Write-Host "    .\setup.ps1 -Clean -InstallFpc # Clean setup with FPC"
+    Write-Host "    .\setup.ps1 -Clean             # Clean setup with all components"
     Write-Host ""
     Write-Host "NOTES:" -ForegroundColor Yellow
+    Write-Host "    - FPC is installed automatically (use -SkipFpc to skip)"
     Write-Host "    - SDL2 Pascal bindings are required for compilation"
     Write-Host "    - SDL2 runtime DLLs are required for execution"
-    Write-Host "    - FPC installation is optional if you already have it"
     Write-Host "    - After setup, run .\build.ps1 to compile the library"
     Write-Host ""
     exit 0
@@ -106,10 +108,21 @@ if ($Help) {
 $ErrorActionPreference = 'Stop'
 
 # ============================================================================
-#  CONFIGURATION
+#  IMPORT UTILITIES
 # ============================================================================
 
 $Script:ProjectRoot = $PSScriptRoot
+$Script:UtilsPath = Join-Path $ProjectRoot "scripts\lib\download-utils.ps1"
+if (Test-Path $UtilsPath) {
+    . $UtilsPath
+} else {
+    Write-Host "ERROR: download-utils.ps1 not found at: $UtilsPath" -ForegroundColor Red
+    exit 1
+}
+
+# ============================================================================
+#  CONFIGURATION
+# ============================================================================
 $Script:FpcVersion = "3.2.2"
 $Script:FpcArch = "x86_64-win64"
 $Script:FpcDir = Join-Path $ProjectRoot "fpc"
@@ -173,7 +186,7 @@ function Show-Help {
     Write-Host ""
     Write-Host "OPTIONS:" -ForegroundColor Yellow
     Write-Host "    -Help           Show this help message"
-    Write-Host "    -InstallFpc     Download and install FPC compiler (optional)"
+    Write-Host "    -SkipFpc        Skip FPC installation (if already installed)"
     Write-Host "    -ForceFpc       Force reinstallation of FPC"
     Write-Host "    -ForceSDL2      Force reinstallation of SDL2 bindings"
     Write-Host "    -ForceRuntime   Force reinstallation of SDL2 runtime DLLs"
@@ -182,16 +195,17 @@ function Show-Help {
     Write-Host "    -Clean          Clean directories before setup"
     Write-Host ""
     Write-Host "EXAMPLES:" -ForegroundColor Yellow
-    Write-Host "    .\setup.ps1                    # Full setup (recommended)"
-    Write-Host "    .\setup.ps1 -InstallFpc        # Setup + install FPC"
+    Write-Host "    .\setup.ps1                    # Full setup with FPC (recommended)"
+    Write-Host "    .\setup.ps1 -SkipFpc           # Setup without FPC installation"
+    Write-Host "    .\setup.ps1 -ForceFpc          # Force reinstall FPC"
     Write-Host "    .\setup.ps1 -ForceSDL2         # Force reinstall SDL2 bindings"
     Write-Host "    .\setup.ps1 -ForceRuntime      # Force reinstall SDL2 DLLs"
-    Write-Host "    .\setup.ps1 -Clean -InstallFpc # Clean setup with FPC"
+    Write-Host "    .\setup.ps1 -Clean             # Clean setup with all components"
     Write-Host ""
     Write-Host "NOTES:" -ForegroundColor Yellow
+    Write-Host "    - FPC is installed automatically (use -SkipFpc to skip)"
     Write-Host "    - SDL2 Pascal bindings are required for compilation"
     Write-Host "    - SDL2 runtime DLLs are required for execution"
-    Write-Host "    - FPC installation is optional if you already have it"
     Write-Host "    - After setup, run .\build.ps1 to compile the library"
     Write-Host ""
 }
@@ -346,31 +360,6 @@ function Test-SDL2Installation {
     return (Test-Path $SDL2Marker)
 }
 
-function Get-FileWithProgress {
-    param(
-        [string]$Url,
-        [string]$OutFile
-    )
-
-    try {
-        Show-Status "Downloading from: $Url"
-
-        # Use BITS for better download handling
-        $webClient = New-Object System.Net.WebClient
-        $webClient.DownloadFile($Url, $OutFile)
-
-        if (Test-Path $OutFile) {
-            $size = (Get-Item $OutFile).Length
-            $sizeMB = [math]::Round($size / 1MB, 2)
-            return @{ Success = $true; Size = $sizeMB }
-        }
-
-        return @{ Success = $false; Error = "File not created" }
-    }
-    catch {
-        return @{ Success = $false; Error = $_.Exception.Message }
-    }
-}
 
 function Install-SDL2 {
     if (Test-SDL2Installation) {
@@ -396,21 +385,22 @@ function Install-SDL2 {
 
     # Download
     Show-Status "Downloading SDL2 Pascal bindings..."
+    Show-Status "URL: $SDL2DownloadUrl"
     $downloadResult = Get-FileWithProgress -Url $SDL2DownloadUrl -OutFile $zipFile
 
-    if (-not $downloadResult.Success) {
-        Show-Status "Download failed: $($downloadResult.Error)" -Type "Error"
+    if ($downloadResult.Status -ne 0) {
+        Show-Status "Download failed: $($downloadResult.Message)" -Type "Error"
         return $false
     }
-    Show-Status "Downloaded: $($downloadResult.Size) MB" -Type "Success"
+    $sizeMB = [math]::Round($downloadResult.BytesDownloaded / 1MB, 2)
+    Show-Status "Downloaded: $sizeMB MB" -Type "Success"
 
     # Verify hash
     Show-Status "Verifying file integrity..."
-    $actualHash = (Get-FileHash -Path $zipFile -Algorithm SHA256).Hash
-    if ($actualHash -ne $SDL2ExpectedHash) {
+    $hashResult = Test-FileHash -FilePath $zipFile -ExpectedHash $SDL2ExpectedHash
+    if ($hashResult.Status -ne 0) {
         Show-Status "Hash mismatch! File may be corrupted." -Type "Error"
-        Show-Status "Expected: $SDL2ExpectedHash"
-        Show-Status "Actual: $actualHash"
+        Show-Status $hashResult.Message
         Remove-Item $zipFile -Force -ErrorAction SilentlyContinue
         return $false
     }
@@ -418,14 +408,12 @@ function Install-SDL2 {
 
     # Extract
     Show-Status "Extracting to deps\sdl2..."
-    try {
-        Expand-Archive -Path $zipFile -DestinationPath $DepsDir -Force
-        Show-Status "Extraction complete" -Type "Success"
-    }
-    catch {
-        Show-Status "Extraction failed: $($_.Exception.Message)" -Type "Error"
+    $extractResult = Expand-ArchiveWithProgress -Path $zipFile -DestinationPath $DepsDir
+    if ($extractResult.Status -ne 0) {
+        Show-Status "Extraction failed: $($extractResult.Message)" -Type "Error"
         return $false
     }
+    Show-Status "Extraction complete" -Type "Success"
 
     # Verify
     if (-not (Test-SDL2Installation)) {
@@ -488,21 +476,22 @@ function Install-Runtime {
 
     # Download
     Show-Status "Downloading SDL2 runtime..."
+    Show-Status "URL: $RuntimeDownloadUrl"
     $downloadResult = Get-FileWithProgress -Url $RuntimeDownloadUrl -OutFile $zipFile
 
-    if (-not $downloadResult.Success) {
-        Show-Status "Download failed: $($downloadResult.Error)" -Type "Error"
+    if ($downloadResult.Status -ne 0) {
+        Show-Status "Download failed: $($downloadResult.Message)" -Type "Error"
         return $false
     }
-    Show-Status "Downloaded: $($downloadResult.Size) MB" -Type "Success"
+    $sizeMB = [math]::Round($downloadResult.BytesDownloaded / 1MB, 2)
+    Show-Status "Downloaded: $sizeMB MB" -Type "Success"
 
     # Verify hash
     Show-Status "Verifying file integrity..."
-    $actualHash = (Get-FileHash -Path $zipFile -Algorithm SHA256).Hash
-    if ($actualHash -ne $RuntimeExpectedHash) {
+    $hashResult = Test-FileHash -FilePath $zipFile -ExpectedHash $RuntimeExpectedHash
+    if ($hashResult.Status -ne 0) {
         Show-Status "Hash mismatch! File may be corrupted." -Type "Error"
-        Show-Status "Expected: $RuntimeExpectedHash"
-        Show-Status "Actual: $actualHash"
+        Show-Status $hashResult.Message
         Remove-Item $zipFile -Force -ErrorAction SilentlyContinue
         return $false
     }
@@ -510,16 +499,13 @@ function Install-Runtime {
 
     # Extract to bin directory (zip contains x86_64-win64 folder structure)
     Show-Status "Extracting to bin\$FpcArch..."
-    try {
-        # Extract to parent of bin dir, since zip contains the folder structure
-        $binParent = Join-Path $ProjectRoot "bin"
-        Expand-Archive -Path $zipFile -DestinationPath $binParent -Force
-        Show-Status "Extraction complete" -Type "Success"
-    }
-    catch {
-        Show-Status "Extraction failed: $($_.Exception.Message)" -Type "Error"
+    $binParent = Join-Path $ProjectRoot "bin"
+    $extractResult = Expand-ArchiveWithProgress -Path $zipFile -DestinationPath $binParent
+    if ($extractResult.Status -ne 0) {
+        Show-Status "Extraction failed: $($extractResult.Message)" -Type "Error"
         return $false
     }
+    Show-Status "Extraction complete" -Type "Success"
 
     # Verify required files
     $requiredFiles = @("SDL2.dll")
@@ -591,14 +577,7 @@ function Find-SystemFpc {
 }
 
 function Install-Fpc {
-    # Check if system FPC exists (and we're not forcing local install)
-    $systemFpc = Find-SystemFpc
-    if ($systemFpc -and -not $ForceFpc) {
-        Show-Status "System FPC found at: $systemFpc" -Type "Success"
-        Show-Status "Skipping local FPC installation (use -ForceFpc to override)"
-        return $true
-    }
-
+    # Always install local FPC (ignore system FPC)
     # Use the install script
     $installScript = Join-Path $ProjectRoot "scripts\windows\install-fpc.ps1"
 
@@ -635,28 +614,65 @@ function Install-Fpc {
 #  MAIN SETUP LOGIC
 # ============================================================================
 
+function Build-Project {
+    $buildScript = Join-Path $ProjectRoot "build.ps1"
+
+    if (!(Test-Path $buildScript)) {
+        Show-Status "Build script not found: $buildScript" -Type "Error"
+        return $false
+    }
+
+    Show-Status "Building SedaiAudioFoundation using build.ps1..."
+    Show-Status "Output: $BinDir\"
+
+    Push-Location $ProjectRoot
+    try {
+        Write-Host ""
+
+        # Use build.ps1 to compile (suppress banner as setup shows its own)
+        & $buildScript -NoBanner
+        $exitCode = $LASTEXITCODE
+
+        Write-Host ""
+
+        if ($exitCode -eq 0) {
+            Show-Status "Build successful!" -Type "Success"
+            return $true
+        }
+
+        Show-Status "Compilation failed (exit code: $exitCode)" -Type "Error"
+        return $false
+
+    } finally {
+        Pop-Location
+    }
+}
+
 function Invoke-Setup {
     Show-Banner
 
     # Determine steps
     $doClean = $Clean
+    $doFpc = -not $SkipFpc      # FPC installed by default (use -SkipFpc to skip)
     $doSDL2 = -not $SkipSDL2
     $doRuntime = -not $SkipRuntime
-    $doFpc = $InstallFpc
+    $doBuild = $true            # Always build after setup
 
     $totalSteps = 1  # Directory structure
     if ($doClean) { $totalSteps++ }
+    if ($doFpc) { $totalSteps++ }
     if ($doSDL2) { $totalSteps++ }
     if ($doRuntime) { $totalSteps++ }
-    if ($doFpc) { $totalSteps++ }
+    if ($doBuild) { $totalSteps++ }
 
     $currentStep = 0
 
     # Show configuration
     Write-Host "  Configuration:" -ForegroundColor Gray
+    Write-Host "    - Install FPC:           $(if ($doFpc) { 'Yes' } else { 'No (skipped)' })" -ForegroundColor Gray
     Write-Host "    - Install SDL2 bindings: $(if ($doSDL2) { 'Yes' } else { 'No (skipped)' })" -ForegroundColor Gray
     Write-Host "    - Install SDL2 runtime:  $(if ($doRuntime) { 'Yes' } else { 'No (skipped)' })" -ForegroundColor Gray
-    Write-Host "    - Install FPC:           $(if ($doFpc) { 'Yes' } else { 'No (optional)' })" -ForegroundColor Gray
+    Write-Host "    - Build:                 $(if ($doBuild) { 'Yes' } else { 'No' })" -ForegroundColor Gray
     Write-Host "    - Clean:                 $(if ($doClean) { 'Yes' } else { 'No' })" -ForegroundColor Gray
     Write-Host ""
 
@@ -674,6 +690,17 @@ function Invoke-Setup {
     if (-not (Initialize-DirectoryStructure)) {
         Show-Summary -Success $false
         return 1
+    }
+
+    # Step: FPC Installation
+    if ($doFpc) {
+        $currentStep++
+        Show-Step -Number $currentStep -Total $totalSteps -Title "Installing Free Pascal Compiler"
+
+        if (-not (Install-Fpc)) {
+            Show-Summary -Success $false
+            return 1
+        }
     }
 
     # Step: SDL2 Bindings Installation
@@ -698,12 +725,12 @@ function Invoke-Setup {
         }
     }
 
-    # Step: FPC Installation (optional)
-    if ($doFpc) {
+    # Step: Build Project
+    if ($doBuild) {
         $currentStep++
-        Show-Step -Number $currentStep -Total $totalSteps -Title "Installing Free Pascal Compiler"
+        Show-Step -Number $currentStep -Total $totalSteps -Title "Building SedaiAudioFoundation"
 
-        if (-not (Install-Fpc)) {
+        if (-not (Build-Project)) {
             Show-Summary -Success $false
             return 1
         }

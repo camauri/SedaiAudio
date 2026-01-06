@@ -882,7 +882,7 @@ begin
 
   // Initialize state
   FillChar(FState, SizeOf(FState), 0);
-  FState.MasterVolume := 0.8;
+  FState.MasterVolume := 0.0;  // Default OFF like C128 BASIC VOL command
   FState.StereoWidth := 1.0;
   FState.Tuning := 440.0;
   FState.ActiveGroups := SIDEVO_DEFAULT_GROUPS;
