@@ -596,6 +596,7 @@ type
     procedure GateOn(AVoice: Integer);
     procedure GateOff(AVoice: Integer);
     procedure AllGatesOff;
+    procedure ResetVoiceEnvelope(AVoice: Integer);
     procedure PlayNote(AVoice: Integer; ANoteNumber: Integer; AVolume: Single = 0.8);
     procedure StopVoice(AVoice: Integer);
     procedure StopAll;
@@ -1144,7 +1145,7 @@ begin
     Decay := 0.1;
     Sustain := 0.8;
     Release := 0.3;
-    Volume := 0.8;
+    Volume := 1.0;
     Pan := 0.0;
     LFORate := 5.0;
     LFODepth := 0.0;
@@ -1796,7 +1797,8 @@ begin
     // ReSID-exact voice output formula:
     // output = (wave - wave_zero) * envelope + voice_DC
     // Range: [-2048*255, 2047*255] = 20 bits
-    Result := (WaveOut - SIDVoice.WaveZero) * SIDEnv.EnvelopeCounter + SIDVoice.VoiceDC;
+    // Apply per-voice volume (default 1.0 preserves existing behavior)
+    Result := Round(((WaveOut - SIDVoice.WaveZero) * SIDEnv.EnvelopeCounter + SIDVoice.VoiceDC) * Volume);
   end;
 end;
 
@@ -3061,6 +3063,30 @@ var
 begin
   for I := 0 to SIDEVO_MAX_VOICES - 1 do
     GateOff(I);
+end;
+
+procedure TSedaiSIDEvo.ResetVoiceEnvelope(AVoice: Integer);
+begin
+  if (AVoice < 0) or (AVoice >= SIDEVO_MAX_VOICES) then Exit;
+
+  // Fully reset the SID envelope state machine to avoid the ADSR delay bug:
+  // When EnvelopeCounter is $FF (Sustain=15) and attack does Inc(EnvelopeCounter),
+  // it wraps to $00 and triggers HoldZero := True, permanently freezing the voice.
+  // By resetting to a clean initial state before GateOn, the attack always starts
+  // from 0 and increments upward without wrapping.
+  with FState.Voices[AVoice].SIDEnv do
+  begin
+    EnvelopeCounter := 0;
+    RateCounter := 0;
+    ExpCounter := 0;
+    ExpPeriod := 1;
+    HoldZero := True;    // Will be cleared by next GateOn -> SetEnvelopeGate
+    Gate := False;
+    State := sesRelease;
+    EnvelopePipeline := 0;
+  end;
+  // Clear the gate bit in the control register
+  FState.Voices[AVoice].Control := FState.Voices[AVoice].Control and not SID_CTRL_GATE;
 end;
 
 procedure TSedaiSIDEvo.PlayNote(AVoice: Integer; ANoteNumber: Integer; AVolume: Single);
