@@ -1,17 +1,40 @@
 {*
- * Sedai Audio Foundation - GoatTracker v2 Player
+ * Sedai Audio Foundation - GoatTracker v2 Player (SedaiGoatTracker)
  *
- * This is a clean reimplementation following the EXACT architecture of
- * the original GoatTracker source code (gplay.c, gsid.cpp, gsound.c).
+ * A clean Pascal reimplementation of the GoatTracker v2 player routine,
+ * following the EXACT architecture of the original C sources (gplay.c,
+ * gsid.cpp, gsound.c):
+ *   - playroutine() updates a sidreg[] shadow-register array;
+ *   - the registers are written to the SID in `sidorder` with SIDWRITEDELAY
+ *     timing; the audio callback calls sid_fillbuffer() to generate samples;
+ *   - player timing is driven by snd_bpmcount in the mixer.
+ * The note frequency tables are GoatTracker's. Verified byte-exact against the
+ * original player's SID register output. It drives TSedaiSIDEvo for the actual
+ * SID emulation.
  *
- * Key design principles from original:
- * - playroutine() updates sidreg[] array (shadow registers)
- * - sid_fillbuffer() writes registers to SID with SIDWRITEDELAY timing
- * - Audio callback calls sid_fillbuffer() which generates samples
- * - Player timing is managed by snd_bpmcount in the mixer
+ * ============================================================================
+ * DERIVED WORK / LICENSE NOTICE  -- PLEASE READ
+ * ============================================================================
  *
- * Reference: GoatTracker 2 source code
- * (c) 2024-2025 Artiforge - Licensed under GPL-3.0
+ * This unit is a derivative work of GoatTracker 2 (v2.77) by Lasse Oorni
+ * (Cadaver / Covert Bitops), the Commodore 64 music editor and player. As with
+ * SedaiSIDEvo, the project's dual "GPL-3.0 OR Commercial" license DOES NOT
+ * apply to this unit: GoatTracker is licensed "GNU GPL version 2 or (at your
+ * option) any later version", so this file carries the SAME license:
+ *
+ *       GNU General Public License, version 2 or any later version
+ *       (GPL-2.0-or-later).  -- GPL-only; full text in LICENSE.GPL-2.0
+ *
+ * No commercial / proprietary license can be granted for this unit without the
+ * permission of the GoatTracker copyright holder. (It also depends on
+ * TSedaiSIDEvo, which is GPL-2.0-or-later as a reSID port.)
+ *
+ * ACKNOWLEDGEMENTS & THANKS
+ *   - Lasse Oorni (Cadaver / Covert Bitops) -- author of GoatTracker 2, whose
+ *     player routine this reimplements and whose frequency tables it uses.
+ *     Thank you for releasing GoatTracker under the GPL.
+ *
+ * (c) 2024-2025 Artiforge. This unit: GPL-2.0-or-later (see above).
  *}
 unit SedaiGoatTracker;
 

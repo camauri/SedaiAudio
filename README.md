@@ -1424,21 +1424,29 @@ GPL-3.0 text, and [`LICENSE.GPL-2.0`](LICENSE.GPL-2.0) for the GPL-2.0 text.
 
 You are free to use, modify, and distribute this software under the terms of the GPL-3.0 license.
 
-### Exception — SID engine (`SedaiSIDEvo`)
+### Exception — SID engine and GoatTracker player (GPL-2.0-or-later, GPL-only)
 
-`src/SID/SedaiSIDEvo.pas` and `src/SID/SedaiSIDEvo_WaveTables.inc` are a **Pascal port
-of reSID / reSID-fp** (partially built on the SAF framework). Because they are a
-derivative work of reSID, the dual license above **does not apply to them**: they are
-distributed under the **same license as reSID — GNU GPL version 2 or any later version
-(GPL-2.0-or-later)**, GPL-only (full text in [`LICENSE.GPL-2.0`](LICENSE.GPL-2.0)). No
-commercial/proprietary license can be granted for the SID engine without permission from
-the reSID copyright holders.
+These files are **ports of GPL'd third-party engines**, so the dual license above **does
+not apply to them** — they are distributed under the **same license as their upstream,
+GNU GPL version 2 or any later version (GPL-2.0-or-later)**, GPL-only (full text in
+[`LICENSE.GPL-2.0`](LICENSE.GPL-2.0)):
+
+- `src/SID/SedaiSIDEvo.pas` + `src/SID/SedaiSIDEvo_WaveTables.inc` — a Pascal port of
+  **reSID / reSID-fp** (partially built on the SAF framework);
+- `src/Players/SedaiGoatTracker.pas` — a reimplementation of the **GoatTracker 2** player
+  routine (and it uses GoatTracker's frequency tables).
+
+No commercial/proprietary license can be granted for these without permission from the
+respective upstream copyright holders. `sng_player` links them, so the built player is GPL.
+See [`LICENSING.md`](LICENSING.md) for the full breakdown.
 
 > **reSID** is the cycle-accurate MOS 6581/8580 emulator by **Dag Lem** (Copyright © 2004
-> Dag Lem). The optional non-linear "distortion" filter model is ported from **reSID-fp**
-> by **Antti S. Lankila**. Band-limited resampling follows **Julius O. Smith III**. All
-> credit for the original SID emulation goes to them — our heartfelt thanks for releasing
-> this work under the GPL. The bit-exact accuracy of `SedaiSIDEvo` is a tribute to reSID.
+> Dag Lem); the optional non-linear "distortion" filter is from **reSID-fp** by
+> **Antti S. Lankila**. **GoatTracker 2** is by **Lasse Öörni** (Cadaver / Covert Bitops).
+> Band-limited resampling follows **Julius O. Smith III**. All credit for the original SID
+> emulation and player routine goes to them — our heartfelt thanks for releasing this work
+> under the GPL. The bit-exact accuracy of `SedaiSIDEvo` and `SedaiGoatTracker` is a
+> tribute to reSID and GoatTracker.
 
 ### Commercial Licensing
 
