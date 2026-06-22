@@ -535,21 +535,31 @@ runtime via `SetSamplingMethod`:
 
 #### EVO Extended Features
 
-| Feature | Description |
-|---------|-------------|
-| **8-64 Voices** | Configurable in groups of 8 |
-| **11 Octaves** | C0 to B10 (16Hz-20kHz) |
-| **Stereo Output** | Per-voice panning |
-| **Spatial 3D** | X/Y/Z positioning |
-| **Per-voice LFO** | Pitch, filter, amplitude modulation |
-| **Extended Waveforms** | Sine, Supersaw, PWM, Half-Sine, Full-Sine, Formant, Metallic |
+The "Evo" layer turns the bit-exact SID into a polyphonic stereo synth. These
+features are active under the `salEvolved` / `salHybrid` authenticity levels
+(the extended voices 3+ and the stereo mix). Under `salSIDFull` you get the pure
+3-voice reSID core (what the GoatTracker player uses, bit-exact).
 
-**Features**:
-- Waveforms can be combined via OR bitmask (like the original SID)
-- 3 independent voices with ADSR envelopes
-- Pulse width modulation support
-- Master volume control
-- Hard restart capability
+| Feature | Status | Description |
+|---------|--------|-------------|
+| **8–64 voices** | ✅ | Configurable in groups of 8 (`Initialize(groups)`) |
+| **11 octaves** | ✅ | C0–B10 (≈16 Hz–20 kHz) |
+| **Extended waveforms** | ✅ | Sine, Supersaw, PWM, Half-Sine (Full-Sine / Formant / Metallic flags reserved) |
+| **Stereo output** | ✅ | Per-voice and per-group pan + stereo width |
+| **Per-voice LFO** | ✅ | Vibrato (pitch), PWM, tremolo (amplitude), auto-pan — on the extended voices |
+| **Global LFO** | ✅ | Tremolo + auto-pan over the whole mix |
+| **Mixer headroom** | ✅ | Soft-clip on the summed EVO mix (smooth knee, no harsh clipping) |
+
+> Notes: the per-voice LFO targets the *extended* voices (the 3 classic reSID
+> core voices stay cycle-accurate and are not modulated). A cutoff LFO does not
+> apply to extended voices, which bypass the SID filter. Per-voice continuous
+> level/pan are EVO additions; the chip's authentic volume is the 4-bit `$D418`
+> register (`SetMasterVolume` writes it).
+
+**Common to both modes**:
+- 4 classic SID waveforms combinable via OR bitmask (like the original SID)
+- ADSR envelopes, pulse-width modulation, hard restart
+- 6581 / 8580 chip models
 
 #### Usage Example
 
