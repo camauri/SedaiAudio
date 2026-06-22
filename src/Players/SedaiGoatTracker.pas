@@ -235,6 +235,14 @@ type
     // pattptr=0), matching gplay.c PULSEEXEC. Affects pulse duty/timbre only.
     FOptimizePulse: Boolean;
 
+    // Downstream master output gain (SAF mixer stage), applied to the final
+    // samples in FillBuffer. This is SEPARATE from the SID chip volume (reg $18,
+    // set via FSID.SetMasterVolume): the chip volume is the authentic 4-bit
+    // level, this is a continuous host-side trim/fade. Default 1.0 (transparent)
+    // so audio is audible with the chip volume alone -- you never need to set
+    // two controls to hear sound.
+    FOutputGain: Single;
+
     // Frequency tables from gplay.c
     FFreqTblLo: array[0..127] of Byte;
     FFreqTblHi: array[0..127] of Byte;
@@ -299,6 +307,10 @@ type
     property WaveVerbose: Boolean read FWaveVerbose write FWaveVerbose;
     property Playing: Boolean read FLoaded;
     property FrameCounter: Int64 read FFrameCounter;
+    // Downstream master output gain (SAF mixer stage). Default 1.0 = transparent;
+    // independent of the SID chip volume (reg $18). A continuous host-side
+    // trim/fade applied to the final output samples.
+    property OutputGain: Single read FOutputGain write FOutputGain;
 
     procedure SetSampleRate(ARate: Integer);
   end;
@@ -362,6 +374,7 @@ begin
   FBpmCount := 0;
   FAdParam := $0F00;  // Default hard restart: AD=$0F, SR=$00 (original GoatTracker)
   FOptimizePulse := True;  // goattrk2.cfg: Pulseskipping = 1 (default on)
+  FOutputGain := 1.0;      // downstream master gain open (transparent) by default
 
   InitFrequencyTables;
   InitSidOrder;
@@ -369,10 +382,11 @@ begin
 
   FSID.SetSampleRate(FSampleRate);
 
-  // The per-song volume is driven by SID register $18 (4-bit volume) written by
-  // the play routine; the SAF-level master gain must be open (1.0) for any
-  // sound to come out. TSedaiSIDEvo defaults MasterVolume to 0 (C128 facade
-  // semantics), so the player has to set it explicitly or playback is silent.
+  // The per-song volume is the SID's reg $18 (4-bit), written by the play
+  // routine every frame. The SID chip volume IS reg $18 now (SetMasterVolume
+  // writes $18), so playback is audible from that alone -- no second control is
+  // needed. The continuous downstream trim is FOutputGain (default 1.0). The
+  // call below just opens the chip volume before the first frame is rendered.
   FSID.SetMasterVolume(1.0);
 
   // Match GoatTracker's own reSID configuration: it uses SAMPLE_FAST by default
@@ -1562,7 +1576,7 @@ begin
             if MusicSamples > 0 then
             begin
               FloatSample := FSID.OutputDecimated(FSampleOffset, FSampleRate);
-              SamplesOut := Round(FloatSample * 32767);
+              SamplesOut := Round(FloatSample * FOutputGain * 32767);
               if SamplesOut > 32767 then SamplesOut := 32767;
               if SamplesOut < -32768 then SamplesOut := -32768;
               Ptr^ := SamplesOut;
@@ -1590,7 +1604,7 @@ begin
       begin
         Dec(FSampleOffset, FClockRate);
         FloatSample := FSID.OutputDecimated(FSampleOffset, FSampleRate);
-        SamplesOut := Round(FloatSample * 32767);
+        SamplesOut := Round(FloatSample * FOutputGain * 32767);
         if SamplesOut > 32767 then SamplesOut := 32767;
         if SamplesOut < -32768 then SamplesOut := -32768;
         Ptr^ := SamplesOut;
@@ -1605,7 +1619,7 @@ begin
     while MusicSamples > 0 do
     begin
       FloatSample := FSID.OutputDecimated(0, FSampleRate);
-      SamplesOut := Round(FloatSample * 32767);
+      SamplesOut := Round(FloatSample * FOutputGain * 32767);
       if SamplesOut > 32767 then SamplesOut := 32767;
       if SamplesOut < -32768 then SamplesOut := -32768;
       Ptr^ := SamplesOut;
