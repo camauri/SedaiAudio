@@ -493,9 +493,11 @@ engines from the same per-cycle register stream and comparing the raw output:
   hard sync, ring modulation and the full ADSR envelope (every Attack/Decay/Sustain/
   Release setting) reproduce reSID's `readOSC`/`readENV`/`output()` with zero deviation.
 
-> The distortion model (see below) is ported from **reSID-fp** (Antti S. Lankila's
-> non-linear 6581 filter). reSID and reSID-fp are licensed GPL-2-or-later (compatible
-> with this project's GPL-3); credit to Dag Lem and Antti S. Lankila.
+> `SedaiSIDEvo` is a Pascal **port of reSID** (and reSID-fp for the optional distortion
+> model), partially built on the SAF framework. As a derivative work of reSID it is
+> **GPL-2.0-or-later, GPL-only** — the project's dual "GPL-3.0 OR Commercial" license does
+> **not** apply to the SID engine. Credit and thanks to Dag Lem (reSID) and Antti S.
+> Lankila (reSID-fp). See the [License](#license) section for details.
 
 #### Sampling Methods
 
@@ -1416,13 +1418,30 @@ Mathematical simulation of physical instrument behavior for realistic sounds.
 
 ## License
 
-This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
+This project is dual-licensed: **GNU General Public License v3.0 (GPL-3.0) OR Commercial**.
 
 You are free to use, modify, and distribute this software under the terms of the GPL-3.0 license. See the [LICENSE](LICENSE) file for details.
 
+### Exception — SID engine (`SedaiSIDEvo`)
+
+`src/SID/SedaiSIDEvo.pas` and `src/SID/SedaiSIDEvo_WaveTables.inc` are a **Pascal port
+of reSID / reSID-fp** (partially built on the SAF framework). Because they are a
+derivative work of reSID, the dual license above **does not apply to them**: they are
+distributed under the **same license as reSID — GNU GPL version 2 or any later version
+(GPL-2.0-or-later)**, GPL-only. No commercial/proprietary license can be granted for the
+SID engine without permission from the reSID copyright holders.
+
+> **reSID** is the cycle-accurate MOS 6581/8580 emulator by **Dag Lem** (Copyright © 2004
+> Dag Lem). The optional non-linear "distortion" filter model is ported from **reSID-fp**
+> by **Antti S. Lankila**. Band-limited resampling follows **Julius O. Smith III**. All
+> credit for the original SID emulation goes to them — our heartfelt thanks for releasing
+> this work under the GPL. The bit-exact accuracy of `SedaiSIDEvo` is a tribute to reSID.
+
 ### Commercial Licensing
 
-For commercial use or proprietary licensing options, please contact the author:
+The commercial option covers the Sedai Audio Foundation code authored for this project; it
+does **not** cover the reSID-derived SID engine (see the exception above). For commercial
+use or proprietary licensing options, please contact the author:
 
 **Maurizio Cammalleri**
 Email: maurizio.cammalleri@gmail.com

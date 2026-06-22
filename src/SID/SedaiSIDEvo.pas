@@ -31,35 +31,61 @@
  * - salSIDLike: More SID-like for tracker playback
  * - salSIDFull: Maximum SID authenticity (ReSID behavior)
  *
+ * ============================================================================
+ * DERIVED WORK / LICENSE NOTICE  -- PLEASE READ
+ * ============================================================================
+ *
+ * TSedaiSIDEvo is a Pascal PORT of reSID, partially built on the Sedai Audio
+ * Foundation (SAF) framework. What comes from where:
+ *
+ *   - reSID (Dag Lem): the cycle-accurate SID emulation -- oscillator/phase
+ *     accumulator, classic AND combined waveforms (including the OSC3 sample
+ *     tables in SedaiSIDEvo_WaveTables.inc), the 23-bit noise LFSR, the ADSR
+ *     envelope (15-bit rate counter, exponential counter, $8000 delay bug,
+ *     hold-zero), hard sync, ring modulation, the two-integrator-loop filter
+ *     (cutoff f0 spline tables, resonance, mixer/DAC offsets), the external
+ *     output filter, and the output stage -- is a direct port of reSID's
+ *     sid.cpp / voice / wave / envelope / filter / extfilt. The band-limited
+ *     resampler (Kaiser-windowed sinc FIR + 0th-order Bessel I0) is ported
+ *     from reSID's set_sampling_parameters(); I0() originates from
+ *     J. O. Smith's resample-1.5/filterkit.c, and the method follows
+ *     J. O. Smith & P. Gosset, "A Flexible Sampling-Rate Conversion Method".
+ *
+ *   - reSID-fp (Antti S. Lankila): the optional nonlinear "distortion" filter
+ *     model (sfmDistortion) is a port of filterfp.cpp / sidfp.cpp -- the 6581
+ *     filter distortion code (2007-2009) on top of Dag Lem's reSID. The 6581
+ *     filter parameters match GoatTracker.
+ *
+ *   - SAF: this unit subclasses the framework base object (TSedaiAudioObject)
+ *     and reuses the SAF oscillator (TSedaiOscillator) for the EVO *extended*
+ *     waveforms ONLY. The SID emulation itself does not depend on SAF DSP
+ *     blocks (it uses its own reSID-ported oscillator/envelope/filter).
+ *
  * ----------------------------------------------------------------------------
- * ACKNOWLEDGEMENTS / DERIVED WORK (reSID)
+ * LICENSE -- IMPORTANT: the rest of Sedai Audio Foundation is dual-licensed
+ * "GPL-3.0 OR Commercial", but that dual license DOES NOT apply to this unit.
+ * Because TSedaiSIDEvo is a derivative work of reSID / reSID-fp, this file --
+ * together with SedaiSIDEvo_WaveTables.inc, which holds reSID's combined-
+ * waveform data verbatim -- is distributed under the SAME license as reSID:
  *
- * This unit is heavily inspired by, and in places a direct Pascal port of,
- * reSID -- the MOS6581 SID emulator engine by Dag Lem <resid@nimrod.no>,
- * Copyright (C) 2004 Dag Lem, licensed under the GNU GPL v2 or later.
+ *       GNU General Public License, version 2 or (at your option) any later
+ *       version  (GPL-2.0-or-later).
  *
- * In particular the following are ported from reSID's sid.cpp:
- *   - the band-limited audio resampling (SAMPLE_RESAMPLE_INTERPOLATE) and the
- *     Kaiser-windowed sinc FIR table generation in set_sampling_parameters()
- *   - the 0th-order modified Bessel function I0() (originally from
- *     resample-1.5/filterkit.c by J. O. Smith)
- *   - the cycle-accurate oscillator/envelope/filter algorithms and the
- *     combined-waveform OSC3 sample tables.
+ * No commercial / proprietary license can be granted for this unit without the
+ * permission of the reSID copyright holders.
+ * ----------------------------------------------------------------------------
+ * ACKNOWLEDGEMENTS & THANKS
  *
- * The resampling method is based on J. O. Smith & P. Gosset, "A Flexible
- * Sampling-Rate Conversion Method" (Digital Audio Resampling Home Page,
- * https://ccrma.stanford.edu/~jos/resample/).
+ *   - Dag Lem <resid@nimrod.no> -- author of reSID, the cycle-accurate
+ *     MOS 6581/8580 emulator, Copyright (C) 2004 Dag Lem. All credit for the
+ *     original SID emulation algorithms goes to him; this port simply would
+ *     not exist without his work. Thank you for releasing reSID under the GPL.
+ *   - Antti S. Lankila -- author of the reSID-fp non-linear 6581 filter
+ *     ("distortion") model. Thank you.
+ *   - Julius O. Smith III -- band-limited resampling theory and filterkit.
  *
- * The optional nonlinear "distortion" filter model (sfmDistortion) is ported
- * from reSID-fp's filterfp.cpp / sidfp.cpp -- filter distortion code written by
- * Antti S. Lankila (2007-2009), on top of Dag Lem's reSID. The 6581 filter
- * parameters are those used by GoatTracker.
- *
- * reSID and reSID-fp are GPL-2-or-later; this project is GPL-3.0, which is
- * compatible. All credit for the original SID emulation algorithms goes to
- * Dag Lem, and for the filter distortion model to Antti S. Lankila.
- *
- * (c) 2025 Artiforge - Licensed under GPL-3.0
+ * (c) 2025 Artiforge. This unit (and SedaiSIDEvo_WaveTables.inc):
+ *     GPL-2.0-or-later, as required by the reSID derivation above.
  *}
 unit SedaiSIDEvo;
 

@@ -1,6 +1,12 @@
-{ SedaiSIDEvo_WaveTables.inc - ReSID Combined Waveform Tables }
-{ Auto-generated from ReSID source files }
-{ These tables are used for combined waveform output (ST, PT, PS, PST) }
+{ SedaiSIDEvo_WaveTables.inc - reSID Combined Waveform Tables }
+{ Generated verbatim from reSID's wave6581_*.cpp / wave8580_*.cpp data files. }
+{ These tables are used for combined waveform output (ST, PT, PS, PST). }
+{                                                                            }
+{ This is reSID data by Dag Lem (reSID, Copyright (C) 2004 Dag Lem). It is   }
+{ therefore a derivative work of reSID and is licensed -- like SedaiSIDEvo.pas}
+{ and UNLIKE the dual-licensed rest of Sedai Audio Foundation -- under the    }
+{ GNU General Public License version 2 or any later version (GPL-2.0-or-later)}
+{ No commercial/proprietary license applies. With thanks to Dag Lem.         }
 
 const
   WAVE_TABLE_SIZE = 4096;
