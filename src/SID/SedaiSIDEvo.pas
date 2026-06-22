@@ -3033,6 +3033,29 @@ begin
 end;
 
 
+// Soft clip with a smooth knee: transparent below |x| = T, then compresses
+// asymptotically toward +/-1.0. Used to give the EVO mix headroom when many
+// voices stack, instead of harsh hard clipping. C1-continuous at the knee.
+function SoftClipSample(X: Single): Single;
+const
+  T = 0.8;
+var
+  A: Single;
+begin
+  if X > T then
+  begin
+    A := X - T;
+    Result := T + (1.0 - T) * (A / (A + (1.0 - T)));
+  end
+  else if X < -T then
+  begin
+    A := (-X) - T;
+    Result := -(T + (1.0 - T) * (A / (A + (1.0 - T))));
+  end
+  else
+    Result := X;
+end;
+
 procedure TSedaiSIDEvo.GenerateStereoSample(out ALeft, ARight: Single);
 var
   SIDMono: Single;
@@ -3041,6 +3064,7 @@ var
   I: Integer;
   ExtSample, EnvLevel: Single;
   VoiceL, VoiceR: Single;
+  LfoV, Glfo, AmpMod, EffVoicePan, SavedFreq, SavedPW, GAmp: Single;
 begin
   // Generate SID core sample using ReSID-exact emulation (voices 0-2)
   SIDMono := GenerateSample;
@@ -3080,16 +3104,55 @@ begin
         if (Waveform and (SIDEVO_WAVE_SINE or SIDEVO_WAVE_SUPERSAW or
                           SIDEVO_WAVE_PWM or SIDEVO_WAVE_HALFSIN)) <> 0 then
         begin
-          // Generate extended waveform
+          // ---- Per-voice LFO (EVO): vibrato / PWM / tremolo / auto-pan ----
+          // Modulate a temporary copy of freq/PW (restored after), the amplitude
+          // and the pan; phase accumulates per output sample.
+          AmpMod := 1.0;
+          EffVoicePan := Pan;
+          SavedFreq := Frequency;
+          SavedPW := PulseWidth;
+          if (LFOTarget <> ltNone) and (LFODepth > 0.0) and (LFORate > 0.0) then
+          begin
+            LFOPhase := LFOPhase + LFORate / FSampleRate;  // cycles per sample
+            if LFOPhase >= 1.0 then LFOPhase := Frac(LFOPhase);
+            LfoV := Sin(2.0 * PI * LFOPhase) * LFODepth;
+            case LFOTarget of
+              ltPitch:                                   // vibrato (depth in octaves)
+                Frequency := Frequency * Power(2.0, LfoV);
+              ltPulseWidth:                              // PWM
+                begin
+                  PulseWidth := PulseWidth + LfoV;
+                  if PulseWidth < 0.01 then PulseWidth := 0.01
+                  else if PulseWidth > 0.99 then PulseWidth := 0.99;
+                end;
+              ltAmplitude:                               // tremolo
+                begin
+                  AmpMod := 1.0 + LfoV;
+                  if AmpMod < 0.0 then AmpMod := 0.0;
+                end;
+              ltPan:                                     // auto-pan
+                begin
+                  EffVoicePan := Pan + LfoV;
+                  if EffVoicePan < -1.0 then EffVoicePan := -1.0
+                  else if EffVoicePan > 1.0 then EffVoicePan := 1.0;
+                end;
+              // ltFilterCutoff: extended voices are not routed through the SID
+              // filter, so a cutoff LFO does not apply to them.
+            end;
+          end;
+
+          // Generate extended waveform (uses the possibly-modulated freq/PW)
           ExtSample := GenerateExtendedWaveform(I);
+          Frequency := SavedFreq;     // restore the stored note values
+          PulseWidth := SavedPW;
 
-          // Apply envelope (use simplified linear envelope for extended voices)
+          // Apply envelope (now clocked for all active voices) + voice gain + tremolo
           EnvLevel := SIDEnv.EnvelopeCounter / 255.0;
-          ExtSample := ExtSample * EnvLevel * Volume;
+          ExtSample := ExtSample * EnvLevel * Volume * AmpMod;
 
-          // Apply per-voice panning
-          PanL := Cos((Pan + 1.0) * PI * 0.25);
-          PanR := Sin((Pan + 1.0) * PI * 0.25);
+          // Apply (possibly LFO-modulated) per-voice panning
+          PanL := Cos((EffVoicePan + 1.0) * PI * 0.25);
+          PanR := Sin((EffVoicePan + 1.0) * PI * 0.25);
 
           VoiceL := ExtSample * PanL;
           VoiceR := ExtSample * PanR;
@@ -3100,13 +3163,45 @@ begin
         end;
       end;
     end;
-  end;
 
-  // Final clamp
-  if ALeft > 1.0 then ALeft := 1.0
-  else if ALeft < -1.0 then ALeft := -1.0;
-  if ARight > 1.0 then ARight := 1.0
-  else if ARight < -1.0 then ARight := -1.0;
+    // ---- Global LFO (EVO): tremolo / auto-pan over the whole mix ----
+    if (FState.GlobalLFOTarget <> ltNone) and (FState.GlobalLFODepth > 0.0)
+       and (FState.GlobalLFORate > 0.0) then
+    begin
+      FState.GlobalLFOPhase := FState.GlobalLFOPhase + FState.GlobalLFORate / FSampleRate;
+      if FState.GlobalLFOPhase >= 1.0 then FState.GlobalLFOPhase := Frac(FState.GlobalLFOPhase);
+      Glfo := Sin(2.0 * PI * FState.GlobalLFOPhase) * FState.GlobalLFODepth;
+      case FState.GlobalLFOTarget of
+        ltAmplitude:
+          begin
+            GAmp := 1.0 + Glfo;
+            if GAmp < 0.0 then GAmp := 0.0;
+            ALeft := ALeft * GAmp;
+            ARight := ARight * GAmp;
+          end;
+        ltPan:
+          begin
+            GAmp := 1.0 - Glfo; if GAmp < 0.0 then GAmp := 0.0;
+            ALeft := ALeft * GAmp;
+            GAmp := 1.0 + Glfo; if GAmp < 0.0 then GAmp := 0.0;
+            ARight := ARight * GAmp;
+          end;
+        // ltPitch/ltPulseWidth/ltFilterCutoff: not meaningful as a global bus mod here
+      end;
+    end;
+
+    // ---- Headroom: soft-clip the summed EVO mix instead of hard clipping ----
+    ALeft := SoftClipSample(ALeft);
+    ARight := SoftClipSample(ARight);
+  end
+  else
+  begin
+    // Classic stereo path: hard clamp (SID core is already within range).
+    if ALeft > 1.0 then ALeft := 1.0
+    else if ALeft < -1.0 then ALeft := -1.0;
+    if ARight > 1.0 then ARight := 1.0
+    else if ARight < -1.0 then ARight := -1.0;
+  end;
 end;
 
 procedure TSedaiSIDEvo.ProcessAudioStereo(out ALeftSample, ARightSample: Single);
