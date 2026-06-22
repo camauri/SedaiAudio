@@ -1419,8 +1419,10 @@ Mathematical simulation of physical instrument behavior for realistic sounds.
 ## License
 
 This project is dual-licensed: **GNU General Public License v3.0 (GPL-3.0) OR Commercial**.
+See [`LICENSING.md`](LICENSING.md) for the full picture, [`LICENSE`](LICENSE) for the
+GPL-3.0 text, and [`LICENSE.GPL-2.0`](LICENSE.GPL-2.0) for the GPL-2.0 text.
 
-You are free to use, modify, and distribute this software under the terms of the GPL-3.0 license. See the [LICENSE](LICENSE) file for details.
+You are free to use, modify, and distribute this software under the terms of the GPL-3.0 license.
 
 ### Exception — SID engine (`SedaiSIDEvo`)
 
@@ -1428,8 +1430,9 @@ You are free to use, modify, and distribute this software under the terms of the
 of reSID / reSID-fp** (partially built on the SAF framework). Because they are a
 derivative work of reSID, the dual license above **does not apply to them**: they are
 distributed under the **same license as reSID — GNU GPL version 2 or any later version
-(GPL-2.0-or-later)**, GPL-only. No commercial/proprietary license can be granted for the
-SID engine without permission from the reSID copyright holders.
+(GPL-2.0-or-later)**, GPL-only (full text in [`LICENSE.GPL-2.0`](LICENSE.GPL-2.0)). No
+commercial/proprietary license can be granted for the SID engine without permission from
+the reSID copyright holders.
 
 > **reSID** is the cycle-accurate MOS 6581/8580 emulator by **Dag Lem** (Copyright © 2004
 > Dag Lem). The optional non-linear "distortion" filter model is ported from **reSID-fp**
