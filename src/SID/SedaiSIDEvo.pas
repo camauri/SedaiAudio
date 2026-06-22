@@ -31,6 +31,34 @@
  * - salSIDLike: More SID-like for tracker playback
  * - salSIDFull: Maximum SID authenticity (ReSID behavior)
  *
+ * ----------------------------------------------------------------------------
+ * ACKNOWLEDGEMENTS / DERIVED WORK (reSID)
+ *
+ * This unit is heavily inspired by, and in places a direct Pascal port of,
+ * reSID -- the MOS6581 SID emulator engine by Dag Lem <resid@nimrod.no>,
+ * Copyright (C) 2004 Dag Lem, licensed under the GNU GPL v2 or later.
+ *
+ * In particular the following are ported from reSID's sid.cpp:
+ *   - the band-limited audio resampling (SAMPLE_RESAMPLE_INTERPOLATE) and the
+ *     Kaiser-windowed sinc FIR table generation in set_sampling_parameters()
+ *   - the 0th-order modified Bessel function I0() (originally from
+ *     resample-1.5/filterkit.c by J. O. Smith)
+ *   - the cycle-accurate oscillator/envelope/filter algorithms and the
+ *     combined-waveform OSC3 sample tables.
+ *
+ * The resampling method is based on J. O. Smith & P. Gosset, "A Flexible
+ * Sampling-Rate Conversion Method" (Digital Audio Resampling Home Page,
+ * https://ccrma.stanford.edu/~jos/resample/).
+ *
+ * The optional nonlinear "distortion" filter model (sfmDistortion) is ported
+ * from reSID-fp's filterfp.cpp / sidfp.cpp -- filter distortion code written by
+ * Antti S. Lankila (2007-2009), on top of Dag Lem's reSID. The 6581 filter
+ * parameters are those used by GoatTracker.
+ *
+ * reSID and reSID-fp are GPL-2-or-later; this project is GPL-3.0, which is
+ * compatible. All credit for the original SID emulation algorithms goes to
+ * Dag Lem, and for the filter distortion model to Antti S. Lankila.
+ *
  * (c) 2025 Artiforge - Licensed under GPL-3.0
  *}
 unit SedaiSIDEvo;
@@ -49,6 +77,15 @@ const
   // ============================================================================
   SID_CLOCK_PAL = 985248;           // PAL clock frequency (Hz)
   SID_CLOCK_NTSC = 1022727;         // NTSC clock frequency (Hz)
+
+  // ============================================================================
+  // BAND-LIMITED RESAMPLING (ported from reSID sid.cpp -- see unit header)
+  // ============================================================================
+  SID_FIXP_SHIFT = 16;              // 16.16 fixed-point for sample_offset
+  SID_FIXP_MASK  = $FFFF;
+  SID_FIR_SHIFT  = 15;              // FIR coefficient fixed-point scale
+  SID_FIR_RES_INTERPOLATE = 285;    // FIR table resolution (interpolating)
+  SID_RINGSIZE   = 16384;           // Sample ring buffer size (power of two)
 
   // ============================================================================
   // SID EVO CONFIGURATION
@@ -176,6 +213,22 @@ type
   TSIDClockMode = (
     scmPAL,         // PAL (50Hz, 985248 Hz clock)
     scmNTSC         // NTSC (60Hz, 1022727 Hz clock)
+  );
+
+  // Audio sampling / decimation method (ported from reSID, see unit header).
+  // The SID core runs at ~1 MHz and must be decimated to the output rate.
+  TSIDSamplingMethod = (
+    ssmFast,        // Nearest cycle, no anti-aliasing (cheapest, aliased)
+    ssmInterpolate, // Cycle-clocked + linear interpolation (cheap, softer)
+    ssmResample     // Band-limited sinc resampling (reSID-quality, default)
+  );
+
+  // Filter model. The classic two-integrator-loop (reSID integer) is clean and
+  // linear; the distortion model (ported from reSID-fp, Antti Lankila) models
+  // the nonlinear/distorting 6581 filter as used by VICE / GoatTracker -I2/-I3.
+  TSIDFilterModel = (
+    sfmClassic,     // reSID classic integer two-integrator-loop (default)
+    sfmDistortion   // reSID-fp nonlinear "type3" 6581 filter with distortion
   );
 
   // ============================================================================
@@ -456,6 +509,39 @@ type
     FSampleOffset: Int64;
     FInitialized: Boolean;
 
+    // Band-limited resampling state (ported from reSID, see unit header)
+    FSamplingMethod: TSIDSamplingMethod;
+    FCyclesPerSampleFixp: Int64;        // clock/sample ratio in 16.16 fixed point
+    FSampleOffsetFixp: Int64;           // running sub-sample phase (16.16)
+    FSamplePrev: Integer;               // previous output (linear interpolation)
+    FFir: array of SmallInt;            // FIR tables (fir_N * fir_RES coefficients)
+    FFirN: Integer;                     // taps per FIR table (odd)
+    FFirRES: Integer;                   // number of phase-shifted FIR tables
+    FSampleRing: array of SmallInt;     // ring buffer (RINGSIZE*2, overflow copy)
+    FSampleIndex: Integer;              // write cursor into the ring buffer
+    FResampleReady: Boolean;            // True once the FIR table is built
+    FTrackOutput: Boolean;              // ClockCycle records output (interp/resample)
+    FCurrSample16: Integer;             // current cycle output (for interpolation)
+    FPrevSample16: Integer;             // previous cycle output (for interpolation)
+
+    // reSID-fp nonlinear filter ("distortion" model, ported from filterfp.cpp).
+    // NB! reSID-fp computes the whole distortion path in 32-bit float, so these
+    // are Single (not Double) to match its precision/rounding bit-for-bit.
+    FFilterModel: TSIDFilterModel;
+    FFP_Vhp, FFP_Vbp, FFP_Vlp: Single;          // filter state
+    FFP_Vf: Single;                             // filter output this cycle
+    FFP_out: Single;                            // final scaled output (~[-1,1])
+    FFP_extVlp, FFP_extVhp: Single;             // external filter state
+    FFP_extW0lp, FFP_extW0hp: Single;           // external filter coefficients
+    // Distortion / type3 parameters (GoatTracker FILTERPARAMS for 6581)
+    FFP_attenuation, FFP_distNonlin, FFP_intermixLeaks: Single;
+    FFP_t3_baseR, FFP_t3_offset, FFP_t3_steepness, FFP_t3_minfetR: Single;
+    FFP_voiceNonlin, FFP_distCT, FFP_1divQ, FFP_t3_kinkExp, FFP_volf: Single;
+    // Nonlinear voice DAC tables (reSID-fp): waveform (12-bit) and envelope (8-bit)
+    FFP_waveDac: array[0..4095] of Single;
+    FFP_envDac: array[0..255] of Single;
+    FFP_voiceDC: Single;
+
     // ReSID-exact bus value and external input
     FBusValue: Byte;              // Last value written to any SID register
     FBusValueTTL: Integer;        // Time to live for bus value ($2000 cycles)
@@ -543,7 +629,28 @@ type
     // External filter (ReSID-exact C64 output stage)
     procedure InitializeExternalFilter;
     procedure ClockExternalFilter(Vi: Integer);
-    function ExternalFilterOutput: Integer;
+    function ExternalFilterOutput: Integer; inline;
+
+    // Band-limited resampling (ported from reSID sid.cpp -- see unit header)
+    function BesselI0(X: Double): Double;
+    procedure SetupSamplingParameters;
+    function OutputSample16: Integer; inline;
+
+    // reSID-fp nonlinear "distortion" filter (ported from filterfp.cpp)
+    function FP_KinkedDac(X: Integer; NL: Double; MaxBits: Integer): Double;
+    function FP_FastExp(Val: Single): Single;  // reSID-fp Schraudolph fast exp
+    procedure FP_InitParams;
+    procedure FP_SetW0;
+    procedure FP_SetQ;
+    function FP_Type3W0(Dist: Single): Single;
+    function FP_Waveshaper1(Value: Single): Single;
+    procedure FP_BuildDacTables;
+    function FP_GetVoiceOutput(AIndex: Integer): Single;
+    procedure FP_ClockFilter(V1, V2, V3, Ext: Single);
+    procedure FP_ClockExtFilter(Vi: Single);
+    function GenerateSampleFast: Single;
+    function GenerateSampleInterpolated: Single;
+    function GenerateSampleResampled: Single;
 
     // Helpers
     function GetEffectiveVoiceCount: Integer;
@@ -651,40 +758,17 @@ type
     // Clock one cycle (authentic SID timing)
     procedure ClockCycle;
 
-    // Generate one audio sample (call at output sample rate)
+    // Generate one audio sample (call at output sample rate).
+    // Dispatches to the selected sampling method (see SetSamplingMethod).
     function GenerateSample: Single;
 
-    // Simple sample generation (no fractional accumulator - for tracker playback)
-    function GenerateSampleSimple: Single;
+    // Select the audio sampling/decimation method (default: ssmResample).
+    procedure SetSamplingMethod(AMethod: TSIDSamplingMethod);
+    function GetSamplingMethod: TSIDSamplingMethod;
 
-    // Legacy sample generation (old simplified approach - clocks once per sample)
-    // This matches the old architecture where oscillator/envelope are clocked
-    // once per audio sample instead of ~22 times (ReSID-exact rate)
-    function GenerateSampleLegacy: Single;
-
-    // Raw sample generation (no filter, direct waveform + envelope output)
-    // For testing: bypasses filter entirely to isolate jitter source
-    function GenerateSampleRaw: Single;
-
-    // No-loop sample generation (1 clock per sample with scaled frequencies)
-    // This avoids the for loop that causes jitter, using frequency scaling instead
-    function GenerateSampleNoLoop: Single;
-
-    // Pure accumulator test - ONLY updates accumulator, no sync/noise/envelope
-    // For isolating jitter source
-    function GenerateSamplePure: Single;
-
-    // Oscillator-only test - uses real SID oscillator with freq from registers
-    // but NO filter, NO envelope - just raw sawtooth output
-    // For isolating if oscillator or filter causes jitter
-    function GenerateSampleOscOnly: Single;
-
-    // Oscillator with FIXED frequency - uses ClockOscillator but forces freq
-    // For isolating if register read causes jitter
-    function GenerateSampleOscFixed: Single;
-
-    // Oscillator reading directly from registers (no cache) - for debugging
-    function GenerateSampleOscDirect: Single;
+    // Select the filter model: classic (clean) or distortion (reSID-fp, VICE-like).
+    procedure SetFilterModel(AModel: TSIDFilterModel);
+    function GetFilterModel: TSIDFilterModel;
 
     // Generate stereo sample
     procedure GenerateStereoSample(out ALeft, ARight: Single);
@@ -694,6 +778,15 @@ type
 
     // Get current output without clocking
     function Output: Single;
+
+    // Band-limited current output (FIR over the ring buffer fed by ClockCycle).
+    // For callers that clock the SID themselves, e.g. the GoatTracker player.
+    function OutputResampled: Single;
+    function OutputInterpolated(AFrac: Single): Single;
+
+    // Decimated output dispatched by the current sampling method (Fast /
+    // Interpolate / Resample). APhaseNum/APhaseDen = sub-cycle decimation phase.
+    function OutputDecimated(APhaseNum, APhaseDen: Integer): Single;
 
     // Notify that a new frame has started (call AFTER writing registers)
     // This resets the frequency cache so the new values are picked up
@@ -712,6 +805,9 @@ type
     function GetEnvelopeState(AVoice: Integer): Integer;
     function GetRateCounter(AVoice: Integer): Word;
     function GetVoiceOutputDebug(AVoice: Integer): Integer;  // Voice output before filter
+    function GetFilterW0(AFc: Integer): Integer;             // Current-model filter w0 table entry
+    function GetOutput16Debug: Integer;                      // Current cycle 16-bit output (reSID output())
+    function FastExpDebug(V: Single): Single;                // reSID-fp fastexp (test hook)
 
     // ========================================================================
     // LFO API (EVO feature)
@@ -930,6 +1026,14 @@ begin
   FCycleAccum := 0;
   FSampleOffset := 0;
 
+  // Default to band-limited resampling for the best audio quality, then build
+  // the FIR tables for the current clock/sample rate.
+  FSamplingMethod := ssmResample;
+  SetupSamplingParameters;
+
+  // Default to the classic (clean) filter; distortion is opt-in.
+  FFilterModel := sfmClassic;
+
   // Initialize frame-level caching
   FFrameSampleCount := 0;
   FFrameCached := False;
@@ -977,6 +1081,7 @@ var
   k1, k2: Double;           // Tangents at p1 and p2
   a, b, c, d: Double;       // Cubic polynomial coefficients
   x, y: Double;
+  dy, d2y, d3y, yc: Double; // Forward-difference accumulators + clamped y
   xi: Integer;
   TablePtr: PInteger;
 begin
@@ -1039,19 +1144,32 @@ begin
     // Calculate cubic polynomial coefficients
     CubicCoefficients(x1, y1, x2, y2, k1, k2, a, b, c, d);
 
-    // Evaluate polynomial at each integer x in [x1, x2]
-    for xi := Round(x1) to Round(x2) do
+    // ReSID-exact evaluation: forward differencing (spline.h
+    // interpolate_forward_difference with res = 1.0), bit-for-bit, followed by
+    // reSID's TWO-STAGE TRUNCATION: PointPlotter stores f0[fc] = (int)y (Hz),
+    // then set_w0 computes w0 = (int)(2*pi*f0*1.048576). Both are truncations
+    // toward zero (NOT Round, and NOT skipping the intermediate integer-Hz step).
+    y := ((a * x1 + b) * x1 + c) * x1 + d;
+    dy := (3 * a * (x1 + 1.0) + 2 * b) * x1 + (a + b + c);
+    d2y := 6 * a * (x1 + 1.0) + 2 * b;
+    d3y := 6 * a;
+    x := x1;
+    while x <= x2 do
     begin
+      xi := Trunc(x);
       if (xi >= 0) and (xi < TableSize) then
       begin
-        x := xi;
-        y := ((a * x + b) * x + c) * x + d;
-        if y < 0 then y := 0;
-        // ReSID uses: w0 = 2*pi*f*1.048576 (to facilitate /1000000 via >>20)
+        yc := y;
+        if yc < 0 then yc := 0;
         TablePtr := Table;
         Inc(TablePtr, xi);
-        TablePtr^ := Round(2 * PI * y * 1.048576);
+        // f0[fc] = Trunc(yc) (integer Hz); w0 = Trunc(2*pi*f0*1.048576)
+        TablePtr^ := Trunc(2 * PI * Trunc(yc) * 1.048576);
       end;
+      y := y + dy;
+      dy := dy + d2y;
+      d2y := d2y + d3y;
+      x := x + 1.0;
     end;
 
     Inc(p0); Inc(p1); Inc(p2); Inc(p3);
@@ -1215,7 +1333,11 @@ procedure TSedaiSIDEvo.InitializeFilter;
 begin
   FillChar(FFilter, SizeOf(FFilter), 0);
   FFilter.Enabled := True;  // ReSID-exact: filter enabled by default
-  FFilter.ModeVol := $0F;   // Max volume, no filter
+  // ReSID-exact: Filter::reset() sets vol = 0 (and fc/res/filt/mode = 0). The
+  // master volume comes up only when the program writes $D418. (A non-zero
+  // default here caused a ~2 ms startup transient vs reSID; players write $18
+  // on the first frame so playback is unaffected.)
+  FFilter.ModeVol := $00;
 
   // ReSID-exact filter initialization
   FFilter.Vhp := 0;
@@ -1224,11 +1346,14 @@ begin
   FFilter.Vnf := 0;
 
   // Set mixer DC based on chip model (ReSID-exact)
-  // 6581: mixer_DC = -0xfff*0xff/18 >> 7 = -1044225/18 >> 7 = -58012 >> 7 = -453
+  // 6581: mixer_DC = -0xfff*0xff/18 >> 7
   // 8580: mixer_DC = 0
-  // Note: Pascal shr is logical, so use div for negative numbers
+  // NB! reSID uses an ARITHMETIC right shift (>>7), which FLOORS for negatives:
+  //   -(0xfff*0xff div 18) = -58012;  -58012 >> 7 = floor(-58012/128) = -454.
+  // Pascal `div 128` truncates toward zero (= -453) and is therefore WRONG here;
+  // use SarInt64 to match reSID bit-for-bit.
   if FModel = smMOS6581 then
-    FFilter.MixerDC := (-$FFF * $FF div 18) div 128  // ReSID-exact: -453
+    FFilter.MixerDC := SarInt64(-(($FFF * $FF) div 18), 7)  // ReSID-exact: -454
   else
     FFilter.MixerDC := 0;
 
@@ -1272,6 +1397,9 @@ begin
   for I := 0 to SIDEVO_MAX_VOICES - 1 do
     if Assigned(FExtOscillators[I]) then
       FExtOscillators[I].SetSampleRate(FSampleRate);
+
+  // Rebuild the band-limited resampling FIR for the new sample rate.
+  SetupSamplingParameters;
 end;
 
 function TSedaiSIDEvo.Initialize(AGroups: Integer): Boolean;
@@ -1513,7 +1641,14 @@ begin
 
   // Update filter coefficients when cutoff or resonance changes
   if AAddress in [$15, $16, $17] then
+  begin
     UpdateFilterCoefficients;
+    if FFilterModel = sfmDistortion then
+    begin
+      if AAddress in [$15, $16] then FP_SetW0;  // cutoff
+      if AAddress = $17 then FP_SetQ;           // resonance
+    end;
+  end;
 end;
 
 function TSedaiSIDEvo.ReadRegister(AAddress: Byte): Byte;
@@ -1781,7 +1916,7 @@ end;
 // Formula: (wave.output() - wave_zero) * envelope.output() + voice_DC
 function TSedaiSIDEvo.GetVoiceOutput(AIndex: Integer): Integer;
 var
-  WaveOut: Integer;
+  WaveOut, Base: Integer;
 begin
   Result := 0;
   if (AIndex < 0) or (AIndex >= 3) then Exit;
@@ -1794,11 +1929,18 @@ begin
     // Store for register read
     WaveformOutput := WaveOut;
 
-    // ReSID-exact voice output formula:
+    // ReSID-exact voice output formula (pure integer):
     // output = (wave - wave_zero) * envelope + voice_DC
     // Range: [-2048*255, 2047*255] = 20 bits
-    // Apply per-voice volume (default 1.0 preserves existing behavior)
-    Result := Round(((WaveOut - SIDVoice.WaveZero) * SIDEnv.EnvelopeCounter + SIDVoice.VoiceDC) * Volume);
+    Base := (WaveOut - SIDVoice.WaveZero) * SIDEnv.EnvelopeCounter + SIDVoice.VoiceDC;
+
+    // Per-voice volume is an EVO extension. Default 1.0 -> stay on the integer
+    // path (the float multiply + Round here runs 3x per SID cycle, i.e. ~3M
+    // times/second, and was a real hot-path cost).
+    if Volume = 1.0 then
+      Result := Base
+    else
+      Result := Round(Base * Volume);
   end;
 end;
 
@@ -2082,11 +2224,14 @@ begin
   // Vhp = (Vbp*_1024_div_Q >> 10) - Vlp - Vi
 
   // Use Int64 to prevent overflow: W0_ceil_1 (17-bit) * Vhp (16-bit) > 32-bit
-  dVbp := (Int64(FFilter.W0_ceil_1) * FFilter.Vhp) shr 20;
-  dVlp := (Int64(FFilter.W0_ceil_1) * FFilter.Vbp) shr 20;
+  // CRITICAL: Must use SarInt64 (arithmetic right shift), NOT shr (logical shift).
+  // Vhp/Vbp are signed — shr on negative Int64 fills with zeros, producing
+  // huge positive values instead of small negatives, breaking the filter.
+  dVbp := SarInt64(Int64(FFilter.W0_ceil_1) * FFilter.Vhp, 20);
+  dVlp := SarInt64(Int64(FFilter.W0_ceil_1) * FFilter.Vbp, 20);
   FFilter.Vbp := FFilter.Vbp - dVbp;
   FFilter.Vlp := FFilter.Vlp - dVlp;
-  FFilter.Vhp := (Int64(FFilter.Vbp) * FFilter._1024_div_Q) shr 10 - FFilter.Vlp - Vi;
+  FFilter.Vhp := SarInt64(Int64(FFilter.Vbp) * FFilter._1024_div_Q, 10) - FFilter.Vlp - Vi;
 end;
 
 // ReSID-exact filter output
@@ -2171,14 +2316,15 @@ begin
   // Vlp += dVlp
   // Vhp += dVhp
   // Use Int64 for safety (Vi can be large from filter output)
-  dVlp := (Int64(FExtFilter.W0lp shr 8) * (Vi - FExtFilter.Vlp)) shr 12;
-  dVhp := (Int64(FExtFilter.W0hp) * (FExtFilter.Vlp - FExtFilter.Vhp)) shr 20;
+  // SarInt64: arithmetic right shift — differences (Vi-Vlp, Vlp-Vhp) are signed
+  dVlp := SarInt64(Int64(FExtFilter.W0lp shr 8) * (Vi - FExtFilter.Vlp), 12);
+  dVhp := SarInt64(Int64(FExtFilter.W0hp) * (FExtFilter.Vlp - FExtFilter.Vhp), 20);
   FExtFilter.Vo := FExtFilter.Vlp - FExtFilter.Vhp;
   FExtFilter.Vlp := FExtFilter.Vlp + dVlp;
   FExtFilter.Vhp := FExtFilter.Vhp + dVhp;
 end;
 
-function TSedaiSIDEvo.ExternalFilterOutput: Integer;
+function TSedaiSIDEvo.ExternalFilterOutput: Integer; inline;
 begin
   Result := FExtFilter.Vo;
 end;
@@ -2213,16 +2359,39 @@ begin
   // 3. Synchronize oscillators AFTER all have been clocked
   SynchronizeOscillators;
 
-  // 4. Get voice outputs (20-bit, ReSID-exact formula)
-  Voice1 := GetVoiceOutput(0);
-  Voice2 := GetVoiceOutput(1);
-  Voice3 := GetVoiceOutput(2);
+  // 4-6. Voice outputs + filter + external output filter, branched on model.
+  if FFilterModel = sfmDistortion then
+  begin
+    // reSID-fp nonlinear path: float voices with DAC nonlinearity (kinked DAC).
+    FP_ClockFilter(FP_GetVoiceOutput(0), FP_GetVoiceOutput(1),
+                   FP_GetVoiceOutput(2), FExtIn);
+    FP_ClockExtFilter(FFP_Vf);
+  end
+  else
+  begin
+    // Classic integer path (20-bit voice outputs).
+    Voice1 := GetVoiceOutput(0);
+    Voice2 := GetVoiceOutput(1);
+    Voice3 := GetVoiceOutput(2);
+    ClockFilter(Voice1, Voice2, Voice3, FExtIn);
+    ClockExternalFilter(FilterOutput);
+  end;
 
-  // 5. Clock internal filter with voice outputs and ext_in
-  ClockFilter(Voice1, Voice2, Voice3, FExtIn);
-
-  // 6. Clock external filter (C64 output stage)
-  ClockExternalFilter(FilterOutput);
+  // 7. Record this cycle's output for the decimators (interpolate / resample).
+  //  - interpolation just needs the previous + current cycle output
+  //  - resampling additionally needs the full FIR ring buffer
+  if FTrackOutput then
+  begin
+    FPrevSample16 := FCurrSample16;
+    FCurrSample16 := OutputSample16;
+    if FResampleReady then
+    begin
+      FSampleRing[FSampleIndex] := FCurrSample16;
+      FSampleRing[FSampleIndex + SID_RINGSIZE] := FCurrSample16;
+      Inc(FSampleIndex);
+      FSampleIndex := FSampleIndex and (SID_RINGSIZE - 1);
+    end;
+  end;
 end;
 
 // ============================================================================
@@ -2230,6 +2399,26 @@ end;
 // ============================================================================
 
 function TSedaiSIDEvo.GenerateSample: Single;
+begin
+  // Dispatch to the selected decimation method. ssmResample is the default and
+  // produces the cleanest (band-limited) output; ssmFast is the cheap legacy
+  // path that aliases high harmonics.
+  case FSamplingMethod of
+    ssmResample:
+      if FResampleReady then
+        Result := GenerateSampleResampled
+      else
+        Result := GenerateSampleFast;     // FIR not built yet (no sample rate)
+    ssmInterpolate:
+      Result := GenerateSampleInterpolated;
+  else
+    Result := GenerateSampleFast;
+  end;
+end;
+
+// Legacy "fast" path: clock N cycles then point-sample the output. Cheap, but
+// aliases high harmonics (equivalent to reSID's SAMPLE_FAST).
+function TSedaiSIDEvo.GenerateSampleFast: Single;
 const
   // ReSID-exact output range: ((4095*255 >> 7)*3*15*2) / 2 = 367065
   OUTPUT_DIVISOR = 367065.0;
@@ -2237,10 +2426,7 @@ var
   I, CyclesToRun: Integer;
   RawOutput: Integer;
 begin
-  // SOLUTION 1: Cache frequencies at start of sample to prevent race conditions
-  CacheFrequencies;
-  
-  // Run enough cycles for one sample
+  // Run enough cycles for one sample (fractional accumulator keeps pitch exact)
   FCycleAccum := FCycleAccum + FCyclesPerSample;
   CyclesToRun := Trunc(FCycleAccum);
   FCycleAccum := FCycleAccum - CyclesToRun;
@@ -2248,217 +2434,485 @@ begin
   for I := 1 to CyclesToRun do
     ClockCycle;
 
-  // Get external filter output (ReSID-exact: includes DC removal)
   RawOutput := ExternalFilterOutput;
-
-  // ReSID-exact normalization to [-1.0, 1.0]
   Result := RawOutput / OUTPUT_DIVISOR;
-
-  // Apply master volume
   Result := Result * FState.MasterVolume;
-
-  // Clamp
   if Result > 1.0 then Result := 1.0;
   if Result < -1.0 then Result := -1.0;
 end;
 
-function TSedaiSIDEvo.GenerateSampleSimple: Single;
+// reSID SID::output() scaled to a signed 16-bit sample (used by the resampler).
+function TSedaiSIDEvo.OutputSample16: Integer; inline;
 const
-  // Fixed 22 cycles per sample (44100 Hz / 985248 Hz clock ≈ 22.34)
-  CYCLES_PER_SAMPLE = 22;
-  // ReSID-exact output range: ((4095*255 >> 7)*3*15*2) / 2 = 367065
-  OUTPUT_DIVISOR = 367065.0;
-var
-  I: Integer;
-  RawOutput: Integer;
+  // reSID: extfilt.output() / ((4095*255 >> 7)*3*15*2 / 2^16) = / 11
+  DIVISOR = (((4095 * 255) shr 7) * 3 * 15 * 2) div (1 shl 16);
+  HALF = 1 shl 15;
 begin
-  // SOLUTION 1: Cache frequencies at start of sample
-  CacheFrequencies;
-  
-  // Run fixed number of cycles - no fractional accumulator
-  for I := 1 to CYCLES_PER_SAMPLE do
+  if FFilterModel = sfmDistortion then
+    Result := Round(FFP_out * 32768.0)
+  else
+    Result := ExternalFilterOutput div DIVISOR;
+  if Result >= HALF then Result := HALF - 1
+  else if Result < -HALF then Result := -HALF;
+end;
+
+// 0th order modified Bessel function of the first kind.
+// Ported from reSID sid.cpp (originally resample-1.5/filterkit.c, J. O. Smith).
+function TSedaiSIDEvo.BesselI0(X: Double): Double;
+const
+  I0E = 1e-6;  // max acceptable error
+var
+  Sum, U, HalfX, Temp: Double;
+  N: Integer;
+begin
+  Sum := 1.0; U := 1.0; N := 1;
+  HalfX := X / 2.0;
+  repeat
+    Temp := HalfX / N;
+    Inc(N);
+    U := U * Temp * Temp;
+    Sum := Sum + U;
+  until U < I0E * Sum;
+  Result := Sum;
+end;
+
+// Build the cycles-per-sample ratio and, for ssmResample, the Kaiser-windowed
+// sinc FIR tables. Ported from reSID SID::set_sampling_parameters().
+procedure TSedaiSIDEvo.SetupSamplingParameters;
+const
+  PI_ = 3.1415926535897932385;
+  FILTER_SCALE = 0.97;  // reSID default (avoids clipping)
+var
+  ClockFreq, SampleFreq, PassFreq: Double;
+  A, DW, WC, Beta, I0beta: Double;
+  FSamplesPerCycle, FCyclesPerSampleD: Double;
+  N, ResVal, NExp, I, J, FirOffset: Integer;
+  JOffset, JX, WT, Temp, Kaiser, Sincwt, Val: Double;
+begin
+  FResampleReady := False;
+
+  ClockFreq := FState.ClockFrequency;
+  SampleFreq := FSampleRate;
+  if (ClockFreq <= 0) or (SampleFreq <= 0) then Exit;
+
+  // Cycles per output sample, 16.16 fixed point.
+  FCyclesPerSampleFixp := Round(ClockFreq / SampleFreq * (1 shl SID_FIXP_SHIFT));
+  FSampleOffsetFixp := 0;
+  FSamplePrev := 0;
+  FCurrSample16 := 0;
+  FPrevSample16 := 0;
+
+  // Always build the FIR here (this runs at SetSampleRate / SetClockMode, NOT on
+  // a mode switch). That way SetSamplingMethod is just a flag change with no
+  // reallocation -> switching Fast/Interp/Resample at runtime is thread-safe
+  // (the audio thread never reads a FIR array that's being reallocated).
+
+  // Passband edge: 20 kHz, capped at 0.9*Nyquist (reSID default).
+  PassFreq := 20000.0;
+  if 2.0 * PassFreq / SampleFreq >= 0.9 then
+    PassFreq := 0.9 * SampleFreq / 2.0;
+
+  // 16-bit -> ~96 dB stopband attenuation; Kaiser window design.
+  A := -20.0 * Log10(1.0 / (1 shl 16));
+  DW := (1.0 - 2.0 * PassFreq / SampleFreq) * PI_;
+  WC := (2.0 * PassFreq / SampleFreq + 1.0) * PI_ / 2.0;
+  Beta := 0.1102 * (A - 8.7);
+  I0beta := BesselI0(Beta);
+
+  N := Trunc((A - 7.95) / (2.285 * DW) + 0.5);
+  N := N + (N and 1);  // even (number of zero crossings)
+
+  FSamplesPerCycle := SampleFreq / ClockFreq;
+  FCyclesPerSampleD := ClockFreq / SampleFreq;
+
+  FFirN := Trunc(N * FCyclesPerSampleD) + 1;
+  FFirN := FFirN or 1;  // odd (sinc symmetric about 0)
+
+  ResVal := SID_FIR_RES_INTERPOLATE;
+  NExp := Ceil(Ln(ResVal / FCyclesPerSampleD) / Ln(2.0));
+  FFirRES := 1 shl NExp;
+
+  SetLength(FFir, FFirN * FFirRES);
+
+  // fir_RES phase-shifted FIR tables for linear interpolation.
+  for I := 0 to FFirRES - 1 do
+  begin
+    FirOffset := I * FFirN + FFirN div 2;
+    JOffset := I / FFirRES;
+    for J := -(FFirN div 2) to (FFirN div 2) do
+    begin
+      JX := J - JOffset;
+      WT := WC * JX / FCyclesPerSampleD;
+      Temp := JX / (FFirN div 2);
+      if Abs(Temp) <= 1.0 then
+        Kaiser := BesselI0(Beta * Sqrt(1.0 - Temp * Temp)) / I0beta
+      else
+        Kaiser := 0.0;
+      if Abs(WT) >= 1e-6 then
+        Sincwt := Sin(WT) / WT
+      else
+        Sincwt := 1.0;
+      Val := (1 shl SID_FIR_SHIFT) * FILTER_SCALE * FSamplesPerCycle *
+             WC / PI_ * Sincwt * Kaiser;
+      FFir[FirOffset + J] := Round(Val);
+    end;
+  end;
+
+  SetLength(FSampleRing, SID_RINGSIZE * 2);
+  for J := 0 to SID_RINGSIZE * 2 - 1 do
+    FSampleRing[J] := 0;
+  FSampleIndex := 0;
+  FResampleReady := True;
+  // Track per-cycle output only when the active method needs it.
+  FTrackOutput := FSamplingMethod in [ssmInterpolate, ssmResample];
+end;
+
+// Cycle-clocked linear interpolation between oversampled points.
+// Ported from reSID SID::clock_interpolate() (adapted to pull one sample).
+function TSedaiSIDEvo.GenerateSampleInterpolated: Single;
+var
+  NextSampleOffset: Int64;
+  DeltaTSample, I: Integer;
+  SampleNow, V: Integer;
+begin
+  NextSampleOffset := FSampleOffsetFixp + FCyclesPerSampleFixp;
+  DeltaTSample := NextSampleOffset shr SID_FIXP_SHIFT;
+
+  for I := 0 to DeltaTSample - 2 do
+    ClockCycle;
+  if DeltaTSample >= 1 then
+  begin
+    FSamplePrev := OutputSample16;
+    ClockCycle;
+  end;
+
+  FSampleOffsetFixp := NextSampleOffset and SID_FIXP_MASK;
+
+  SampleNow := OutputSample16;
+  V := FSamplePrev + Integer(SarInt64(
+        Int64(FSampleOffsetFixp) * (SampleNow - FSamplePrev), SID_FIXP_SHIFT));
+  FSamplePrev := SampleNow;
+
+  Result := V / 32768.0 * FState.MasterVolume;
+  if Result > 1.0 then Result := 1.0;
+  if Result < -1.0 then Result := -1.0;
+end;
+
+// Band-limited sinc resampling -- the theoretically correct decimation and the
+// main audio-quality improvement. Ported from reSID
+// SID::clock_resample_interpolate() (adapted to pull one sample at a time).
+function TSedaiSIDEvo.GenerateSampleResampled: Single;
+var
+  NextSampleOffset: Int64;
+  DeltaTSample, I, J: Integer;
+  FirOffset, FirOffsetRmd, FirStart, SampleStart: Integer;
+  V1, V2, V: Int64;
+  pS, pF: PSmallInt;
+begin
+  NextSampleOffset := FSampleOffsetFixp + FCyclesPerSampleFixp;
+  DeltaTSample := NextSampleOffset shr SID_FIXP_SHIFT;
+
+  // Clock the SID core; ClockCycle feeds each cycle's output into the ring
+  // buffer (stored twice, RINGSIZE apart, so the window is contiguous).
+  for I := 1 to DeltaTSample do
     ClockCycle;
 
-  // Get external filter output (same path as GenerateSample)
-  RawOutput := ExternalFilterOutput;
+  FSampleOffsetFixp := NextSampleOffset and SID_FIXP_MASK;
 
-  // ReSID-exact normalization to [-1.0, 1.0]
-  Result := RawOutput / OUTPUT_DIVISOR;
+  // Convolve with the two nearest phase-shifted FIR tables, then interpolate.
+  FirOffset := (FSampleOffsetFixp * FFirRES) shr SID_FIXP_SHIFT;
+  FirOffsetRmd := (FSampleOffsetFixp * FFirRES) and SID_FIXP_MASK;
+  FirStart := FirOffset * FFirN;
+  SampleStart := FSampleIndex - FFirN + SID_RINGSIZE;
 
-  // Apply master volume
-  Result := Result * FState.MasterVolume;
+  pS := @FSampleRing[SampleStart];
+  pF := @FFir[FirStart];
+  V1 := 0;
+  for J := 1 to FFirN do
+  begin
+    V1 := V1 + pS^ * pF^;
+    Inc(pS); Inc(pF);
+  end;
 
-  // Clamp
+  Inc(FirOffset);
+  if FirOffset = FFirRES then
+  begin
+    FirOffset := 0;
+    Dec(SampleStart);
+  end;
+  FirStart := FirOffset * FFirN;
+
+  pS := @FSampleRing[SampleStart];
+  pF := @FFir[FirStart];
+  V2 := 0;
+  for J := 1 to FFirN do
+  begin
+    V2 := V2 + pS^ * pF^;
+    Inc(pS); Inc(pF);
+  end;
+
+  // Linear interpolation between the two convolutions, then descale.
+  V := V1 + SarInt64(Int64(FirOffsetRmd) * (V2 - V1), SID_FIXP_SHIFT);
+  V := SarInt64(V, SID_FIR_SHIFT);
+
+  if V >= 32767 then V := 32767
+  else if V < -32768 then V := -32768;
+
+  Result := V / 32768.0 * FState.MasterVolume;
   if Result > 1.0 then Result := 1.0;
   if Result < -1.0 then Result := -1.0;
 end;
 
-function TSedaiSIDEvo.GenerateSampleNoLoop: Single;
-const
-  OUTPUT_DIVISOR = 367065.0;
-var
-  RawOutput: Integer;
+procedure TSedaiSIDEvo.SetSamplingMethod(AMethod: TSIDSamplingMethod);
 begin
-  // SOLUTION 1: Cache frequencies at start of sample
-  CacheFrequencies;
-  
-  // UNROLLED: Call ClockCycle 22 times without a for loop
-  // This tests if the for loop itself is causing jitter
-  ClockCycle; ClockCycle; ClockCycle; ClockCycle; ClockCycle;
-  ClockCycle; ClockCycle; ClockCycle; ClockCycle; ClockCycle;
-  ClockCycle; ClockCycle; ClockCycle; ClockCycle; ClockCycle;
-  ClockCycle; ClockCycle; ClockCycle; ClockCycle; ClockCycle;
-  ClockCycle; ClockCycle;
-
-  // Get external filter output
-  RawOutput := ExternalFilterOutput;
-
-  // Normalize to [-1.0, 1.0]
-  Result := RawOutput / OUTPUT_DIVISOR;
-
-  // Apply master volume
-  Result := Result * FState.MasterVolume;
-
-  // Clamp
-  if Result > 1.0 then Result := 1.0;
-  if Result < -1.0 then Result := -1.0;
+  // Flag-only change (NO reallocation) so this is safe to call while the audio
+  // thread is running -- the FIR/ring are already built by SetupSamplingParameters
+  // (at SetSampleRate). Reallocating here would crash the audio thread mid-read.
+  FSamplingMethod := AMethod;
+  FTrackOutput := (AMethod in [ssmInterpolate, ssmResample]) and FResampleReady;
 end;
 
-function TSedaiSIDEvo.GenerateSamplePure: Single;
-const
-  // Fixed frequency like SAW-INT-NOLOOP: ~440 Hz
-  FIXED_FREQ = 7604;
-var
-  Sum: Integer;
+function TSedaiSIDEvo.GetSamplingMethod: TSIDSamplingMethod;
 begin
-  // PURE TEST v4: Use FTestAcc0/1/2 directly in class (not in FState record)
-  // This tests if nested record access is the problem
-  FTestAcc0 := (FTestAcc0 + FIXED_FREQ) and $FFFFFF;
-  FTestAcc1 := (FTestAcc1 + FIXED_FREQ) and $FFFFFF;
-  FTestAcc2 := (FTestAcc2 + FIXED_FREQ) and $FFFFFF;
-
-  // Output: 3 sawtooths
-  Sum := ((FTestAcc0 shr 12) - 2048) +
-         ((FTestAcc1 shr 12) - 2048) +
-         ((FTestAcc2 shr 12) - 2048);
-
-  Result := (Sum / 6144.0) * 0.3;
-
-  if Result > 1.0 then Result := 1.0;
-  if Result < -1.0 then Result := -1.0;
+  Result := FSamplingMethod;
 end;
 
-function TSedaiSIDEvo.GenerateSampleOscOnly: Single;
-const
-  CLOCKS = 22;
+// ============================================================================
+// reSID-fp NONLINEAR "DISTORTION" FILTER (ported from filterfp.cpp / sidfp.cpp,
+// distortion code by Antti S. Lankila; see unit header). Parameters are the
+// 6581 FILTERPARAMS used by GoatTracker.
+// ============================================================================
+
+// DAC nonlinearity model (SIDFP::kinked_dac).
+function TSedaiSIDEvo.FP_KinkedDac(X: Integer; NL: Double; MaxBits: Integer): Double;
 var
-  I, J: Integer;
+  Value, Weight, Dir: Double;
+  Bit, I: Integer;
+begin
+  Value := 0.0; Bit := 1; Weight := 1.0; Dir := 2.0 * NL;
+  for I := 0 to MaxBits - 1 do
+  begin
+    if (X and Bit) <> 0 then Value := Value + Weight;
+    Bit := Bit shl 1;
+    Weight := Weight * Dir;
+  end;
+  Result := Value / (Weight / NL / NL) * (1 shl MaxBits);
+end;
+
+// Set GoatTracker's 6581 reSID-fp parameters and clock-derived helpers.
+procedure TSedaiSIDEvo.FP_InitParams;
+const
+  SIDCAPS_6581 = 470e-12;
+  PASS_FREQ = 15915.6;
+  FC_TO_OSC = 512.0;
+var
+  ClockFreq: Double;
+begin
+  ClockFreq := FState.ClockFrequency;
+  if ClockFreq <= 0 then ClockFreq := SID_CLOCK_PAL;
+
+  // GoatTracker FILTERPARAMS (6581) from gsid.cpp.
+  FFP_attenuation  := 0.50;
+  FFP_distNonlin   := 3.3e6;
+  FFP_intermixLeaks := 1.0e-4;
+  FFP_t3_baseR     := 1147036.4394268463;
+  FFP_t3_offset    := 274228796.97550374;
+  // type3_steepness = -ln(s)/FC_TO_OSC  (s = 1.0066634233403395)
+  FFP_t3_steepness := -Ln(1.0066634233403395) / FC_TO_OSC;
+  FFP_t3_minfetR   := 16125.154840564108;
+  FFP_voiceNonlin  := 0.9613160610660189;
+
+  // dist_CT = 1 / (caps * clock)
+  FFP_distCT := 1.0 / (SIDCAPS_6581 * ClockFreq);
+
+  // External output filter coefficients.
+  FFP_extW0hp := 100.0 / ClockFreq;
+  FFP_extW0lp := PASS_FREQ * 2.0 * PI / ClockFreq;
+
+  FFP_volf := (FFilter.ModeVol and $0F) / 15.0;
+
+  FP_SetW0;
+  FP_SetQ;
+  FP_BuildDacTables;
+end;
+
+// set_w0 (6581): signal-independent part of the cutoff (FET kink).
+procedure TSedaiSIDEvo.FP_SetW0;
+const
+  FC_TO_OSC = 512.0;
+var
+  FC: Integer;
+  Kink: Double;
+begin
+  FC := (FFilter.CutoffLo and $07) or ((FFilter.CutoffHi and $FF) shl 3);
+  if FC > 2047 then FC := 2047;
+  Kink := FP_KinkedDac(FC, FFP_voiceNonlin, 11);
+  FFP_t3_kinkExp := FFP_t3_offset * Exp(Kink * FFP_t3_steepness * FC_TO_OSC);
+end;
+
+// set_Q (6581).
+procedure TSedaiSIDEvo.FP_SetQ;
+var
+  Res: Integer;
+begin
+  Res := (FFilter.ResFilt shr 4) and $0F;
+  FFP_1divQ := 1.0 / (0.5 + Res / 20.0);
+end;
+
+// reSID-fp fast exp (Schraudolph bit-hack approximation, filterfp.h::fastexp).
+// reSID-fp uses this APPROXIMATE exp (not libc expf) in the per-sample type3_w0,
+// which shapes the distortion. Computed in single precision to match.
+function TSedaiSIDEvo.FP_FastExp(Val: Single): Single;
+const
+  FE_A: Single = 8388608.0 / 0.69314718055994530942;  // (1<<23)/ln2
+  FE_B: Single = 8388608.0 * 127.0;                    // (1<<23)*127
+  FE_C: Single = 60801.48 * 8.0;
+var
+  conv: packed record case Byte of 0: (i: LongInt); 1: (f: Single); end;
+  bch, t: Single;
+begin
+  // Each op is kept in single precision (rounded after every step) to match
+  // reSID-fp's float `a*val + (b - c + 0.5f)` bit-for-bit. Folding the whole
+  // expression in double (FPC default) truncated to a different int on ~3% of
+  // inputs, and those 1-ULP seeds amplified into spikes through the nonlinear
+  // feedback. Stepwise single assignments avoid the double promotion.
+  bch := FE_B - FE_C;
+  bch := bch + Single(0.5);
+  t := FE_A * Val;
+  t := t + bch;
+  conv.i := Trunc(t);
+  Result := conv.f;
+end;
+
+// type3_w0(dist): signal-dependent cutoff (the nonlinearity / distortion).
+// Single precision + fastexp to match reSID-fp filterfp.h::type3_w0 bit-for-bit.
+function TSedaiSIDEvo.FP_Type3W0(Dist: Single): Single;
+var
+  FetR, DynR, OneDivR: Single;
+begin
+  FetR := FFP_t3_kinkExp;
+  if Dist > 0 then
+    FetR := FetR * FP_FastExp(Dist * FFP_t3_steepness);
+  DynR := FFP_t3_minfetR + FetR;
+  OneDivR := (FFP_t3_baseR + DynR) / (FFP_t3_baseR * DynR);
+  Result := FFP_distCT * OneDivR;
+end;
+
+// waveshaper1: output inverter saturation.
+function TSedaiSIDEvo.FP_Waveshaper1(Value: Single): Single;
+begin
+  if Value > FFP_distNonlin then
+    Value := Value - (Value - FFP_distNonlin) * Single(0.5);
+  Result := Value;
+end;
+
+// Build the nonlinear voice DAC tables (reSID-fp: kinked_dac on the 12-bit
+// waveform and the 8-bit envelope). wave_zero/voice_DC are chip-model dependent.
+procedure TSedaiSIDEvo.FP_BuildDacTables;
+var
+  I: Integer;
+  WaveZero: Double;
+begin
+  if FModel = smMOS6581 then
+  begin
+    WaveZero := -$380;
+    FFP_voiceDC := $800 * $FF;
+  end
+  else
+  begin
+    WaveZero := -$800;
+    FFP_voiceDC := 0;
+  end;
+  for I := 0 to 4095 do
+    FFP_waveDac[I] := FP_KinkedDac(I, FFP_voiceNonlin, 12) + WaveZero;
+  for I := 0 to 255 do
+    FFP_envDac[I] := FP_KinkedDac(I, FFP_voiceNonlin, 8);
+end;
+
+// Nonlinear float voice output (reSID-fp VoiceFP::output) for the distortion path:
+// (waveDAC(wave) * envDAC(env) + voice_DC) * per-voice volume.
+function TSedaiSIDEvo.FP_GetVoiceOutput(AIndex: Integer): Single;
+var
   WaveOut: Integer;
-  Sum: Integer;
 begin
-  // SOLUTION 1: Cache frequencies at start of sample
-  CacheFrequencies;
-  
-  // Clock oscillators 22 times per sample (like ReSID)
-  // but NO envelope, NO filter - just raw oscillator output
-  for I := 1 to CLOCKS do
-  begin
-    for J := 0 to 2 do
-      ClockOscillator(J);
-  end;
-
-  // Get raw sawtooth output from each voice (12-bit)
-  Sum := 0;
-  for J := 0 to 2 do
-  begin
-    WaveOut := FState.Voices[J].SIDOsc.Accumulator shr 12;
-    Sum := Sum + (WaveOut - 2048);  // Center around 0
-  end;
-
-  // Normalize to [-1.0, 1.0] with some headroom
-  Result := (Sum / 6144.0) * 0.3;
-
-  if Result > 1.0 then Result := 1.0;
-  if Result < -1.0 then Result := -1.0;
+  WaveOut := GetWaveformOutput12(AIndex);
+  FState.Voices[AIndex].WaveformOutput := WaveOut;  // for OSC3 register read
+  // reSID-fp VoiceFP::output() = waveDAC*envDAC + voice_DC (float). The * Volume
+  // is the EVO per-voice gain (1.0 for plain SID playback).
+  Result := (FFP_waveDac[WaveOut] *
+             FFP_envDac[FState.Voices[AIndex].SIDEnv.EnvelopeCounter] + FFP_voiceDC)
+            * FState.Voices[AIndex].Volume;
 end;
 
-function TSedaiSIDEvo.GenerateSampleOscFixed: Single;
-const
-  CLOCKS = 22;
-  FIXED_FREQ = 7604;
+// reSID-fp 6581 filter clock (1 cycle). Single precision throughout to match
+// filterfp.h::clock bit-for-bit. Voices are full-range (no >>7 scaling).
+procedure TSedaiSIDEvo.FP_ClockFilter(V1, V2, V3, Ext: Single);
 var
-  I, J: Integer;
-  WaveOut: Integer;
-  Sum: Integer;
-  PrevAccum: Cardinal;
+  Vi, Vf: Single;
+  Filt, HpBpLp: Byte;
 begin
-  for I := 1 to CLOCKS do
-  begin
-    for J := 0 to 2 do
-    begin
-      with FState.Voices[J] do
-      begin
-        if not SIDOsc.TestBit then
-        begin
-          PrevAccum := SIDOsc.Accumulator;
-          SIDOsc.Accumulator := (SIDOsc.Accumulator + FIXED_FREQ) and $FFFFFF;
-          SIDOsc.PreviousSyncMSB := ((PrevAccum and $800000) = 0) and
-                                    ((SIDOsc.Accumulator and $800000) <> 0);
-        end;
-      end;
-    end;
-  end;
-  Sum := 0;
-  for J := 0 to 2 do
-  begin
-    WaveOut := FState.Voices[J].SIDOsc.Accumulator shr 12;
-    Sum := Sum + (WaveOut - 2048);
-  end;
-  Result := (Sum / 6144.0) * 0.3;
-  if Result > 1.0 then Result := 1.0;
-  if Result < -1.0 then Result := -1.0;
+  Vi := 0.0; Vf := 0.0;
+  Filt := FFilter.ResFilt and $0F;
+
+  if (Filt and 1) <> 0 then Vi := Vi + V1 else Vf := Vf + V1;
+  if (Filt and 2) <> 0 then Vi := Vi + V2 else Vf := Vf + V2;
+  // Voice 3 is not silenced by voice3off when routed through the filter.
+  if (Filt and 4) <> 0 then Vi := Vi + V3
+  else if not FState.Filter3Off then Vf := Vf + V3;
+  if (Filt and 8) <> 0 then Vi := Vi + Ext else Vf := Vf + Ext;
+
+  HpBpLp := (FFilter.ModeVol shr 4) and $07;
+  if (HpBpLp and 1) <> 0 then Vf := Vf + FFP_Vlp;
+  if (HpBpLp and 2) <> 0 then Vf := Vf + FFP_Vbp;
+  if (HpBpLp and 4) <> 0 then Vf := Vf + FFP_Vhp;
+
+  // 6581 nonlinear integration (reSID-fp: Vi * 0.85f, then * attenuation).
+  FFP_Vlp := FFP_Vlp - FFP_Vbp * FP_Type3W0(FFP_Vbp);
+  FFP_Vbp := FFP_Vbp - FFP_Vhp * FP_Type3W0(FFP_Vhp);
+  FFP_Vhp := (FFP_Vbp * FFP_1divQ - FFP_Vlp - Vi * Single(0.85)) * FFP_attenuation;
+
+  // Output strip mixing leaking back into the filter state.
+  if (HpBpLp and 1) <> 0 then FFP_Vlp := FFP_Vlp + Vf * FFP_intermixLeaks;
+  if (HpBpLp and 2) <> 0 then FFP_Vbp := FFP_Vbp + Vf * FFP_intermixLeaks;
+  if (HpBpLp and 4) <> 0 then FFP_Vhp := FFP_Vhp + Vf * FFP_intermixLeaks;
+
+  // Master volume (reSID-fp volf = vol/15, float; recomputed inline so reg $18
+  // changes take effect at once).
+  Vf := Vf * (Single(FFilter.ModeVol and $0F) / Single(15.0));
+  FFP_Vf := FP_Waveshaper1(Vf);
 end;
 
-function TSedaiSIDEvo.GenerateSampleOscDirect: Single;
+// reSID-fp external output filter + final scaling to ~[-1, 1] (single precision).
+procedure TSedaiSIDEvo.FP_ClockExtFilter(Vi: Single);
 const
-  CLOCKS = 22;
+  OUT_SCALE: Single = 1.0 / (2047.0 * 255.0 * 3.0 * 2.0);
 var
-  I, J: Integer;
-  WaveOut: Integer;
-  Sum: Integer;
-  PrevAccum: Cardinal;
-  Freq: Cardinal;
+  dVlp, dVhp: Single;
 begin
-  // Same as OscFixed but reads frequency DIRECTLY from registers (no cache)
-  // This tests if the register values themselves are the problem
-  for I := 1 to CLOCKS do
-  begin
-    for J := 0 to 2 do
-    begin
-      with FState.Voices[J] do
-      begin
-        if not SIDOsc.TestBit then
-        begin
-          PrevAccum := SIDOsc.Accumulator;
-          // Read frequency directly from registers each clock cycle
-          Freq := FreqLo or (Cardinal(FreqHi) shl 8);
-          SIDOsc.Accumulator := (SIDOsc.Accumulator + Freq) and $FFFFFF;
-          SIDOsc.PreviousSyncMSB := ((PrevAccum and $800000) = 0) and
-                                    ((SIDOsc.Accumulator and $800000) <> 0);
-        end;
-      end;
-    end;
-  end;
-  Sum := 0;
-  for J := 0 to 2 do
-  begin
-    WaveOut := FState.Voices[J].SIDOsc.Accumulator shr 12;
-    Sum := Sum + (WaveOut - 2048);
-  end;
-  Result := (Sum / 6144.0) * 0.3;
-  if Result > 1.0 then Result := 1.0;
-  if Result < -1.0 then Result := -1.0;
+  dVlp := FFP_extW0lp * (Vi - FFP_extVlp);
+  dVhp := FFP_extW0hp * (FFP_extVlp - FFP_extVhp);
+  FFP_extVlp := FFP_extVlp + dVlp;
+  FFP_extVhp := FFP_extVhp + dVhp;
+  FFP_out := (FFP_extVlp - FFP_extVhp) * OUT_SCALE;
 end;
+
+procedure TSedaiSIDEvo.SetFilterModel(AModel: TSIDFilterModel);
+begin
+  FFilterModel := AModel;
+  if AModel = sfmDistortion then
+  begin
+    // Reset state and (re)build coefficients for the nonlinear filter.
+    FFP_Vhp := 0; FFP_Vbp := 0; FFP_Vlp := 0; FFP_Vf := 0; FFP_out := 0;
+    FFP_extVlp := 0; FFP_extVhp := 0;
+    FP_InitParams;
+  end;
+end;
+
+function TSedaiSIDEvo.GetFilterModel: TSIDFilterModel;
+begin
+  Result := FFilterModel;
+end;
+
 
 const
   SAMPLES_PER_FRAME = 882;  // 44100 / 50 Hz
@@ -2543,96 +2997,6 @@ begin
   end;
 end;
 
-function TSedaiSIDEvo.GenerateSampleLegacy: Single;
-const
-  // Output divisor for 12-bit waveform * 8-bit envelope * volume
-  // Max: 4095 * 255 * 15 = 15,663,825 - but we scale per voice
-  OUTPUT_DIVISOR = 2048.0;  // Simple 12-bit to float conversion
-var
-  I: Integer;
-  WaveOut, EnvOut: Integer;
-  VoiceSum: Integer;
-  FilteredSum, UnfilteredSum: Integer;
-  Voice1, Voice2, Voice3: Integer;
-begin
-  // Legacy approach: clock oscillators and envelopes ONCE per audio sample
-  // (not ~22 times like ReSID-exact)
-  for I := 0 to 2 do
-  begin
-    ClockOscillator(I);
-    ClockEnvelope(I);
-  end;
-
-  // Synchronize oscillators
-  SynchronizeOscillators;
-
-  // Get voice outputs using existing ReSID-exact formula
-  Voice1 := GetVoiceOutput(0);
-  Voice2 := GetVoiceOutput(1);
-  Voice3 := GetVoiceOutput(2);
-
-  // Clock filter ONCE with voice outputs
-  ClockFilter(Voice1, Voice2, Voice3, FExtIn);
-
-  // Clock external filter
-  ClockExternalFilter(FilterOutput);
-
-  // Get output and normalize
-  Result := ExternalFilterOutput / 367065.0;  // ReSID-exact divisor
-
-  // Apply master volume
-  Result := Result * FState.MasterVolume;
-
-  // Clamp
-  if Result > 1.0 then Result := 1.0;
-  if Result < -1.0 then Result := -1.0;
-end;
-
-function TSedaiSIDEvo.GenerateSampleRaw: Single;
-var
-  I: Integer;
-  WaveOut: Integer;
-  EnvOut: Byte;
-  VoiceOut: Integer;
-  Sum: Integer;
-  Vol: Integer;
-begin
-  // RAW approach: minimal processing, no filter
-  // Clock oscillators and envelopes once
-  for I := 0 to 2 do
-  begin
-    ClockOscillator(I);
-    ClockEnvelope(I);
-  end;
-  SynchronizeOscillators;
-
-  // Sum voice outputs directly (no filter)
-  Sum := 0;
-  for I := 0 to 2 do
-  begin
-    // Get 12-bit waveform
-    WaveOut := GetWaveformOutput12(I);
-    // Get 8-bit envelope
-    EnvOut := FState.Voices[I].SIDEnv.EnvelopeCounter;
-    // Voice output: (wave - 2048) * envelope
-    VoiceOut := (WaveOut - 2048) * EnvOut;
-    Sum := Sum + VoiceOut;
-  end;
-
-  // Apply master volume (0-15 in low nibble of ModeVol)
-  Vol := FFilter.ModeVol and $0F;
-  Sum := Sum * Vol;
-
-  // Normalize: max is 3 * 2048 * 255 * 15 = 23,500,800
-  Result := Sum / 23500800.0;
-
-  // Apply SAF master volume
-  Result := Result * FState.MasterVolume;
-
-  // Clamp
-  if Result > 1.0 then Result := 1.0;
-  if Result < -1.0 then Result := -1.0;
-end;
 
 procedure TSedaiSIDEvo.GenerateStereoSample(out ALeft, ARight: Single);
 var
@@ -2716,30 +3080,88 @@ begin
 end;
 
 function TSedaiSIDEvo.Output: Single;
-const
-  // ReSID-exact output range calculation:
-  // Voice output: (wave - wave_zero) * envelope = (-2048..2047) * 255 = -522240..521985
-  // After >> 7 scaling: -4080..4078
-  // 3 voices: -12240..12234
-  // After filter + volume (0-15): -183600..183510
-  // Full range: ((4095*255 >> 7)*3*15*2) = 734130
-  // Half range: 367065
-  OUTPUT_DIVISOR = 367065.0;
-var
-  RawOutput: Integer;
 begin
-  // Get external filter output (ReSID-exact: includes DC removal)
-  RawOutput := ExternalFilterOutput;
-
-  // ReSID-exact normalization to [-1.0, 1.0]
-  Result := RawOutput / OUTPUT_DIVISOR;
-
-  // Apply master volume
-  Result := Result * FState.MasterVolume;
-
-  // Clamp
+  // reSID-exact: normalize the 16-bit sample to [-1,1]. OutputSample16 already
+  // branches on the filter model (classic = extfilt/11; distortion = fp output)
+  // and matches reSID's SID::output() scaling (full 3-voice * 15-vol headroom).
+  // (Previously divided by 367065, ~1.8% low vs reSID's 11*32768 = 360448.)
+  Result := OutputSample16 / 32768.0 * FState.MasterVolume;
   if Result > 1.0 then Result := 1.0;
   if Result < -1.0 then Result := -1.0;
+end;
+
+// Band-limited variant of Output() for callers that clock the SID themselves
+// (e.g. the GoatTracker player). Convolves the most recent ring-buffer samples
+// with FIR table 0 (zero phase: the output sample is taken at the current cycle
+// boundary). Falls back to point-sampled Output() when no FIR is built.
+function TSedaiSIDEvo.OutputResampled: Single;
+var
+  J: Integer;
+  V: Int64;
+  pS, pF: PSmallInt;
+begin
+  if not FResampleReady then
+  begin
+    Result := Output;  // ssmFast / FIR not built -> point sampling
+    Exit;
+  end;
+
+  // Convolution with FIR table 0 (phase 0). The ring buffer is fed every cycle
+  // by ClockCycle, so it already holds the needed history at FSampleIndex.
+  // Pointer walk (not array[] indexing) to avoid dynamic-array indirection per
+  // tap; 16x16->32-bit products accumulated into Int64 (fast and overflow-safe).
+  pS := @FSampleRing[FSampleIndex - FFirN + SID_RINGSIZE];
+  pF := @FFir[0];
+  V := 0;
+  for J := 1 to FFirN do
+  begin
+    V := V + pS^ * pF^;
+    Inc(pS);
+    Inc(pF);
+  end;
+  V := SarInt64(V, SID_FIR_SHIFT);
+
+  if V >= 32767 then V := 32767
+  else if V < -32768 then V := -32768;
+
+  Result := V / 32768.0 * FState.MasterVolume;
+  if Result > 1.0 then Result := 1.0;
+  if Result < -1.0 then Result := -1.0;
+end;
+
+// Linear interpolation between the previous and current cycle output
+// (reSID SAMPLE_INTERPOLATE). AFrac in [0,1] is the sub-cycle position of the
+// output sample. Uses FPrev/FCurrSample16 tracked every cycle by ClockCycle.
+function TSedaiSIDEvo.OutputInterpolated(AFrac: Single): Single;
+begin
+  if not FTrackOutput then
+  begin
+    Result := Output;
+    Exit;
+  end;
+  Result := ((FPrevSample16 + AFrac * (FCurrSample16 - FPrevSample16)) / 32768.0)
+            * FState.MasterVolume;
+  if Result > 1.0 then Result := 1.0
+  else if Result < -1.0 then Result := -1.0;
+end;
+
+// Decimated output dispatched by the active sampling method, for callers that
+// clock the SID themselves (the GoatTracker player). APhaseNum/APhaseDen give
+// the sub-cycle position of the output sample (the player's decimation phase),
+// used only for interpolation.
+function TSedaiSIDEvo.OutputDecimated(APhaseNum, APhaseDen: Integer): Single;
+begin
+  case FSamplingMethod of
+    ssmResample:
+      Result := OutputResampled;
+    ssmInterpolate:
+      if APhaseDen > 0 then
+        Result := OutputInterpolated((APhaseDen - APhaseNum) / APhaseDen)
+      else
+        Result := Output;
+  else
+    Result := Output;  // ssmFast: nearest cycle (point sampling)
+  end;
 end;
 
 // ============================================================================
@@ -2792,6 +3214,25 @@ begin
     Result := GetVoiceOutput(AVoice)
   else
     Result := 0;
+end;
+
+function TSedaiSIDEvo.GetFilterW0(AFc: Integer): Integer;
+begin
+  if (AFc < 0) or (AFc > 2047) then begin Result := 0; Exit; end;
+  if FFilterF0 <> nil then
+    Result := PInteger(PByte(FFilterF0) + AFc * SizeOf(Integer))^
+  else
+    Result := FFilterF0_6581[AFc];
+end;
+
+function TSedaiSIDEvo.GetOutput16Debug: Integer;
+begin
+  Result := OutputSample16;  // reSID output(): extfilt output / 11, clamped 16-bit
+end;
+
+function TSedaiSIDEvo.FastExpDebug(V: Single): Single;
+begin
+  Result := FP_FastExp(V);
 end;
 
 function TSedaiSIDEvo.ClockAndGenerate(var ADeltaCycles: Integer;
@@ -3258,6 +3699,13 @@ begin
   if FSampleRate > 0 then
     FCyclesPerSample := FState.ClockFrequency / FSampleRate;
 
+  // Clock frequency changed -> rebuild the resampling FIR.
+  SetupSamplingParameters;
+
+  // Distortion filter coefficients depend on the clock frequency.
+  if FFilterModel = sfmDistortion then
+    FP_InitParams;
+
   InitializeTables;
 end;
 
@@ -3265,6 +3713,9 @@ procedure TSedaiSIDEvo.SetChipModel(AModel: TSIDModel);
 begin
   FModel := AModel;
   InitializeTables;
+  // Nonlinear voice DAC tables (wave_zero / voice_DC) depend on the chip model.
+  if FFilterModel = sfmDistortion then
+    FP_BuildDacTables;
 end;
 
 // ============================================================================

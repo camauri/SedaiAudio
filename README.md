@@ -26,7 +26,7 @@ Sedai Audio Foundation provides a comprehensive audio synthesis framework follow
 
 ### Key Features
 
-- **5 Synthesis Engines**: Classic/Subtractive, FM (DX7-style), Wavetable, Additive, SID Evo
+- **Synthesis Engines**: Classic/Subtractive, FM (DX7-style) and Wavetable are exposed through the high-level facade (`TSAFSynthType`); Additive (`SedaiAdditiveGenerator`) and SID Evo (`SedaiSIDEvo`) are available as standalone units
 - **Professional Mixer**: Channels, aux buses, group buses, master bus with metering
 - **Audio Effects**: Delay, Reverb, Chorus, Flanger, Phaser, Distortion, Compressor, Limiter, EQ
 - **Advanced Filters**: 6 filter types, multi-pole cascading (12/24/48 dB/oct)
@@ -179,34 +179,17 @@ The library follows a modular, layered architecture designed for maximum flexibi
 
 #### DAG-Based Effect Routing
 
-The library implements a **Directed Acyclic Graph (DAG)** for flexible effect routing:
+The library provides a set of composable effect processors, all derived from
+the `TSedaiEffect` base class in `src/Effects/`: `TSedaiReverb`, `TSedaiDelay`,
+`TSedaiChorus`, `TSedaiFlanger`, `TSedaiPhaser`. You chain them by passing the
+audio buffer through each processor in turn.
 
-```pascal
-// Effect graph example
-EffectGraph.AddNode(DelayNode);
-EffectGraph.AddNode(ReverbNode);
-EffectGraph.AddNode(CompressorNode);
-EffectGraph.Connect(DelayNode, ReverbNode);
-EffectGraph.Connect(ReverbNode, CompressorNode);
-EffectGraph.Process(InputBuffer, OutputBuffer, FrameCount, Channels);
-```
-
-#### Modular Synth Engine Base Class
-
-All synthesis engines can derive from `TSedaiSynthEngine` for consistent voice management:
-
-```pascal
-TSedaiSynthEngine = class
-  VoicePool: TSedaiVoicePool;      // Polyphonic voice allocation
-  EffectGraph: TSedaiEffectGraph;   // Per-engine effect chain
-  MasterFilter: TSedaiMultiPoleFilter;
-  LFOs: array[0..3] of TSedaiLFO;  // 4 global LFOs
-
-  procedure NoteOn(ANote, AVelocity: Integer); virtual;
-  procedure NoteOff(ANote: Integer); virtual;
-  procedure ProcessStereo(AOutputL, AOutputR: PSingle; AFrameCount: Integer); virtual;
-end;
-```
+> **Note:** an earlier design (see `ARCHITECTURE_PROPOSAL.md`, kept as a
+> historical document) proposed a DAG-based `TSedaiEffectGraph` and a
+> `TSedaiSynthEngine` / `TSedaiVoicePool` / `TSedaiMultiPoleFilter` base
+> hierarchy. These classes are **not** part of the current public API; voice
+> management lives inside each synth/player (e.g. `TSedaiSIDEvo`,
+> `TSedaiVoiceManager`).
 
 #### Professional Mixer Architecture
 
@@ -622,30 +605,33 @@ Q      - Quit player
 program GoatTrackerDemo;
 
 uses
-  SedaiSIDEvo, SedaiGoatTracker;
+  SedaiGoatTracker;
 
 var
-  SIDEvo: TSedaiSIDEvo;
-  GTPlayer: TSedaiGoatTracker;
+  Player: TSedaiGoatTracker;
+  Buffer: array[0..2047] of SmallInt;  // mono 16-bit
 begin
-  SIDEvo := TSedaiSIDEvo.Create(44100);
-  GTPlayer := TSedaiGoatTracker.Create(SIDEvo);
+  // The player creates and owns its own SID core internally.
+  Player := TSedaiGoatTracker.Create;
+  try
+    Player.SetSampleRate(44100);
 
-  if GTPlayer.LoadSong('mysong.sng') then
-  begin
-    GTPlayer.Play;
-
-    while GTPlayer.IsPlaying do
+    if Player.LoadFromFile('mysong.sng') then
     begin
-      GTPlayer.Process;  // Call each frame
-      Sleep(20);         // ~50 Hz update rate
+      WriteLn('Title: ', Player.SongName, ' / ', Player.Author);
+      Player.Play(0);  // start subtune 0
+
+      // FillBuffer generates audio AND drives the player routine at the
+      // correct rate internally (no separate per-frame call needed).
+      // In a real app you call this from your audio callback.
+      while not Player.SongFinished do
+        Player.FillBuffer(@Buffer[0], Length(Buffer));
+
+      Player.Stop;
     end;
-
-    GTPlayer.Stop;
+  finally
+    Player.Free;
   end;
-
-  GTPlayer.Free;
-  SIDEvo.Free;
 end.
 ```
 
@@ -868,7 +854,6 @@ chmod +x build.sh
 
 | Target | Description |
 |--------|-------------|
-| `test_compilation` | Unit compilation test |
 | `test_saf_main` | Main SAF API test (Classic, FM, Wavetable synthesis) |
 | `demo_synth` | Synth demo |
 | `sng_player` | GoatTracker .sng player |
@@ -876,18 +861,15 @@ chmod +x build.sh
 | `audiotest` | Audio backend test |
 | `sedaisid_test` | SedaiSIDEvo verification test |
 
-### Manual Compilation
+### Building a single target
 
-```bash
-# Compile main test program
-fpc -Mdelphi audiotest.lpr
-
-# Compile individual demos
-fpc -Mdelphi demo_presets.pas
-fpc -Mdelphi demo_midi_player.pas
-fpc -Mdelphi demo_filters_effects.pas
-fpc -Mdelphi demo_additive.pas
+```powershell
+.\build.ps1 -Target sng_player          # build just one target
+.\build.ps1 -Target sng_player -Clean   # clean then build
 ```
+
+Sources live under `test/` (`*.lpr`); the build script resolves each target to
+its source file and emits the executable into `bin/<cpu>-<os>/`.
 
 ---
 
@@ -908,73 +890,30 @@ The main test program with a comprehensive menu system.
 - Tempo control
 - System status display
 
-### demo_presets
+### demo_synth
 
-Demonstrates all built-in synthesis presets.
-
-```bash
-./demo_presets
-```
-
-**Menu Options**:
-1. Classic Synthesis Presets (6 presets)
-2. FM Synthesis Presets (6 presets)
-3. Wavetable Presets (6 presets)
-4. Synthesis Engines Comparison
-5. Full Demo (all presets)
-
-### demo_midi_player
-
-Interactive MIDI file player with real-time controls.
+Synthesis demonstration driving the SAF facade (Classic / FM / Wavetable).
 
 ```bash
-./demo_midi_player
+./demo_synth
 ```
 
-**Controls**:
-- `P` - Play/Pause
-- `S` - Stop
-- `+`/`-` - Volume control
-- `F`/`L` - Faster/Slower tempo
-- `I` - File info
-- `C` - Channel info
-- `T` - Playback status
-- `M` - Load another file
-- `Q` - Quit
+### test_saf_main
 
-**Note**: Place a `.mid` file in the application directory or provide the full path when prompted.
-
-### demo_filters_effects
-
-Tests audio filters and effects processing.
+Exercises the main SAF API (Classic, FM and Wavetable synthesis paths).
 
 ```bash
-./demo_filters_effects
+./test_saf_main
 ```
 
-**Tests**:
-- Biquad filters (LP, HP, BP, Notch, Allpass, Peaking)
-- Multi-pole filters (12dB, 24dB, 48dB/octave)
-- Effects (Delay, Reverb, Chorus, Flanger, Distortion)
+### sedaisid_test
 
-**Note**: This demo does NOT require audio output - it tests mathematical correctness.
-
-### demo_additive
-
-Demonstrates additive synthesis with harmonic control.
+Verification/regression test for the `SedaiSIDEvo` SID emulation. Compares the
+emulator state (accumulators, envelopes, output) against a reference dump.
 
 ```bash
-./demo_additive
+./sedaisid_test
 ```
-
-**Features**:
-- Pure tone and complex wave generation
-- 6 harmonic spectrum presets
-- Harmonic vs. inharmonic synthesis comparison
-- Custom spectrum creation
-- ADSR envelope visualization
-
-**Note**: This demo does NOT require audio output.
 
 ### sng_player
 
@@ -1010,6 +949,9 @@ The player supports two audio modes:
 - `V` - Toggle pattern verbose output
 - `W` - Toggle wavetable verbose output
 - `S` - Print SpeedTable
+- `A` - Cycle SID sampling: Fast (GoatTracker) / Interpolate / Resample (VICE)
+- `B` - Cycle audio buffer size: 2048 / 4096 / 8192 (latency vs dropout robustness)
+- `D` - Toggle filter model: Classic (clean reSID) / Distortion (reSID-fp nonlinear 6581, VICE-like)
 - `1`/`2`/`3` - Mute/unmute channels
 - `+`/`-` - Next/Previous subtune
 - `Q` or `ESC` - Quit
@@ -1070,26 +1012,31 @@ end.
 program MyMIDIPlayer;
 
 uses
-  SedaiAudioFoundation, SedaiMIDIFoundation;
+  SedaiMIDIPlayer;
 
+var
+  Player: TSedaiMIDIPlayer;  // object API (there is no global MIDI API)
 begin
-  if InitAudio(64) and InitMidi then
-  begin
-    SetMasterVolume(0.7);
-    SetupMidiGeneralMidi;
+  Player := TSedaiMIDIPlayer.Create;
+  try
+    Player.SetSampleRate(44100);
 
-    if LoadMidiFile('song.mid') then
+    if Player.LoadFromFile('song.mid') then
     begin
-      MidiPlay;
+      WriteLn('Title: ', Player.SongName,
+              '  Duration: ', Player.GetDurationSeconds:0:1, 's');
+      Player.Play;
 
-      while IsMidiPlaying do
-        Sleep(100);
+      // Drive the sequencer from your audio callback by advancing it the
+      // same number of samples you render each block:
+      //   Player.AdvanceSamples(FrameCount);
+      while Player.Playing do
+        Player.AdvanceSamples(441);  // e.g. 10 ms blocks at 44.1 kHz
 
-      MidiStop;
+      Player.Stop;
     end;
-
-    ShutdownMidi;
-    ShutdownAudio;
+  finally
+    Player.Free;
   end;
 end.
 ```
@@ -1223,18 +1170,18 @@ end;
 
 ### MIDI File Playback
 
-| Function | Description |
-|----------|-------------|
-| `InitMidi` | Initialize MIDI system |
-| `ShutdownMidi` | Shutdown MIDI system |
-| `LoadMidiFile(Filename)` | Load a MIDI file |
-| `MidiPlay` | Start playback |
-| `MidiPause` | Pause playback |
-| `MidiStop` | Stop playback |
-| `IsMidiPlaying` | Check if playing |
-| `GetMidiProgress` | Get playback progress (0-100%) |
-| `SetMidiTempo(Percent)` | Set tempo (1.0 = normal) |
-| `SetupMidiGeneralMidi` | Apply General MIDI mapping |
+MIDI playback uses the object API in `SedaiMIDIPlayer` (class `TSedaiMIDIPlayer`),
+not global functions:
+
+| Member | Description |
+|--------|-------------|
+| `Create` / `SetSampleRate(Hz)` | Construct the player and set its sample rate |
+| `LoadFromFile(Filename)` | Load a standard MIDI file |
+| `Play` / `Pause` / `Stop` / `Rewind` | Transport control |
+| `AdvanceSamples(Count)` | Advance the sequencer by N samples (call from the audio callback) |
+| `Playing` / `Paused` / `Loaded` | State properties |
+| `GetDurationSeconds` / `GetPositionSeconds` | Timing info |
+| `SongName` / `Copyright` / `TrackCount` | Metadata |
 
 ### Musical Helpers
 

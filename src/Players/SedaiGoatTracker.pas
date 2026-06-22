@@ -206,6 +206,12 @@ type
     // Hard restart parameter (from goattrk2.c: adparam = 0x0f00)
     FAdParam: Word;          // AD/SR values for hard restart
 
+    // Pulse skipping / pulse optimization (goattrk2.c: optimizepulse = 1 default).
+    // When on, the play routine skips pulse-table processing on the new-note frame
+    // (tick = gatetimer) and on the very first tick of a pattern row (tick=0 &
+    // pattptr=0), matching gplay.c PULSEEXEC. Affects pulse duty/timbre only.
+    FOptimizePulse: Boolean;
+
     // Frequency tables from gplay.c
     FFreqTblLo: array[0..127] of Byte;
     FFreqTblHi: array[0..127] of Byte;
@@ -332,12 +338,26 @@ begin
   FBpmTempo := 125;  // PAL
   FBpmCount := 0;
   FAdParam := $0F00;  // Default hard restart: AD=$0F, SR=$00 (original GoatTracker)
+  FOptimizePulse := True;  // goattrk2.cfg: Pulseskipping = 1 (default on)
 
   InitFrequencyTables;
   InitSidOrder;
   InitChannels;
 
   FSID.SetSampleRate(FSampleRate);
+
+  // The per-song volume is driven by SID register $18 (4-bit volume) written by
+  // the play routine; the SAF-level master gain must be open (1.0) for any
+  // sound to come out. TSedaiSIDEvo defaults MasterVolume to 0 (C128 facade
+  // semantics), so the player has to set it explicitly or playback is silent.
+  FSID.SetMasterVolume(1.0);
+
+  // Match GoatTracker's own reSID configuration: it uses SAMPLE_FAST by default
+  // (interpolation off; SAMPLE_INTERPOLATE with -I1) -- NOT the heavy
+  // band-limited SAMPLE_RESAMPLE. Using ssmFast keeps the timbre identical to
+  // GoatTracker and avoids the per-sample FIR cost (which caused dropouts in
+  // real time). Callers wanting hi-fi can still SID.SetSamplingMethod(ssmResample).
+  FSID.SetSamplingMethod(ssmFast);
 end;
 
 destructor TSedaiGoatTracker.Destroy;
@@ -1121,8 +1141,8 @@ WAVEEXEC:
                 SpeedW := SpeedW shr FRTable[STBL, Param - 1];
               end;
               if (Cptr^.VibTime < $80) and (Cptr^.VibTime > CmpValue) then
-                Cptr^.VibTime := Cptr^.VibTime xor $FF;
-              Cptr^.VibTime := Cptr^.VibTime + 2;
+                Cptr^.VibTime := (Cptr^.VibTime xor $FF) and $FF;
+              Cptr^.VibTime := (Cptr^.VibTime + 2) and $FF;
               if (Cptr^.VibTime and 1) <> 0 then
                 Cptr^.Freq := Cptr^.Freq - SpeedW
               else
@@ -1201,7 +1221,13 @@ WAVEEXEC:
     end;
 
 TICKNEFFECTS:
-    // Tick N effects
+    // Tick N effects. GoatTracker has optimizerealtime=1 by default, so its
+    // guard "if ((!optimizerealtime) || tick)" becomes "if (tick)": the
+    // per-frame commands (portamento, vibrato, ...) run ONLY on non-tick0
+    // frames. Running them on the tick0 frame too applies the vibrato one frame
+    // early (audible as the vibrato "starting/not settling" wrong). Guard with
+    // tick<>0 to match the original player.
+    if Cptr^.Tick <> 0 then
     case Cptr^.Command of
       CMD_PORTAUP:
       begin
@@ -1253,8 +1279,8 @@ TICKNEFFECTS:
           SpeedW := SpeedW shr FRTable[STBL, Cptr^.CmdData - 1];
         end;
         if (Cptr^.VibTime < $80) and (Cptr^.VibTime > CmpValue) then
-          Cptr^.VibTime := Cptr^.VibTime xor $FF;
-        Cptr^.VibTime := Cptr^.VibTime + 2;
+          Cptr^.VibTime := (Cptr^.VibTime xor $FF) and $FF;
+        Cptr^.VibTime := (Cptr^.VibTime + 2) and $FF;
         if (Cptr^.VibTime and 1) <> 0 then
           Cptr^.Freq := Cptr^.Freq - SpeedW
         else
@@ -1277,8 +1303,8 @@ TICKNEFFECTS:
           SpeedW := SpeedW shr FRTable[STBL, Cptr^.CmdData - 1];
         end;
         if (Cptr^.VibTime < $80) and (Cptr^.VibTime > CmpValue) then
-          Cptr^.VibTime := Cptr^.VibTime xor $FF;
-        Cptr^.VibTime := Cptr^.VibTime + 2;
+          Cptr^.VibTime := (Cptr^.VibTime xor $FF) and $FF;
+        Cptr^.VibTime := (Cptr^.VibTime + 2) and $FF;
         if (Cptr^.VibTime and 1) <> 0 then
           Cptr^.Freq := Cptr^.Freq - SpeedW
         else
@@ -1327,9 +1353,20 @@ TICKNEFFECTS:
     end;
 
 PULSEEXEC:
+    // Pulse optimization / skipping (gplay.c PULSEEXEC, optimizepulse=1 default):
+    // skip the whole pulse-table step on the new-note frame and go straight to
+    // fetching new notes (the original goes to GETNEWNOTES, which here is the
+    // tick=gatetimer block at PULSEEXECDONE).
+    if FOptimizePulse and (FSongInit <> PLAY_STOPPED) and (Cptr^.Tick = Cptr^.GateTimer) then
+      goto PULSEEXECDONE;
+
     // Pulsetable processing
     if Cptr^.Ptr[PTBL] > 0 then
     begin
+      // Skip pulse when the sequencer has just been executed (gplay.c:862).
+      if FOptimizePulse and (Cptr^.Tick = 0) and (Cptr^.PattPtr = 0) then
+        goto NEXTCHN;
+
       // Pulsetable jump
       if FLTable[PTBL, Cptr^.Ptr[PTBL] - 1] = $FF then
       begin
@@ -1501,7 +1538,7 @@ begin
             Dec(FSampleOffset, FClockRate);
             if MusicSamples > 0 then
             begin
-              FloatSample := FSID.Output;
+              FloatSample := FSID.OutputDecimated(FSampleOffset, FSampleRate);
               SamplesOut := Round(FloatSample * 32767);
               if SamplesOut > 32767 then SamplesOut := 32767;
               if SamplesOut < -32768 then SamplesOut := -32768;
@@ -1529,7 +1566,7 @@ begin
       if FSampleOffset >= FClockRate then
       begin
         Dec(FSampleOffset, FClockRate);
-        FloatSample := FSID.Output;
+        FloatSample := FSID.OutputDecimated(FSampleOffset, FSampleRate);
         SamplesOut := Round(FloatSample * 32767);
         if SamplesOut > 32767 then SamplesOut := 32767;
         if SamplesOut < -32768 then SamplesOut := -32768;
@@ -1544,7 +1581,7 @@ begin
     // Fill any remaining samples for this chunk (if cycles exhausted before samples)
     while MusicSamples > 0 do
     begin
-      FloatSample := FSID.Output;
+      FloatSample := FSID.OutputDecimated(0, FSampleRate);
       SamplesOut := Round(FloatSample * 32767);
       if SamplesOut > 32767 then SamplesOut := 32767;
       if SamplesOut < -32768 then SamplesOut := -32768;

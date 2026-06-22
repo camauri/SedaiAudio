@@ -46,6 +46,12 @@
 ARCHITECTURE_PROPOSAL.md
 TODO.md
 
+# Session resume file (local only, never pushed)
+NEXT_SESSION_PROMPT.md
+
+# Scratch / test render dir
+/tmp/
+
 # IDE/Editor directories
 __history/
 __recovery/
@@ -77,6 +83,10 @@ desktop.ini
 
 # Korg proprietary format (not redistributable)
 **/korg_format/
+
+# Generated test/diagnostic artifacts
+/sedaisid_reference.txt
+*.dump
 
 # Miscellaneous
 *.log

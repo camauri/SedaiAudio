@@ -28,7 +28,13 @@ uses
 
 const
   SAMPLE_RATE = 44100;
-  BUFFER_SIZE = 2048;
+  BUFFER_SIZE = 2048;       // smallest selectable buffer (lowest latency)
+  MAX_BUFFER_SIZE = 8192;   // largest selectable buffer (most jitter tolerance)
+  // Default to the SMALLEST buffer: lowest latency, and under CPU contention it
+  // interleaves better with other processes (a big buffer = one long CPU burst
+  // that, if preempted mid-fill, loses the whole buffer). Use 'B' to go bigger
+  // only if the bottleneck is scheduling latency rather than CPU.
+  DEFAULT_BUFFER_SIZE = 2048;
 
 type
   TAudioMode = (amSAF, amSDL2);
@@ -40,6 +46,8 @@ var
   GAudioDeviceID: TSDL_AudioDeviceID = 0;
   GAudioMode: TAudioMode = amSAF;  // Default: use SAF
   GSAFBackend: TSedaiAudioBackend = nil;
+  // Audio buffer size, switchable at runtime among 2048/4096/8192 (key 'B').
+  GBufferSize: Integer = DEFAULT_BUFFER_SIZE;
 
 // ============================================================================
 // SDL2 AUDIO CALLBACK
@@ -72,7 +80,7 @@ end;
 // ============================================================================
 
 var
-  GSAFTempBuffer: array[0..BUFFER_SIZE * 2 - 1] of SmallInt;  // Mono 16-bit temp buffer
+  GSAFTempBuffer: array[0..MAX_BUFFER_SIZE * 2 - 1] of SmallInt;  // Mono 16-bit temp buffer (sized for max)
 
 procedure SAFAudioCallback(AOutput: PSingle; AFrameCount: Integer; AUserData: Pointer);
 var
@@ -244,6 +252,9 @@ begin
   WriteLn('  V        - Toggle pattern verbose');
   WriteLn('  W        - Toggle wavetable verbose');
   WriteLn('  S        - Show speed table');
+  WriteLn('  A        - Cycle sampling: Fast -> Interpolate -> Resample');
+  WriteLn('  B        - Cycle audio buffer: 2048 -> 4096 -> 8192 (latency vs dropouts)');
+  WriteLn('  D        - Toggle filter model: Classic (clean) <-> Distortion (reSID-fp/VICE)');
   WriteLn('  1/2/3    - Mute/Unmute voice 1/2/3');
   WriteLn('  +/-      - Next/Previous subtune');
   WriteLn('  ESC/Q    - Quit');
@@ -267,7 +278,7 @@ begin
   // Create SAF audio backend
   GSAFBackend := TSedaiAudioBackend.Create;
   GSAFBackend.SetSampleRate(SAMPLE_RATE);
-  GSAFBackend.SetDesiredBufferSize(BUFFER_SIZE);
+  GSAFBackend.SetDesiredBufferSize(GBufferSize);
   GSAFBackend.SetChannels(2);  // Stereo output
   GSAFBackend.SetCallback(@SAFAudioCallback, nil);
   GSAFBackend.SetMode(bmCallback);  // IMPORTANT: Use callback mode, not push mode!
@@ -295,7 +306,7 @@ begin
   Wanted.freq := SAMPLE_RATE;
   Wanted.format := AUDIO_S16;
   Wanted.channels := 1;
-  Wanted.samples := BUFFER_SIZE;
+  Wanted.samples := GBufferSize;
   Wanted.callback := @AudioCallback;
   Wanted.userdata := nil;
 
@@ -388,6 +399,21 @@ begin
   end;
 end;
 
+// Change the audio buffer size at runtime. SDL can't resize a live device, so
+// we stop + close + reopen it with the new size. The player keeps its state, so
+// playback resumes seamlessly (apart from a brief gap during the swap).
+procedure SetBufferSizeRuntime(NewSize: Integer);
+begin
+  if NewSize = GBufferSize then Exit;
+  StopAudioPlayback;
+  CloseAudio;
+  GBufferSize := NewSize;
+  if InitAudio then
+    StartAudio
+  else
+    WriteLn(#13, 'Error: failed to reopen audio at buffer ', NewSize, ' samples');
+end;
+
 procedure ParseCommandLine(out AFilename: string; out ASubtune: Integer);
 var
   I: Integer;
@@ -477,7 +503,8 @@ begin
     WriteLn('Subtunes: ', GPlayer.SubtuneCount);
     WriteLn;
     WriteLn('Controls: SPACE=Pause R=Restart L=Loop V=PatVerbose W=WaveVerbose');
-    WriteLn('          1/2/3=Mute +/-=Subtune Q=Quit');
+    WriteLn('          A=Sampling(Fast/Interp/Resample) B=Buffer(2048/4096/8192)');
+    WriteLn('          D=Filter(Classic/Distortion) 1/2/3=Mute +/-=Subtune Q=Quit');
     WriteLn('Frame rate: ', GPlayer.FrameRate, ' Hz');
     WriteLn;
 
@@ -558,6 +585,53 @@ begin
                  WriteLn(#13, 'Looping: ON                                              ')
                else
                  WriteLn(#13, 'Looping: OFF                                             ');
+             end;
+        'A': begin
+               // Cycle SID decimation: Fast (GoatTracker default) -> Interpolate
+               // (GoatTracker -I1) -> Resample (band-limited, VICE-like).
+               case GPlayer.SID.GetSamplingMethod of
+                 ssmFast:
+                   begin
+                     GPlayer.SID.SetSamplingMethod(ssmInterpolate);
+                     WriteLn(#13, 'Sampling: INTERPOLATE (GoatTracker -I1)                  ');
+                   end;
+                 ssmInterpolate:
+                   begin
+                     GPlayer.SID.SetSamplingMethod(ssmResample);
+                     WriteLn(#13, 'Sampling: RESAMPLE (band-limited, VICE-like)             ');
+                   end;
+               else
+                 begin
+                   GPlayer.SID.SetSamplingMethod(ssmFast);
+                   WriteLn(#13, 'Sampling: FAST (point, GoatTracker default)              ');
+                 end;
+               end;
+             end;
+        'B': begin
+               // Cycle audio buffer size 2048 -> 4096 -> 8192 (jitter tolerance
+               // vs latency). Bigger = more robust against other processes.
+               case GBufferSize of
+                 2048: SetBufferSizeRuntime(4096);
+                 4096: SetBufferSizeRuntime(8192);
+               else
+                 SetBufferSizeRuntime(2048);
+               end;
+               WriteLn(#13, 'Buffer: ', GBufferSize, ' samples (~',
+                       (GBufferSize * 1000) div SAMPLE_RATE, ' ms latency)              ');
+             end;
+        'D': begin
+               // Toggle filter model: classic (clean reSID) vs distortion
+               // (reSID-fp nonlinear 6581, VICE / GoatTracker -I2/-I3).
+               if GPlayer.SID.GetFilterModel = sfmDistortion then
+               begin
+                 GPlayer.SID.SetFilterModel(sfmClassic);
+                 WriteLn(#13, 'Filter: CLASSIC (clean reSID)                            ');
+               end
+               else
+               begin
+                 GPlayer.SID.SetFilterModel(sfmDistortion);
+                 WriteLn(#13, 'Filter: DISTORTION (reSID-fp nonlinear 6581, VICE-like)  ');
+               end;
              end;
         '1': begin
                GPlayer.SetVoiceMute(0, not GPlayer.IsVoiceMuted(0));
