@@ -2379,6 +2379,15 @@ begin
   for I := 0 to 2 do
     ClockEnvelope(I);
 
+  // EVO: also advance the ADSR of the extended voices (3..N) so they are
+  // actually audible. The reSID core (voices 0-2, the SID output) is untouched;
+  // this only ticks the extra voices' envelopes, which GenerateStereoSample
+  // reads per sample. Gated on EVO mode, so the classic/player path
+  // (salSIDFull / salSIDLike) is byte-identical and stays bit-exact vs reSID.
+  if FState.AuthenticityLevel in [salEvolved, salHybrid] then
+    for I := 3 to GetEffectiveVoiceCount - 1 do
+      ClockEnvelope(I);
+
   // 2. Clock oscillators SECOND
   for I := 0 to 2 do
     ClockOscillator(I);
