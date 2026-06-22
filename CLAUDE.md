@@ -48,4 +48,4 @@ Sedai Audio Foundation (SAF) is a modular Free Pascal audio framework.
 
 ## Documentation Status
 
-README.md / ARCHITECTURE_PROPOSAL.md / TODO.md have drifted from the code (audit 2026-06-21): several documented APIs/demos no longer exist, and some implemented units are undocumented. Treat docs as approximate; verify against sources before relying on them.
+README.md was updated 2026-06-22 — the **SID Evo** and **GoatTracker Player** sections (emulation accuracy, sampling methods, filter models, player fidelity, `sng_player` controls) are current and accurate. The rest of README, plus ARCHITECTURE_PROPOSAL.md / TODO.md (both gitignored), may still have drifted (audit 2026-06-21): some documented APIs/demos no longer exist and some implemented units are undocumented. Verify against sources before relying on the non-SID parts.

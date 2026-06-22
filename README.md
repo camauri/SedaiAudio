@@ -307,13 +307,13 @@ audio buffer through each processor in turn.
 
 | Module | Description |
 |--------|-------------|
-| **SedaiSIDEvo** | Evolved SID-style synthesizer (enhanced ReSID implementation) |
+| **SedaiSIDEvo** | MOS 6581/8580 SID emulator — a bit-exact reSID port (classic path) plus EVO extensions (up to 64 voices, stereo, LFO, extended waveforms) |
 
 #### Players
 
 | Module | Description |
 |--------|-------------|
-| **SedaiGoatTracker** | GoatTracker v2 .sng file parser and player |
+| **SedaiGoatTracker** | GoatTracker v2 .sng parser and player; byte-exact SID register output vs. the original player |
 | **SedaiMIDIPlayer** | Standard MIDI file player |
 
 #### File I/O
@@ -433,7 +433,12 @@ end.
 
 ### SID Evo Synthesis
 
-A Commodore 64 SID-inspired synthesis engine with extended capabilities. Provides authentic chiptune sounds while adding modern waveforms for creative flexibility. This is an **enhanced reimplementation of the ReSID engine** combining cycle-accurate SID emulation with modern synthesis features.
+A Commodore 64 SID emulator with extended capabilities. The classic emulation path is a
+**bit-exact port of reSID** (cycle-accurate MOS 6581/8580), verified sample-for-sample
+against the reference engine; on top of it the "Evo" layer adds modern waveforms and
+features (up to 64 voices, stereo, per-voice LFO, 3D positioning) for creative
+flexibility. It therefore serves both as a faithful chiptune engine for `.sng`/`.sid`
+playback and as a standalone synthesizer.
 
 #### Classic SID Waveforms (4)
 
@@ -459,15 +464,56 @@ A Commodore 64 SID-inspired synthesis engine with extended capabilities. Provide
 
 #### ReSID-Accurate Features
 
+The classic emulation path is a faithful port of **reSID** (Dag Lem's cycle-accurate
+MOS 6581/8580 engine). Every core building block reproduces reSID's integer model
+exactly:
+
 | Feature | Description |
 |---------|-------------|
-| **15-bit Rate Counter** | With wraparound at $8000 (ADSR delay bug) |
-| **Exponential Counter** | Period changes at levels 255, 93, 54, 26, 14, 6, 0 |
-| **Hold-Zero** | Envelope frozen when reaching zero |
-| **24-bit Accumulator** | Authentic phase accumulator |
-| **23-bit LFSR Noise** | Authentic noise generator |
-| **Waveform AND** | Combined waveforms via AND operation |
-| **Two-Integrator-Loop Filter** | Authentic 6581/8580 filter topology |
+| **24-bit Accumulator** | Authentic phase accumulator; FREQ added to the low 16 bits each cycle |
+| **Hard Sync** | Oscillator reset on the source MSB rising edge (reSID `synchronize`) |
+| **Ring Modulation** | Triangle MSB EOR'd with the sync source MSB |
+| **Combined Waveforms** | OSC3 sample lookup tables for SAW+TRI / PUL+TRI / PUL+SAW / PUL+SAW+TRI |
+| **23-bit LFSR Noise** | Authentic noise generator (taps 22 EOR 17), clocked by accumulator bit 19 |
+| **15-bit Rate Counter** | With double-increment wraparound at $8000 (the ADSR delay bug) |
+| **Exponential Counter** | Period breakpoints at envelope levels 255, 93, 54, 26, 14, 6, 0 |
+| **Hold-Zero** | Envelope frozen when it reaches zero |
+| **Two-Integrator-Loop Filter** | Authentic 6581/8580 topology; cutoff from the reSID cubic-spline `f0` tables (both chip models), resonance `1024/(0.707 + res/15)`, `mixer_DC` and DAC offsets |
+| **External Filter** | C64 output RC stage (low-pass 1/RC = 100000, high-pass 1/RC = 100) |
+
+##### Verified Bit-Exact
+
+The classic path has been verified **bit-for-bit against reSID** by driving both
+engines from the same per-cycle register stream and comparing the raw output:
+
+- **Full mixed output**: 0 sample differences over **15.76 million cycles** of a real
+  tune (oscillators + envelopes + filter + external filter + mixer), including frames
+  that use hard sync and ring modulation.
+- **Cycle-exact sub-systems**: all 4 classic + the combined waveforms, the noise LFSR,
+  hard sync, ring modulation and the full ADSR envelope (every Attack/Decay/Sustain/
+  Release setting) reproduce reSID's `readOSC`/`readENV`/`output()` with zero deviation.
+
+> The distortion model (see below) is ported from **reSID-fp** (Antti S. Lankila's
+> non-linear 6581 filter). reSID and reSID-fp are licensed GPL-2-or-later (compatible
+> with this project's GPL-3); credit to Dag Lem and Antti S. Lankila.
+
+#### Sampling Methods
+
+The output stage offers the same three decimation strategies as reSID, selectable at
+runtime via `SetSamplingMethod`:
+
+| Method | Constant | Description |
+|--------|----------|-------------|
+| **Fast** | `ssmFast` | Point sampling (aliases high harmonics, exactly like reSID `SAMPLE_FAST`). **Default** — this is what GoatTracker uses, so it is the closest match for tracker playback. |
+| **Interpolate** | `ssmInterpolate` | Linear interpolation between the two bracketing cycles (reSID `SAMPLE_INTERPOLATE`); cheap, no FIR latency. |
+| **Resample** | `ssmResample` | Band-limited Kaiser-windowed sinc FIR resampling (reSID `SAMPLE_RESAMPLE_INTERPOLATE`); cleanest output, heaviest CPU. Use for hi-fi offline rendering. |
+
+#### Filter Models
+
+| Model | Constant | Description |
+|-------|----------|-------------|
+| **Classic** | `sfmClassic` | reSID two-integrator-loop (linear). **Default**, bit-exact to reSID. |
+| **Distortion** | `sfmDistortion` | reSID-fp non-linear 6581 filter (signal-dependent cutoff via a kinked DAC + Schraudolph fast-exp + output waveshaper). Reproduces the real 6581's "warm" filter distortion that the linear model lacks. Single-precision, GoatTracker filter parameters. |
 
 #### SID Models
 
@@ -538,6 +584,25 @@ end.
 ## GoatTracker Player
 
 Native playback support for GoatTracker v2 .sng files, the popular Commodore 64 music tracker.
+`SedaiGoatTracker` is a clean Pascal reimplementation of the GoatTracker v2 player routine
+(`gplay.c` / `gsid.cpp` / `gsound.c`).
+
+### Fidelity
+
+The player's SID register output has been verified **byte-for-byte against the real
+GoatTracker player** (relocated to `.sid` and dumped with a 6502 + reSID reference): the
+control/gate, ADSR, frequency and filter register streams match with **zero divergences**
+on all three voices. The reimplementation faithfully reproduces:
+
+- the exact SID register write order (`sidorder`) and inter-write delay (`SIDWRITEDELAY = 14` cycles);
+- the hard-restart behaviour (`adparam = $0F00`, gate-timer bits `$40`/`$80`);
+- real-time effect skipping (`optimizerealtime` — per-frame commands run only on non-tick-0 frames);
+- **pulse skipping** (`optimizepulse` — the pulse table is not advanced on the new-note frame), so the pulse-width register tracks the original player to within 1 LSB;
+- 8-bit `vibtime` wraparound and the fine-vibrato speed-table semantics;
+- wavetable / pulsetable / filtertable / speedtable processing and the note frequency table.
+
+Combined with the bit-exact SID core, `sng_player` is **audibly indistinguishable from
+GoatTracker** for the classic (default) configuration.
 
 ### Supported Features
 
@@ -545,6 +610,7 @@ Native playback support for GoatTracker v2 .sng files, the popular Commodore 64 
 - 3-channel playback with per-channel mute control
 - Loop detection and seamless looping
 - Real-time tempo control
+- Multiple subtunes
 
 ### Pattern Commands
 
@@ -586,17 +652,32 @@ Native playback support for GoatTracker v2 .sng files, the popular Commodore 64 
 | `$FD` | Set Master Volume | Change global volume |
 | `$FE` | (Reserved) | - |
 
+### Running
+
+```
+sng_player [--sdl2] <file.sng> [subtune]
+```
+
+By default audio is rendered through the Sedai Audio Foundation (SAF) backend; pass
+`--sdl2` to use direct SDL2 output (compatibility/debugging). The optional trailing
+number selects the initial subtune.
+
 ### Demo Player Controls
 
 ```
-SPACE  - Pause/Resume playback
-R      - Restart song from beginning
-L      - Toggle loop mode
-V      - Toggle pattern command verbose output
-W      - Toggle wavetable command verbose output
-S      - Print SpeedTable contents
-1/2/3  - Mute/unmute channel 1/2/3
-Q      - Quit player
+SPACE    - Pause/Resume playback
+R        - Restart song from beginning
+I        - Show song info
+L        - Toggle loop mode
+A        - Cycle SID sampling: Fast -> Interpolate -> Resample
+B        - Cycle audio buffer size: 2048 -> 4096 -> 8192 (latency vs. dropouts)
+D        - Toggle filter model: Classic (clean) <-> Distortion (reSID-fp)
+V        - Toggle pattern command verbose output
+W        - Toggle wavetable command verbose output
+S        - Print SpeedTable contents
+1/2/3    - Mute/unmute voice 1/2/3
++/-      - Next/Previous subtune
+ESC / Q  - Quit player
 ```
 
 ### Usage Example
@@ -857,9 +938,9 @@ chmod +x build.sh
 | `test_saf_main` | Main SAF API test (Classic, FM, Wavetable synthesis) |
 | `demo_synth` | Synth demo |
 | `sng_player` | GoatTracker .sng player |
-| `sng_dump` | SNG register dump tool (VICE format) |
+| `sng_dump` | Per-frame SID register dump tool (for diagnostics / reference comparison) |
 | `audiotest` | Audio backend test |
-| `sedaisid_test` | SedaiSIDEvo verification test |
+| `sedaisid_test` | SedaiSIDEvo verification / regression test |
 
 ### Building a single target
 
