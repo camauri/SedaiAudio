@@ -1661,6 +1661,7 @@ begin
     $18:
       begin
         FFilter.ModeVol := AValue;
+        FState.MasterVolume := (AValue and $0F) / 15.0;  // keep property in sync with reg
         FState.Filter3Off := (AValue and SID_FILT_3OFF) <> 0;
       end;
   end;
@@ -2461,8 +2462,7 @@ begin
     ClockCycle;
 
   RawOutput := ExternalFilterOutput;
-  Result := RawOutput / OUTPUT_DIVISOR;
-  Result := Result * FState.MasterVolume;
+  Result := RawOutput / OUTPUT_DIVISOR;  // master volume already applied via reg $18
   if Result > 1.0 then Result := 1.0;
   if Result < -1.0 then Result := -1.0;
 end;
@@ -2619,7 +2619,7 @@ begin
         Int64(FSampleOffsetFixp) * (SampleNow - FSamplePrev), SID_FIXP_SHIFT));
   FSamplePrev := SampleNow;
 
-  Result := V / 32768.0 * FState.MasterVolume;
+  Result := V / 32768.0;  // master volume already applied via reg $18 in FilterOutput
   if Result > 1.0 then Result := 1.0;
   if Result < -1.0 then Result := -1.0;
 end;
@@ -2684,7 +2684,7 @@ begin
   if V >= 32767 then V := 32767
   else if V < -32768 then V := -32768;
 
-  Result := V / 32768.0 * FState.MasterVolume;
+  Result := V / 32768.0;  // master volume already applied via reg $18 in FilterOutput
   if Result > 1.0 then Result := 1.0;
   if Result < -1.0 then Result := -1.0;
 end;
@@ -3111,7 +3111,9 @@ begin
   // branches on the filter model (classic = extfilt/11; distortion = fp output)
   // and matches reSID's SID::output() scaling (full 3-voice * 15-vol headroom).
   // (Previously divided by 367065, ~1.8% low vs reSID's 11*32768 = 360448.)
-  Result := OutputSample16 / 32768.0 * FState.MasterVolume;
+  // Master volume is the SID's reg $18 nibble, applied once inside FilterOutput
+  // (reSID-exact); there is no separate post-output gain stage.
+  Result := OutputSample16 / 32768.0;
   if Result > 1.0 then Result := 1.0;
   if Result < -1.0 then Result := -1.0;
 end;
@@ -3150,7 +3152,7 @@ begin
   if V >= 32767 then V := 32767
   else if V < -32768 then V := -32768;
 
-  Result := V / 32768.0 * FState.MasterVolume;
+  Result := V / 32768.0;  // master volume already applied via reg $18 in FilterOutput
   if Result > 1.0 then Result := 1.0;
   if Result < -1.0 then Result := -1.0;
 end;
@@ -3165,8 +3167,7 @@ begin
     Result := Output;
     Exit;
   end;
-  Result := ((FPrevSample16 + AFrac * (FCurrSample16 - FPrevSample16)) / 32768.0)
-            * FState.MasterVolume;
+  Result := (FPrevSample16 + AFrac * (FCurrSample16 - FPrevSample16)) / 32768.0;
   if Result > 1.0 then Result := 1.0
   else if Result < -1.0 then Result := -1.0;
 end;
@@ -3670,8 +3671,19 @@ end;
 // ============================================================================
 
 procedure TSedaiSIDEvo.SetMasterVolume(AVolume: Single);
+var
+  Nibble: Integer;
 begin
-  FState.MasterVolume := AVolume;
+  // Master volume IS the SID's 4-bit $D418 volume -- there is no separate gain
+  // stage (that would double-count the level vs reSID). Setting it writes the
+  // volume nibble of register $18, preserving the filter-mode bits, so it stays
+  // consistent with direct register access (WriteRegister($18)/SetFilterModeVol).
+  // The MasterVolume property mirrors the register.
+  if AVolume < 0.0 then AVolume := 0.0;
+  if AVolume > 1.0 then AVolume := 1.0;
+  Nibble := Round(AVolume * 15.0);
+  FFilter.ModeVol := (FFilter.ModeVol and $F0) or (Nibble and $0F);
+  FState.MasterVolume := Nibble / 15.0;
 end;
 
 procedure TSedaiSIDEvo.SetAuthenticityLevel(ALevel: TSIDEvoAuthenticityLevel);
