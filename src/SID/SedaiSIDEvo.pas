@@ -95,7 +95,8 @@ unit SedaiSIDEvo;
 interface
 
 uses
-  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiOscillator;
+  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiOscillator,
+  SedaiFilter;
 
 const
   // ============================================================================
@@ -143,6 +144,22 @@ const
   SIDEVO_WAVE_SUPERSAW  = $20;
   SIDEVO_WAVE_PWM       = $40;      // Auto-modulating pulse width
   SIDEVO_WAVE_HALFSIN   = $80;
+
+  // Extended waveforms, phase-2: the rest of the TSedaiOscillator palette.
+  // TSIDEvoWaveform is a Word, so these high bits are free. Exposing them lets
+  // any of the 64 voices use the full synth palette (see tmp/EVO_TRACKER_PLAN.md).
+  SIDEVO_WAVE_SQUARE    = $100;
+  SIDEVO_WAVE_FULLSIN   = $200;
+  SIDEVO_WAVE_FORMANT   = $400;
+  SIDEVO_WAVE_METALLIC  = $800;
+
+  // Masks: classic SID waveforms (can use SID-authentic timbre) vs extended ones.
+  SIDEVO_WAVE_CLASSIC_MASK = SIDEVO_WAVE_TRIANGLE or SIDEVO_WAVE_SAWTOOTH or
+                             SIDEVO_WAVE_PULSE or SIDEVO_WAVE_NOISE;            // $00F
+  SIDEVO_WAVE_EXT_MASK     = SIDEVO_WAVE_SINE or SIDEVO_WAVE_SUPERSAW or
+                             SIDEVO_WAVE_PWM or SIDEVO_WAVE_HALFSIN or
+                             SIDEVO_WAVE_SQUARE or SIDEVO_WAVE_FULLSIN or
+                             SIDEVO_WAVE_FORMANT or SIDEVO_WAVE_METALLIC;       // $FF0
 
   // SID register waveform bits
   SID_WAVE_TRIANGLE = $10;
@@ -444,6 +461,20 @@ type
     PulseWidth: Single;         // 0.0 to 1.0
     SupersawDetune: Single;
     SupersawMix: Single;
+    // How multiple waveform bits combine when more than one is set on Waveform
+    // (Mix/AND/Mul/Min/Max). Single-bit voices ignore this. See EVO_TRACKER_PLAN.md.
+    CombineMode: TWaveformCombineMode;
+    // Phase 3: render classic (tri/saw/pulse/noise) waveforms through the SAF
+    // oscillator's SID-authentic mode (24-bit accumulator) for SID timbre per-voice.
+    UseSIDTimbre: Boolean;
+    // Phase 4: per-voice auto-PWM modulation (used by the PWM waveform).
+    PWMRate: Single;
+    PWMDepth: Single;
+    // Phase 5: per-voice multimode float filter (LP/BP/HP...) on the EVO float path.
+    FilterEnabled: Boolean;
+    FilterType: TFilterType;
+    FilterCutoff: Single;        // Hz
+    FilterResonance: Single;     // 0..1
 
     // ADSR (high-level, mapped to SID registers)
     Attack: Single;
@@ -521,6 +552,13 @@ type
 
     // Voice 3 disconnection
     Filter3Off: Boolean;
+
+    // Tracker / all-EVO mode: when True (and AuthenticityLevel is salEvolved or
+    // salHybrid), ALL 64 voices render through the EVO float path. Voices 0-2 are
+    // NOT mixed from the bit-exact reSID core (the core still clocks each cycle, so
+    // every voice's envelope advances, but its output is not summed). Default False
+    // keeps the classic/player path byte-identical. See tmp/EVO_TRACKER_PLAN.md.
+    AllVoicesEvo: Boolean;
   end;
 
   { TSedaiSIDEvo }
@@ -622,6 +660,9 @@ type
     // SAF Oscillators for extended waveforms (inherited from Sedai Audio Foundation)
     // Extended voices (3-63) use TSedaiOscillator for float-based waveforms
     FExtOscillators: array[0..SIDEVO_MAX_VOICES-1] of TSedaiOscillator;
+    // Per-voice multimode float filter (Phase 5), one per voice, applied on the
+    // EVO float path. Independent of the bit-exact reSID core filter.
+    FExtFilters: array[0..SIDEVO_MAX_VOICES-1] of TSedaiFilter;
 
     procedure InitializeTables;
     procedure InitializeVoice(AIndex: Integer);
@@ -761,6 +802,10 @@ type
     procedure SetMasterVolume(AVolume: Single);
     procedure SetAuthenticityLevel(ALevel: TSIDEvoAuthenticityLevel);
     function GetAuthenticityLevel: TSIDEvoAuthenticityLevel;
+    // All-EVO / tracker mode: route all 64 voices through the EVO float path
+    // (voices 0-2 included; reSID core not mixed). See tmp/EVO_TRACKER_PLAN.md.
+    procedure SetAllVoicesEvo(AEnabled: Boolean);
+    function GetAllVoicesEvo: Boolean;
     procedure SetClockMode(AMode: TSIDClockMode);
     function GetClockMode: TSIDClockMode;
     procedure SetChipModel(AModel: TSIDModel);
@@ -855,6 +900,15 @@ type
     procedure SetSupersawDetune(AVoice: Integer; ADetune: Single);
     procedure SetSupersawMix(AVoice: Integer; AMix: Single);
     procedure SetDetune(AVoice: Integer; ADetune: Single);
+    // Set how multiple waveform bits combine on a voice (Mix/AND/Mul/Min/Max).
+    procedure SetCombineMode(AVoice: Integer; AMode: TWaveformCombineMode);
+    // Phase 3: render this voice's classic waveforms with SID-authentic timbre.
+    procedure SetVoiceSIDTimbre(AVoice: Integer; AEnabled: Boolean);
+    // Phase 4: per-voice auto-PWM rate (Hz) and depth (0..1).
+    procedure SetVoicePWM(AVoice: Integer; ARate, ADepth: Single);
+    // Phase 5: per-voice float filter. ACutoff in Hz, AResonance 0..1.
+    procedure SetVoiceFilter(AVoice: Integer; AEnabled: Boolean;
+      AType: TFilterType; ACutoff, AResonance: Single);
 
     // ========================================================================
     // BASIC-FRIENDLY HIGH-LEVEL API
@@ -1039,6 +1093,9 @@ begin
     FExtOscillators[I].SetSampleRate(FSampleRate);
     FExtOscillators[I].Amplitude := 1.0;
     FExtOscillators[I].Bandlimited := True;
+    // Per-voice float filter (Phase 5), disabled until the voice enables it.
+    FExtFilters[I] := TSedaiFilter.Create;
+    FExtFilters[I].SetSampleRate(FSampleRate);
   end;
 
   // Initialize filter
@@ -1070,10 +1127,14 @@ var
   I: Integer;
 begin
   Shutdown;
-  // Free SAF oscillators
+  // Free SAF oscillators + per-voice filters
   for I := 0 to SIDEVO_MAX_VOICES - 1 do
+  begin
     if Assigned(FExtOscillators[I]) then
       FExtOscillators[I].Free;
+    if Assigned(FExtFilters[I]) then
+      FExtFilters[I].Free;
+  end;
   inherited Destroy;
 end;
 
@@ -1285,6 +1346,14 @@ begin
     PulseWidth := 0.5;
     SupersawDetune := 0.3;
     SupersawMix := 0.5;
+    CombineMode := wcmMix;
+    UseSIDTimbre := False;
+    PWMRate := 0.5;
+    PWMDepth := 0.4;
+    FilterEnabled := False;
+    FilterType := ftLowPass;
+    FilterCutoff := 2000.0;
+    FilterResonance := 0.3;
     Attack := 0.1;
     Decay := 0.1;
     Sustain := 0.8;
@@ -1419,10 +1488,14 @@ begin
   else
     FCyclesPerSample := 1;
 
-  // Update SAF oscillators sample rate
+  // Update SAF oscillators + per-voice filters sample rate
   for I := 0 to SIDEVO_MAX_VOICES - 1 do
+  begin
     if Assigned(FExtOscillators[I]) then
       FExtOscillators[I].SetSampleRate(FSampleRate);
+    if Assigned(FExtFilters[I]) then
+      FExtFilters[I].SetSampleRate(FSampleRate);
+  end;
 
   // Rebuild the band-limited resampling FIR for the new sample rate.
   SetupSamplingParameters;
@@ -3061,13 +3134,19 @@ var
   SIDMono: Single;
   EffectivePan, PanL, PanR: Single;
   Width: Single;
-  I: Integer;
+  I, StartV: Integer;
   ExtSample, EnvLevel: Single;
   VoiceL, VoiceR: Single;
   LfoV, Glfo, AmpMod, EffVoicePan, SavedFreq, SavedPW, GAmp: Single;
 begin
-  // Generate SID core sample using ReSID-exact emulation (voices 0-2)
+  // Generate SID core sample using ReSID-exact emulation (voices 0-2).
+  // NOTE: GenerateSample -> ClockCycle is what clocks EVERY voice's envelope
+  // (0-2 and the extended voices), so it must always run. In all-EVO/tracker mode
+  // its output is simply not mixed: voices 0-2 are rendered via the float path
+  // below instead. See tmp/EVO_TRACKER_PLAN.md.
   SIDMono := GenerateSample;
+  if FState.AllVoicesEvo and (FState.AuthenticityLevel in [salEvolved, salHybrid]) then
+    SIDMono := 0.0;
 
   // Get stereo width (0.0 = mono, 1.0 = full stereo)
   Width := FState.StereoWidth;
@@ -3091,18 +3170,21 @@ begin
     ARight := SIDMono * ((1.0 - Width) + Width * PanR * 1.414);
   end;
 
-  // Add extended waveform voices (3-63) if using EVO mode
+  // Add extended waveform voices if using EVO mode. Normally the float path
+  // covers voices 3-63 (0-2 are the reSID core); in all-EVO/tracker mode it
+  // covers ALL voices from 0, since the core output was zeroed above.
   if FState.AuthenticityLevel in [salEvolved, salHybrid] then
   begin
-    for I := 3 to GetEffectiveVoiceCount - 1 do
+    if FState.AllVoicesEvo then StartV := 0 else StartV := 3;
+    for I := StartV to GetEffectiveVoiceCount - 1 do
     begin
       with FState.Voices[I] do
       begin
         if not IsActive then Continue;
 
-        // Check if voice uses extended waveform
-        if (Waveform and (SIDEVO_WAVE_SINE or SIDEVO_WAVE_SUPERSAW or
-                          SIDEVO_WAVE_PWM or SIDEVO_WAVE_HALFSIN)) <> 0 then
+        // Render any selected waveform (full palette now mapped in
+        // GenerateExtendedWaveform: classic SID-style + extended).
+        if Waveform <> SIDEVO_WAVE_NONE then
         begin
           // ---- Per-voice LFO (EVO): vibrato / PWM / tremolo / auto-pan ----
           // Modulate a temporary copy of freq/PW (restored after), the amplitude
@@ -3150,6 +3232,11 @@ begin
           EnvLevel := SIDEnv.EnvelopeCounter / 255.0;
           ExtSample := ExtSample * EnvLevel * Volume * AmpMod;
 
+          // Per-voice float filter (Phase 5): multimode LP/BP/HP on the EVO path.
+          // Coefficients are set in SetVoiceFilter, not here, so this is cheap.
+          if FilterEnabled and Assigned(FExtFilters[I]) then
+            ExtSample := FExtFilters[I].ProcessSample(ExtSample, 0);
+
           // Apply (possibly LFO-modulated) per-voice panning
           PanL := Cos((EffVoicePan + 1.0) * PI * 0.25);
           PanR := Sin((EffVoicePan + 1.0) * PI * 0.25);
@@ -3157,9 +3244,21 @@ begin
           VoiceL := ExtSample * PanL;
           VoiceR := ExtSample * PanR;
 
-          // Mix into output
-          ALeft := ALeft + VoiceL * Width;
-          ARight := ARight + VoiceR * Width;
+          // Mix into output. In the classic EVO path the extended voices are
+          // "extra" stereo content layered over the mono core, so they are scaled
+          // by StereoWidth. In all-EVO/tracker mode the voices ARE the whole
+          // output, so they mix at full level (stereo comes from the per-voice
+          // pan via PanL/PanR) — otherwise a low StereoWidth would silence them.
+          if FState.AllVoicesEvo then
+          begin
+            ALeft := ALeft + VoiceL;
+            ARight := ARight + VoiceR;
+          end
+          else
+          begin
+            ALeft := ALeft + VoiceL * Width;
+            ARight := ARight + VoiceR * Width;
+          end;
         end;
       end;
     end;
@@ -3917,6 +4016,16 @@ begin
   Result := FState.AuthenticityLevel;
 end;
 
+procedure TSedaiSIDEvo.SetAllVoicesEvo(AEnabled: Boolean);
+begin
+  FState.AllVoicesEvo := AEnabled;
+end;
+
+function TSedaiSIDEvo.GetAllVoicesEvo: Boolean;
+begin
+  Result := FState.AllVoicesEvo;
+end;
+
 function TSedaiSIDEvo.GetClockMode: TSIDClockMode;
 begin
   Result := FState.ClockMode;
@@ -3995,12 +4104,34 @@ begin
 end;
 
 function TSedaiSIDEvo.GenerateExtendedWaveform(AIndex: Integer): Single;
+const
+  // EVO waveform flag -> SAF oscillator waveform type + per-waveform loudness
+  // normalization (so presets are consistent across waveforms: supersaw is
+  // internally *0.7, formant is boosted, etc. — first-pass values, tune by ear).
+  WMAP: array[0..11] of record Bit: Word; WT: TWaveformType; Norm: Single; end = (
+    (Bit: SIDEVO_WAVE_TRIANGLE; WT: wtTriangle; Norm: 1.0),
+    (Bit: SIDEVO_WAVE_SAWTOOTH; WT: wtSawtooth; Norm: 1.0),
+    (Bit: SIDEVO_WAVE_PULSE;    WT: wtPulse;    Norm: 1.0),
+    (Bit: SIDEVO_WAVE_NOISE;    WT: wtNoise;    Norm: 0.9),
+    (Bit: SIDEVO_WAVE_SINE;     WT: wtSine;     Norm: 1.0),
+    (Bit: SIDEVO_WAVE_SUPERSAW; WT: wtSuperSaw; Norm: 1.3),
+    (Bit: SIDEVO_WAVE_PWM;      WT: wtPWM;      Norm: 1.0),
+    (Bit: SIDEVO_WAVE_HALFSIN;  WT: wtHalfSine; Norm: 1.0),
+    (Bit: SIDEVO_WAVE_SQUARE;   WT: wtSquare;   Norm: 1.0),
+    (Bit: SIDEVO_WAVE_FULLSIN;  WT: wtFullSine; Norm: 1.0),
+    (Bit: SIDEVO_WAVE_FORMANT;  WT: wtFormant;  Norm: 0.7),
+    (Bit: SIDEVO_WAVE_METALLIC; WT: wtMetallic; Norm: 1.0)
+  );
 var
   VoiceWave: TSIDEvoWaveform;
   Osc: TSedaiOscillator;
+  Norm: Single;
+  WSet: TWaveformSet;
+  Count, K: Integer;
+  LastWT: TWaveformType;
 begin
-  // Extended waveforms are now inherited from Sedai Audio Foundation (SAF)
-  // via TSedaiOscillator. This ensures code reuse and consistency.
+  // Extended waveforms are inherited from Sedai Audio Foundation (SAF) via
+  // TSedaiOscillator. This reuses the full SAF waveform palette + combine modes.
   Result := 0;
   if (AIndex < 0) or (AIndex >= SIDEVO_MAX_VOICES) then Exit;
   if not Assigned(FExtOscillators[AIndex]) then Exit;
@@ -4008,27 +4139,82 @@ begin
   Osc := FExtOscillators[AIndex];
   VoiceWave := FState.Voices[AIndex].Waveform;
 
-  // Configure oscillator based on voice settings
+  // Configure oscillator: note frequency, per-voice detune (the voice stores it
+  // in semitones, -1..1; the oscillator wants cents), pulse width, supersaw shape
+  // and auto-PWM rate/depth (Phase 4).
+  Osc.Detune := FState.Voices[AIndex].Detune * 100.0;
   Osc.Frequency := FState.Voices[AIndex].Frequency;
   Osc.PulseWidth := FState.Voices[AIndex].PulseWidth;
+  Osc.SuperSawDetune := FState.Voices[AIndex].SupersawDetune;
+  Osc.SuperSawMix := FState.Voices[AIndex].SupersawMix;
+  Osc.PWMRate := FState.Voices[AIndex].PWMRate;
+  Osc.PWMDepth := FState.Voices[AIndex].PWMDepth;
 
-  // Map SIDEvo waveform flags to SAF waveform types
-  // Extended waveforms are mutually exclusive (Option A)
-  if (VoiceWave and SIDEVO_WAVE_SINE) <> 0 then
-    Osc.Waveform := wtSine
-  else if (VoiceWave and SIDEVO_WAVE_SUPERSAW) <> 0 then
-    Osc.Waveform := wtSuperSaw
-  else if (VoiceWave and SIDEVO_WAVE_PWM) <> 0 then
-    Osc.Waveform := wtPWM
-  else if (VoiceWave and SIDEVO_WAVE_HALFSIN) <> 0 then
-    Osc.Waveform := wtHalfSine
+  // Hard sync (Phase 4): sync this oscillator's phase to the source voice's
+  // oscillator. The source advances only while its own voice is being rendered.
+  if (FState.Voices[AIndex].Flags and SIDEVO_FLAG_SYNC) <> 0 then
+  begin
+    K := FState.Voices[AIndex].SyncSource;
+    if (K >= 0) and (K < SIDEVO_MAX_VOICES) and (K <> AIndex)
+       and Assigned(FExtOscillators[K]) then
+      Osc.SyncTo(FExtOscillators[K])
+    else
+      Osc.HardSync := False;
+  end
   else
-    // No extended waveform selected
-    Exit;
+    Osc.HardSync := False;
 
-  // Generate sample using SAF's TSedaiOscillator
-  // This inherits all extended waveform implementations from SAF
-  Result := Osc.GenerateSample;
+  // SID-authentic timbre (Phase 3): render classic (tri/saw/pulse/noise)
+  // waveforms through the oscillator's 24-bit SID accumulator. Only when no
+  // extended bit is set (SID mode cannot do supersaw/PWM/etc.).
+  if FState.Voices[AIndex].UseSIDTimbre
+     and ((VoiceWave and SIDEVO_WAVE_CLASSIC_MASK) <> 0)
+     and ((VoiceWave and SIDEVO_WAVE_EXT_MASK) = 0) then
+  begin
+    Osc.ClearCombinedWaveforms;
+    Osc.SetSIDWaveform(
+      (VoiceWave and SIDEVO_WAVE_TRIANGLE) <> 0,
+      (VoiceWave and SIDEVO_WAVE_SAWTOOTH) <> 0,
+      (VoiceWave and SIDEVO_WAVE_PULSE) <> 0,
+      (VoiceWave and SIDEVO_WAVE_NOISE) <> 0);
+    Result := Osc.GenerateSample;       // SetSIDWaveform enabled SID mode
+    Exit;
+  end;
+
+  // Float path: make sure SID mode is off (a previous frame may have set it).
+  Osc.SIDMode := False;
+
+  // Build the waveform set from the EVO flags. One bit set = single primary
+  // waveform (with its loudness norm); multiple bits = combined waveform using
+  // the voice's CombineMode (Mix/AND/Mul/Min/Max). See tmp/EVO_TRACKER_PLAN.md.
+  WSet := [];
+  Count := 0;
+  LastWT := wtSine;
+  Norm := 1.0;
+  for K := 0 to High(WMAP) do
+    if (VoiceWave and WMAP[K].Bit) <> 0 then
+    begin
+      Include(WSet, WMAP[K].WT);
+      Inc(Count);
+      LastWT := WMAP[K].WT;
+      Norm := WMAP[K].Norm;
+    end;
+
+  if Count = 0 then Exit;               // no waveform selected -> silence
+
+  if Count = 1 then
+  begin
+    Osc.ClearCombinedWaveforms;         // drop any previous combined state
+    Osc.Waveform := LastWT;
+    Result := Osc.GenerateSample * Norm;
+  end
+  else
+  begin
+    // Combined waveform: the oscillator's combine modes self-normalize, so the
+    // single-waveform Norm does not apply here.
+    Osc.SetCombinedWaveforms(WSet, FState.Voices[AIndex].CombineMode);
+    Result := Osc.GenerateSample;
+  end;
 end;
 
 function TSedaiSIDEvo.ApplyBitCrushing(ASample: Single): Single;
@@ -4155,6 +4341,46 @@ begin
   if ADetune < -1.0 then ADetune := -1.0;
   if ADetune > 1.0 then ADetune := 1.0;
   FState.Voices[AVoice].Detune := ADetune;
+end;
+
+procedure TSedaiSIDEvo.SetCombineMode(AVoice: Integer; AMode: TWaveformCombineMode);
+begin
+  if (AVoice < 0) or (AVoice >= SIDEVO_MAX_VOICES) then Exit;
+  FState.Voices[AVoice].CombineMode := AMode;
+end;
+
+procedure TSedaiSIDEvo.SetVoiceSIDTimbre(AVoice: Integer; AEnabled: Boolean);
+begin
+  if (AVoice < 0) or (AVoice >= SIDEVO_MAX_VOICES) then Exit;
+  FState.Voices[AVoice].UseSIDTimbre := AEnabled;
+end;
+
+procedure TSedaiSIDEvo.SetVoicePWM(AVoice: Integer; ARate, ADepth: Single);
+begin
+  if (AVoice < 0) or (AVoice >= SIDEVO_MAX_VOICES) then Exit;
+  if ARate < 0.0 then ARate := 0.0;
+  if ADepth < 0.0 then ADepth := 0.0;
+  if ADepth > 1.0 then ADepth := 1.0;
+  FState.Voices[AVoice].PWMRate := ARate;
+  FState.Voices[AVoice].PWMDepth := ADepth;
+end;
+
+procedure TSedaiSIDEvo.SetVoiceFilter(AVoice: Integer; AEnabled: Boolean;
+  AType: TFilterType; ACutoff, AResonance: Single);
+begin
+  if (AVoice < 0) or (AVoice >= SIDEVO_MAX_VOICES) then Exit;
+  FState.Voices[AVoice].FilterEnabled := AEnabled;
+  FState.Voices[AVoice].FilterType := AType;
+  FState.Voices[AVoice].FilterCutoff := ACutoff;
+  FState.Voices[AVoice].FilterResonance := AResonance;
+  // Apply to the per-voice filter object now (coefficient recalc happens here,
+  // not per-sample). The setters clamp to valid ranges internally.
+  if Assigned(FExtFilters[AVoice]) then
+  begin
+    FExtFilters[AVoice].FilterType := AType;
+    FExtFilters[AVoice].Cutoff := ACutoff;
+    FExtFilters[AVoice].Resonance := AResonance;
+  end;
 end;
 
 // ============================================================================

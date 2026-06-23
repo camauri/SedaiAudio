@@ -171,6 +171,13 @@ type
     property CombinedMode: Boolean read FCombinedMode;
     property CombinedWaveforms: TWaveformSet read FCombinedWaveforms;
     property CombineMode: TWaveformCombineMode read FCombineMode write FCombineMode;
+
+    // SuperSaw shape (detune spread / center-vs-sides mix) and auto-PWM rate/depth.
+    // Exposed so the SID Evo voice layer can drive them per-voice.
+    property SuperSawDetune: Single read FSuperSawDetune write FSuperSawDetune;
+    property SuperSawMix: Single read FSuperSawMix write FSuperSawMix;
+    property PWMRate: Single read FPWMRate write FPWMRate;
+    property PWMDepth: Single read FPWMDepth write FPWMDepth;
   end;
 
 implementation
