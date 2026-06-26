@@ -33,6 +33,7 @@ type
     FVoices: array of TSedaiVoice;
     FMaxVoices: Integer;
     FActiveVoiceCount: Integer;
+    FLastVoiceIndex: Integer;     // pool slot allocated by the most recent NoteOn (-1 if none)
 
     // Voice stealing
     FStealPolicy: TVoiceStealPolicy;
@@ -130,6 +131,10 @@ type
     // Get voice by index (for parameter setup)
     function GetVoice(AIndex: Integer): TSedaiVoice;
 
+    // Pool slot allocated by the most recent NoteOn (-1 if none / allocation
+    // failed). Lets callers obtain a stable handle to the just-triggered voice.
+    property LastVoiceIndex: Integer read FLastVoiceIndex;
+
     // Configure all voices with same parameters
     procedure ConfigureAllVoices(AConfigProc: TVoiceConfigProc);
 
@@ -183,6 +188,7 @@ begin
   FStealPolicy := vspOldest;
   FMonoMode := False;
   FLegatoMode := False;
+  FLastVoiceIndex := -1;
 
   // Note stack for mono mode
   SetLength(FNoteStack, 16);
@@ -229,6 +235,7 @@ begin
   FActiveVoiceCount := 0;
   FNoteStackSize := 0;
   FNoteAge := 0;
+  FLastVoiceIndex := -1;
 end;
 
 procedure TSedaiVoiceManager.SampleRateChanged;
@@ -474,9 +481,11 @@ var
   IsLegato: Boolean;
 begin
   Inc(FNoteAge);
+  FLastVoiceIndex := -1;
 
   if FMonoMode then
   begin
+    FLastVoiceIndex := 0;
     // Mono mode: use single voice with note stack
     IsLegato := FLegatoMode and (FNoteStackSize > 0);
     PushNote(ANote, AVelocity);
@@ -532,6 +541,7 @@ begin
         FVoices[VoiceIndex].Pan := Pan;
         FVoices[VoiceIndex].StealPriority := I;  // First voice highest priority
         FVoices[VoiceIndex].NoteOn(ANote, AVelocity);
+        FLastVoiceIndex := VoiceIndex;
       end;
     end;
   end
@@ -550,6 +560,7 @@ begin
         FVoices[VoiceIndex].GlideTime := 0;
 
       FVoices[VoiceIndex].NoteOn(ANote, AVelocity);
+      FLastVoiceIndex := VoiceIndex;
     end;
   end;
 end;

@@ -183,6 +183,11 @@ type
     // SOURCE TYPE (universal voice: oscillators / FM / wavetable)
     // ========================================================================
 
+    // Set an explicit base frequency (Hz), bypassing MIDI-note quantization.
+    // Used for arbitrary / microtonal pitches; jumps immediately (no glide).
+    // Affects oscillator and wavetable sources (the FM source is note-driven).
+    procedure SetExplicitFrequency(AFreq: Single);
+
     // Select which generator drives the voice.
     procedure SetSourceType(AType: TVoiceSourceType);
     function GetSourceType: TVoiceSourceType;
@@ -514,6 +519,26 @@ end;
 procedure TSedaiVoice.Kill;
 begin
   Reset;
+end;
+
+procedure TSedaiVoice.SetExplicitFrequency(AFreq: Single);
+var
+  I: Integer;
+begin
+  if AFreq <= 0.0 then Exit;
+
+  // Pin all frequency-tracking state to the explicit value so ProcessGlide
+  // holds it (glide coeff is irrelevant when target = current).
+  FBaseFrequency := AFreq;
+  FGlideTarget := AFreq;
+  FCurrentFrequency := AFreq;
+
+  for I := 0 to MAX_OSCILLATORS - 1 do
+    FOscillators[I].Frequency := AFreq *
+      Power(2.0, FOscillatorDetune[I] / 1200.0);
+
+  if Assigned(FWTGenerator) then
+    FWTGenerator.Frequency := AFreq;
 end;
 
 procedure TSedaiVoice.SetSourceType(AType: TVoiceSourceType);

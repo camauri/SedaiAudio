@@ -17,7 +17,7 @@ uses
   Classes, SysUtils, Math,
   SedaiAudioTypes, SedaiAudioBackend, SedaiOscillator, SedaiEnvelope,
   SedaiFilter, SedaiFMOperator, SedaiWavetableGenerator, SedaiWavetableLoader,
-  SedaiVoice, SedaiSpatialAudio;
+  SedaiVoice, SedaiVoiceManager, SedaiPart, SedaiEngine, SedaiSpatialAudio;
 
 const
   // ============================================================================
@@ -329,9 +329,18 @@ procedure PlayScaleFM(ABaseFreq: Single; const APreset: string = 'epiano');
 
 implementation
 
+const
+  PART_VOICES     = 16;     // polyphony per instrument Part
+  HANDLE_PART_MUL = 1000;   // voice handle = partIndex * HANDLE_PART_MUL + slot
+
 var
   GAudioBackend: TSedaiAudioBackend = nil;
-  GVoices: array[0..SAF_MAX_VOICES-1] of TSAFVoiceState;
+  // The modular Part/Instrument engine the facade now delegates to.
+  GEngine: TSAFEngine = nil;
+  // Part registry: one Part per distinct (source, preset). Index == engine part.
+  GPartSrc: array of TSAFPartSource;
+  GPartPreset: array of string;
+  GPartCount: Integer = 0;
   GMaxVoices: Integer = SAF_MAX_VOICES;
   GMasterVolume: Single = 0.7;
   GSampleRate: Cardinal = SAF_DEFAULT_SAMPLE_RATE;
@@ -348,174 +357,102 @@ var
 
 procedure AudioCallback(AOutput: PSingle; AFrameCount: Integer; AUserData: Pointer);
 var
-  I, V: Integer;
-  Sample, LeftSum, RightSum: Single;
-  EnvLevel, PanL, PanR: Single;
+  I: Integer;
 begin
-  for I := 0 to AFrameCount - 1 do
+  // Delegate the whole mix to the modular engine: all Parts -> mixer -> master.
+  if not Assigned(GEngine) then
   begin
-    LeftSum := 0.0;
-    RightSum := 0.0;
-
-    // Mix all active voices
-    for V := 0 to GMaxVoices - 1 do
-    begin
-      if not GVoices[V].Active then Continue;
-
-      // Generate sample based on synth type
-      case GVoices[V].SynthType of
-        safClassic:
-          begin
-            if Assigned(GVoices[V].Oscillator) then
-              Sample := GVoices[V].Oscillator.GenerateSample
-            else
-              Sample := 0;
-
-            // Apply envelope for classic synth
-            if Assigned(GVoices[V].Envelope) then
-            begin
-              EnvLevel := GVoices[V].Envelope.Process;
-              Sample := Sample * EnvLevel;
-
-              // Check if envelope finished (release complete)
-              if GVoices[V].Envelope.State = esIdle then
-                GVoices[V].Active := False;
-            end;
-          end;
-
-        safFM:
-          begin
-            // FM synth has its own internal envelopes
-            if Assigned(GVoices[V].FMSynth) then
-            begin
-              Sample := GVoices[V].FMSynth.GenerateSample;
-              // Deactivate voice when all FM envelopes are finished
-              if GVoices[V].FMSynth.IsFinished then
-                GVoices[V].Active := False;
-            end
-            else
-              Sample := 0;
-          end;
-
-        safWavetable:
-          begin
-            if Assigned(GVoices[V].WTGenerator) then
-              Sample := GVoices[V].WTGenerator.GenerateSample
-            else
-              Sample := 0;
-
-            // Apply envelope for wavetable synth
-            if Assigned(GVoices[V].Envelope) then
-            begin
-              EnvLevel := GVoices[V].Envelope.Process;
-              Sample := Sample * EnvLevel;
-
-              // Check if envelope finished (release complete)
-              if GVoices[V].Envelope.State = esIdle then
-                GVoices[V].Active := False;
-            end;
-          end;
-
-        else
-          Sample := 0;
-      end;
-
-      // Apply filter if assigned
-      if Assigned(GVoices[V].Filter) and GVoices[V].Filter.Enabled then
-        Sample := GVoices[V].Filter.ProcessSample(Sample);
-
-      // Apply amplitude
-      Sample := Sample * GVoices[V].Amplitude;
-
-      // Apply panning (constant power)
-      PanL := Cos((GVoices[V].Pan + 1.0) * PI * 0.25);
-      PanR := Sin((GVoices[V].Pan + 1.0) * PI * 0.25);
-
-      LeftSum := LeftSum + Sample * PanL;
-      RightSum := RightSum + Sample * PanR;
-    end;
-
-    // Apply master volume
-    LeftSum := LeftSum * GMasterVolume;
-    RightSum := RightSum * GMasterVolume;
-
-    // Clamp
-    if LeftSum > 1.0 then LeftSum := 1.0;
-    if LeftSum < -1.0 then LeftSum := -1.0;
-    if RightSum > 1.0 then RightSum := 1.0;
-    if RightSum < -1.0 then RightSum := -1.0;
-
-    // Output stereo (interleaved)
-    AOutput[I * 2] := LeftSum;
-    AOutput[I * 2 + 1] := RightSum;
+    for I := 0 to AFrameCount * 2 - 1 do
+      AOutput[I] := 0.0;
+    Exit;
   end;
+
+  GEngine.RenderBlock(AOutput, AFrameCount);
+
+  // Master volume (0..1 linear) applied post-mix; the master bus already
+  // limited/clamped inside RenderBlock.
+  if GMasterVolume <> 1.0 then
+    for I := 0 to AFrameCount * 2 - 1 do
+      AOutput[I] := AOutput[I] * GMasterVolume;
 end;
 
 // ============================================================================
 // INTERNAL: VOICE ALLOCATION
 // ============================================================================
 
-function AllocateVoice: Integer;
+// Resolve a public voice handle (partIndex*HANDLE_PART_MUL + slot) to the
+// underlying universal voice, or nil if stale / out of range.
+function HandleVoice(AHandle: Integer): TSedaiVoice;
+var
+  PartIdx, Slot: Integer;
+  Part: TSAFPart;
+begin
+  Result := nil;
+  if (AHandle < 0) or not Assigned(GEngine) then Exit;
+
+  PartIdx := AHandle div HANDLE_PART_MUL;
+  Slot := AHandle mod HANDLE_PART_MUL;
+
+  Part := GEngine.GetPart(PartIdx);
+  if Part = nil then Exit;
+
+  Result := Part.VoiceManager.GetVoice(Slot);
+end;
+
+// Find (or lazily create) the Part for a given source + preset. Returns the
+// engine part index, or -1 on failure.
+function GetOrCreatePart(ASource: TSAFPartSource; const APreset: string): Integer;
 var
   I: Integer;
+  Part: TSAFPart;
+  Nm: string;
 begin
-  for I := 0 to GMaxVoices - 1 do
-  begin
-    if not GVoices[I].Active then
-    begin
-      Result := I;
-      Exit;
-    end;
+  for I := 0 to GPartCount - 1 do
+    if (GPartSrc[I] = ASource) and (GPartPreset[I] = APreset) then
+      Exit(I);
+
+  Result := -1;
+  if not Assigned(GEngine) then Exit;
+
+  case ASource of
+    psFM:        Nm := 'FM:' + APreset;
+    psWavetable: Nm := 'WT:' + APreset;
+  else
+    Nm := 'CL:' + APreset;
   end;
-  Result := -1; // No free voice
+
+  Part := GEngine.AddPart(Nm, PART_VOICES);
+  if Part = nil then Exit;
+  Part.SetInstrument(ASource, APreset);
+
+  SetLength(GPartSrc, GPartCount + 1);
+  SetLength(GPartPreset, GPartCount + 1);
+  GPartSrc[GPartCount] := ASource;
+  GPartPreset[GPartCount] := APreset;
+  Result := GPartCount;
+  Inc(GPartCount);
 end;
 
-procedure InitVoice(AIndex: Integer);
+// Trigger a note on the matching instrument Part and return a voice handle.
+function PlayOnPart(ASource: TSAFPartSource; const APreset: string;
+  AFreq, AVel: Single): Integer;
+var
+  PartIdx, Slot: Integer;
+  Part: TSAFPart;
 begin
-  if (AIndex < 0) or (AIndex >= GMaxVoices) then Exit;
+  Result := -1;
+  if not GInitialized then Exit;
 
-  with GVoices[AIndex] do
-  begin
-    Active := False;
-    SynthType := safClassic;
-    Frequency := 440.0;
-    Amplitude := 0.5;
-    Pan := 0.0;
+  PartIdx := GetOrCreatePart(ASource, LowerCase(APreset));
+  if PartIdx < 0 then Exit;
 
-    // Create components if not already created
-    if not Assigned(Oscillator) then
-    begin
-      Oscillator := TSedaiOscillator.Create;
-      Oscillator.SetSampleRate(GSampleRate);
-    end;
+  Part := GEngine.GetPart(PartIdx);
+  if Part = nil then Exit;
 
-    if not Assigned(Envelope) then
-    begin
-      Envelope := TSedaiEnvelope.Create;
-      Envelope.SetSampleRate(GSampleRate);
-    end;
+  Slot := Part.NoteOnFreq(AFreq, AVel);
+  if Slot < 0 then Exit;
 
-    if not Assigned(Filter) then
-    begin
-      Filter := TSedaiFilter.Create;
-      Filter.SetSampleRate(GSampleRate);
-      Filter.Enabled := False;
-    end;
-  end;
-end;
-
-procedure FreeVoice(AIndex: Integer);
-begin
-  if (AIndex < 0) or (AIndex >= GMaxVoices) then Exit;
-
-  with GVoices[AIndex] do
-  begin
-    FreeAndNil(Oscillator);
-    FreeAndNil(Envelope);
-    FreeAndNil(Filter);
-    FreeAndNil(FMSynth);
-    FreeAndNil(WTGenerator);
-  end;
+  Result := PartIdx * HANDLE_PART_MUL + Slot;
 end;
 
 // ============================================================================
@@ -523,8 +460,6 @@ end;
 // ============================================================================
 
 function InitAudio(AMaxVoices: Integer): Boolean;
-var
-  I: Integer;
 begin
   Result := False;
 
@@ -538,19 +473,14 @@ begin
   if GMaxVoices > SAF_MAX_VOICES then
     GMaxVoices := SAF_MAX_VOICES;
 
-  // Initialize voices
-  for I := 0 to GMaxVoices - 1 do
-  begin
-    FillChar(GVoices[I], SizeOf(TSAFVoiceState), 0);
-    InitVoice(I);
-  end;
-
   // Create and initialize audio backend
   GAudioBackend := TSedaiAudioBackend.Create;
   GAudioBackend.SetSampleRate(SAF_DEFAULT_SAMPLE_RATE);
   GAudioBackend.SetDesiredBufferSize(SAF_DEFAULT_BUFFER_SIZE);
   GAudioBackend.SetChannels(2);
   GAudioBackend.SetCallback(@AudioCallback, nil);
+  // Pull-driven output: SDL calls AudioCallback (which renders the engine).
+  GAudioBackend.SetMode(bmCallback);
 
   if not GAudioBackend.Initialize then
   begin
@@ -561,21 +491,18 @@ begin
 
   GSampleRate := GAudioBackend.SampleRate;
 
-  // Update sample rate on all components
-  for I := 0 to GMaxVoices - 1 do
-  begin
-    if Assigned(GVoices[I].Oscillator) then
-      GVoices[I].Oscillator.SetSampleRate(GSampleRate);
-    if Assigned(GVoices[I].Envelope) then
-      GVoices[I].Envelope.SetSampleRate(GSampleRate);
-    if Assigned(GVoices[I].Filter) then
-      GVoices[I].Filter.SetSampleRate(GSampleRate);
-  end;
+  // Build the modular engine at the backend's sample rate. Parts are created
+  // on demand by the Play* functions.
+  GEngine := TSAFEngine.Create(GSampleRate);
+  GPartCount := 0;
+  SetLength(GPartSrc, 0);
+  SetLength(GPartPreset, 0);
 
-  // Start audio
+  // Start audio (callback is guarded until GEngine exists, which it now does)
   if not GAudioBackend.Start then
   begin
     WriteLn('SAF Error: Failed to start audio');
+    FreeAndNil(GEngine);
     GAudioBackend.Shutdown;
     FreeAndNil(GAudioBackend);
     Exit;
@@ -591,12 +518,10 @@ begin
 end;
 
 procedure ShutdownAudio;
-var
-  I: Integer;
 begin
   if not GInitialized then Exit;
 
-  // Stop and free audio backend
+  // Stop and free audio backend first so the callback stops touching GEngine.
   if Assigned(GAudioBackend) then
   begin
     GAudioBackend.Stop;
@@ -604,9 +529,11 @@ begin
     FreeAndNil(GAudioBackend);
   end;
 
-  // Free all voices
-  for I := 0 to GMaxVoices - 1 do
-    FreeVoice(I);
+  // Free the engine (which owns all Parts / voices / mixer).
+  FreeAndNil(GEngine);
+  GPartCount := 0;
+  SetLength(GPartSrc, 0);
+  SetLength(GPartPreset, 0);
 
   GInitialized := False;
   WriteLn('SAF: Audio shutdown');
@@ -622,9 +549,9 @@ var
   I: Integer;
 begin
   Result := 0;
-  for I := 0 to GMaxVoices - 1 do
-    if GVoices[I].Active then
-      Inc(Result);
+  if not Assigned(GEngine) then Exit;
+  for I := 0 to GEngine.PartCount - 1 do
+    Inc(Result, GEngine.GetPart(I).ActiveVoiceCount);
 end;
 
 function GetMaxVoices: Integer;
@@ -653,71 +580,9 @@ end;
 // ============================================================================
 
 function PlayClassicAdv(AFreq: Single; const APreset: string): Integer;
-var
-  V: Integer;
 begin
-  Result := -1;
-  if not GInitialized then Exit;
-
-  V := AllocateVoice;
-  if V < 0 then Exit;
-
-  with GVoices[V] do
-  begin
-    Active := True;
-    SynthType := safClassic;
-    Frequency := AFreq;
-    Amplitude := 0.5;
-
-    // Configure oscillator
-    Oscillator.Frequency := AFreq;
-
-    if APreset = 'sine' then
-      Oscillator.Waveform := wtSine
-    else if APreset = 'square' then
-      Oscillator.Waveform := wtSquare
-    else if APreset = 'saw' then
-      Oscillator.Waveform := wtSawtooth
-    else if APreset = 'sawtooth' then
-      Oscillator.Waveform := wtSawtooth
-    else if APreset = 'triangle' then
-      Oscillator.Waveform := wtTriangle
-    else if APreset = 'pulse' then
-      Oscillator.Waveform := wtPulse
-    else if APreset = 'noise' then
-      Oscillator.Waveform := wtNoise
-    else if APreset = 'lead' then
-    begin
-      Oscillator.Waveform := wtSawtooth;
-      Filter.Enabled := True;
-      Filter.FilterType := ftLowPass;
-      Filter.Cutoff := 2000.0;
-      Filter.Resonance := 0.5;
-    end
-    else if APreset = 'bass' then
-    begin
-      Oscillator.Waveform := wtSquare;
-      Filter.Enabled := True;
-      Filter.FilterType := ftLowPass;
-      Filter.Cutoff := 800.0;
-      Filter.Resonance := 0.3;
-    end
-    else if APreset = 'pad' then
-    begin
-      Oscillator.Waveform := wtTriangle;
-      Envelope.AttackTime := 0.5;
-      Envelope.DecayTime := 0.3;
-      Envelope.SustainLevel := 0.7;
-      Envelope.ReleaseTime := 1.0;
-    end
-    else
-      Oscillator.Waveform := wtSine;
-
-    // Trigger envelope
-    Envelope.Trigger;
-  end;
-
-  Result := V;
+  // Each preset maps to its own classic Part; the voice gets the exact Hz.
+  Result := PlayOnPart(psClassic, APreset, AFreq, 0.8);
 end;
 
 procedure PlayClassic(AFreq: Single; const APreset: string);
@@ -731,7 +596,7 @@ var
 begin
   V := PlayClassicAdv(AFreq, 'sine');
   if V >= 0 then
-    GVoices[V].Amplitude := AAmplitude;
+    SetVoiceAmplitude(V, AAmplitude);
 end;
 
 procedure PlaySquare(AFreq: Single; AAmplitude: Single);
@@ -740,7 +605,7 @@ var
 begin
   V := PlayClassicAdv(AFreq, 'square');
   if V >= 0 then
-    GVoices[V].Amplitude := AAmplitude;
+    SetVoiceAmplitude(V, AAmplitude);
 end;
 
 procedure PlaySaw(AFreq: Single; AAmplitude: Single);
@@ -749,7 +614,7 @@ var
 begin
   V := PlayClassicAdv(AFreq, 'saw');
   if V >= 0 then
-    GVoices[V].Amplitude := AAmplitude;
+    SetVoiceAmplitude(V, AAmplitude);
 end;
 
 procedure PlayTriangle(AFreq: Single; AAmplitude: Single);
@@ -758,7 +623,7 @@ var
 begin
   V := PlayClassicAdv(AFreq, 'triangle');
   if V >= 0 then
-    GVoices[V].Amplitude := AAmplitude;
+    SetVoiceAmplitude(V, AAmplitude);
 end;
 
 procedure PlayPulse(AFreq: Single; APulseWidth: Single; AAmplitude: Single);
@@ -768,8 +633,8 @@ begin
   V := PlayClassicAdv(AFreq, 'pulse');
   if V >= 0 then
   begin
-    GVoices[V].Amplitude := AAmplitude;
-    GVoices[V].Oscillator.PulseWidth := APulseWidth;
+    SetVoiceAmplitude(V, AAmplitude);
+    SetVoicePulseWidth(V, APulseWidth);
   end;
 end;
 
@@ -779,7 +644,7 @@ var
 begin
   V := PlayClassicAdv(1000, 'noise');
   if V >= 0 then
-    GVoices[V].Amplitude := AAmplitude;
+    SetVoiceAmplitude(V, AAmplitude);
 end;
 
 procedure PlayLead(AFreq: Single);
@@ -802,155 +667,9 @@ end;
 // ============================================================================
 
 function PlayFMAdv(AFreq: Single; const APreset: string): Integer;
-var
-  V, I: Integer;
-  Op: TSedaiFMOperator;
 begin
-  Result := -1;
-  if not GInitialized then Exit;
-
-  V := AllocateVoice;
-  if V < 0 then Exit;
-
-  with GVoices[V] do
-  begin
-    Active := True;
-    SynthType := safFM;
-    Frequency := AFreq;
-    Amplitude := 0.5;
-
-    // Create FM synth if needed
-    if not Assigned(FMSynth) then
-    begin
-      FMSynth := TSedaiFMSynth.Create;
-    end;
-
-    // Always reset and set sample rate before use
-    FMSynth.Reset;
-    FMSynth.SetSampleRate(GSampleRate);
-
-    // Disable all operators by default (prevent unwanted noise)
-    for I := 0 to 5 do
-      FMSynth.GetOperator(I).Level := 0.0;
-
-    // Configure based on preset
-    if APreset = 'epiano' then
-    begin
-      FMSynth.Algorithm := 5;
-      FMSynth.FeedbackLevel := 0.3;
-      // Op 1 (carrier)
-      Op := FMSynth.GetOperator(0);
-      Op.Ratio := 1.0;
-      Op.Level := 0.9;
-      Op.AttackRate := 95;
-      Op.Decay1Rate := 70;
-      Op.SustainLevel := 0.3;
-      Op.ReleaseRate := 60;
-      // Op 2 (modulator)
-      Op := FMSynth.GetOperator(1);
-      Op.Ratio := 14.0;
-      Op.Level := 0.5;
-      Op.AttackRate := 95;
-      Op.Decay1Rate := 85;
-      Op.SustainLevel := 0.0;
-      Op.ReleaseRate := 70;
-    end
-    else if APreset = 'brass' then
-    begin
-      FMSynth.Algorithm := 1;
-      FMSynth.FeedbackLevel := 0.5;
-      Op := FMSynth.GetOperator(0);
-      Op.Ratio := 1.0;
-      Op.Level := 0.9;
-      Op.AttackRate := 80;
-      Op.Decay1Rate := 50;
-      Op.SustainLevel := 0.8;
-      Op.ReleaseRate := 50;
-      Op := FMSynth.GetOperator(1);
-      Op.Ratio := 1.0;
-      Op.Level := 0.7;
-      Op.AttackRate := 70;
-      Op.Decay1Rate := 60;
-      Op.SustainLevel := 0.5;
-      Op.ReleaseRate := 50;
-    end
-    else if APreset = 'bell' then
-    begin
-      FMSynth.Algorithm := 1;
-      FMSynth.FeedbackLevel := 0.0;
-      Op := FMSynth.GetOperator(0);
-      Op.Ratio := 1.0;
-      Op.Level := 0.8;
-      Op.AttackRate := 99;
-      Op.Decay1Rate := 40;
-      Op.SustainLevel := 0.0;
-      Op.ReleaseRate := 30;
-      Op := FMSynth.GetOperator(1);
-      Op.Ratio := 3.5;
-      Op.Level := 0.9;
-      Op.AttackRate := 99;
-      Op.Decay1Rate := 50;
-      Op.SustainLevel := 0.0;
-      Op.ReleaseRate := 40;
-    end
-    else if APreset = 'organ' then
-    begin
-      FMSynth.Algorithm := 32; // All carriers (additive)
-      Op := FMSynth.GetOperator(0);
-      Op.Ratio := 0.5;
-      Op.Level := 0.6;
-      Op := FMSynth.GetOperator(1);
-      Op.Ratio := 1.0;
-      Op.Level := 0.8;
-      Op := FMSynth.GetOperator(2);
-      Op.Ratio := 2.0;
-      Op.Level := 0.5;
-      Op := FMSynth.GetOperator(3);
-      Op.Ratio := 3.0;
-      Op.Level := 0.3;
-      Op := FMSynth.GetOperator(4);
-      Op.Ratio := 4.0;
-      Op.Level := 0.2;
-      Op := FMSynth.GetOperator(5);
-      Op.Ratio := 6.0;
-      Op.Level := 0.1;
-    end
-    else if APreset = 'bass' then
-    begin
-      FMSynth.Algorithm := 1;
-      FMSynth.FeedbackLevel := 0.6;
-      Op := FMSynth.GetOperator(0);
-      Op.Ratio := 1.0;
-      Op.Level := 0.9;
-      Op.AttackRate := 95;
-      Op.Decay1Rate := 60;
-      Op.SustainLevel := 0.5;
-      Op.ReleaseRate := 70;
-      Op := FMSynth.GetOperator(1);
-      Op.Ratio := 1.0;
-      Op.Level := 0.8;
-      Op.AttackRate := 90;
-      Op.Decay1Rate := 70;
-      Op.SustainLevel := 0.3;
-      Op.ReleaseRate := 70;
-    end
-    else // default: simple FM
-    begin
-      FMSynth.Algorithm := 1;
-      FMSynth.FeedbackLevel := 0.2;
-      Op := FMSynth.GetOperator(0);
-      Op.Ratio := 1.0;
-      Op.Level := 0.8;
-      Op := FMSynth.GetOperator(1);
-      Op.Ratio := 2.0;
-      Op.Level := 0.5;
-    end;
-
-    // Note on
-    FMSynth.NoteOn(Round(12 * Log2(AFreq / 440.0) + 69), 0.8);
-  end;
-
-  Result := V;
+  // FM presets are configured per-Part (ConfigureFMVoice); pitch is note-driven.
+  Result := PlayOnPart(psFM, APreset, AFreq, 0.8);
 end;
 
 procedure PlayFM(AFreq: Single; const APreset: string);
@@ -993,51 +712,9 @@ end;
 // ============================================================================
 
 function PlayWavetableAdv(AFreq: Single; const APreset: string): Integer;
-var
-  V: Integer;
 begin
-  Result := -1;
-  if not GInitialized then Exit;
-
-  V := AllocateVoice;
-  if V < 0 then Exit;
-
-  with GVoices[V] do
-  begin
-    Active := True;
-    SynthType := safWavetable;
-    Frequency := AFreq;
-    Amplitude := 0.5;
-
-    // Create wavetable generator if needed
-    if not Assigned(WTGenerator) then
-    begin
-      WTGenerator := TSedaiWavetableGenerator.Create;
-      WTGenerator.SetSampleRate(GSampleRate);
-    end;
-
-    // Configure based on preset
-    if APreset = 'basic' then
-      WTGenerator.CreateBasicWavetable
-    else if APreset = 'pwm' then
-      WTGenerator.CreatePWMWavetable(64)
-    else if APreset = 'supersaw' then
-    begin
-      WTGenerator.CreateSuperSawWavetable(32);
-      WTGenerator.UnisonVoices := 7;
-      WTGenerator.UnisonDetune := 20.0;
-      WTGenerator.UnisonSpread := 0.7;
-    end
-    else
-      WTGenerator.CreateBasicWavetable;
-
-    WTGenerator.Frequency := AFreq;
-
-    // Trigger envelope
-    Envelope.Trigger;
-  end;
-
-  Result := V;
+  // Wavetable presets configured per-Part (ConfigureWavetableVoice); exact Hz.
+  Result := PlayOnPart(psWavetable, APreset, AFreq, 0.8);
 end;
 
 procedure PlayWavetable(AFreq: Single; const APreset: string);
@@ -1204,71 +881,14 @@ begin
 end;
 
 procedure PlayCustomWavetable(AFreq: Single; const ACustomWavetable: TWavetable);
-var
-  V: Integer;
 begin
-  if not GInitialized then Exit;
-
-  // For now, use basic wavetable synthesis
-  // Custom wavetable loading from TWavetable record requires WTGenerator extension
-  if ACustomWavetable.IsLoaded then
-  begin
-    V := AllocateVoice;
-    if V < 0 then Exit;
-
-    with GVoices[V] do
-    begin
-      Active := True;
-      SynthType := safWavetable;
-      Frequency := AFreq;
-      Amplitude := 0.5;
-
-      if not Assigned(WTGenerator) then
-      begin
-        WTGenerator := TSedaiWavetableGenerator.Create;
-        WTGenerator.SetSampleRate(GSampleRate);
-      end;
-
-      // Use basic wavetable for now - full custom loading requires WTGenerator update
-      WTGenerator.CreateBasicWavetable;
-      WTGenerator.Frequency := AFreq;
-      Envelope.Trigger;
-    end;
-  end
-  else
-    PlayWavetable(AFreq, 'basic');
+  // Custom TWavetable data loading is deferred to A4; play the basic table.
+  PlayWavetable(AFreq, 'basic');
 end;
 
 function PlayCustomWavetableAdv(AFreq: Single; const ACustomWavetable: TWavetable): Integer;
-var
-  V: Integer;
 begin
-  Result := -1;
-  if not GInitialized then Exit;
-
-  V := AllocateVoice;
-  if V < 0 then Exit;
-
-  with GVoices[V] do
-  begin
-    Active := True;
-    SynthType := safWavetable;
-    Frequency := AFreq;
-    Amplitude := 0.5;
-
-    if not Assigned(WTGenerator) then
-    begin
-      WTGenerator := TSedaiWavetableGenerator.Create;
-      WTGenerator.SetSampleRate(GSampleRate);
-    end;
-
-    // Use basic wavetable for now - full custom loading requires WTGenerator update
-    WTGenerator.CreateBasicWavetable;
-    WTGenerator.Frequency := AFreq;
-    Envelope.Trigger;
-  end;
-
-  Result := V;
+  Result := PlayWavetableAdv(AFreq, 'basic');
 end;
 
 // ============================================================================
@@ -1290,14 +910,12 @@ end;
 // ============================================================================
 
 procedure NoteOff(AVoiceIndex: Integer);
+var
+  V: TSedaiVoice;
 begin
-  if (AVoiceIndex < 0) or (AVoiceIndex >= GMaxVoices) then Exit;
-
-  if Assigned(GVoices[AVoiceIndex].Envelope) then
-    GVoices[AVoiceIndex].Envelope.Release;
-
-  if Assigned(GVoices[AVoiceIndex].FMSynth) then
-    GVoices[AVoiceIndex].FMSynth.NoteOff;
+  V := HandleVoice(AVoiceIndex);
+  if V <> nil then
+    V.NoteOff;   // releases envelopes (and the FM source) internally
 end;
 
 procedure NoteRelease(AVoiceIndex: Integer);
@@ -1306,118 +924,111 @@ begin
 end;
 
 procedure SetVoicePan(AVoiceIndex: Integer; APan: Single);
+var
+  V: TSedaiVoice;
 begin
-  if (AVoiceIndex < 0) or (AVoiceIndex >= GMaxVoices) then Exit;
+  V := HandleVoice(AVoiceIndex);
+  if V = nil then Exit;
   if APan < -1 then APan := -1;
   if APan > 1 then APan := 1;
-  GVoices[AVoiceIndex].Pan := APan;
+  V.Pan := APan;
 end;
 
 procedure SetVoiceFrequency(AVoiceIndex: Integer; AFreq: Single);
+var
+  V: TSedaiVoice;
 begin
-  if (AVoiceIndex < 0) or (AVoiceIndex >= GMaxVoices) then Exit;
-
-  GVoices[AVoiceIndex].Frequency := AFreq;
-
-  if Assigned(GVoices[AVoiceIndex].Oscillator) then
-    GVoices[AVoiceIndex].Oscillator.Frequency := AFreq;
-
-  if Assigned(GVoices[AVoiceIndex].WTGenerator) then
-    GVoices[AVoiceIndex].WTGenerator.Frequency := AFreq;
+  V := HandleVoice(AVoiceIndex);
+  if V <> nil then
+    V.SetExplicitFrequency(AFreq);  // exact Hz on oscillator/wavetable sources
 end;
 
 procedure SetVoiceAmplitude(AVoiceIndex: Integer; AAmplitude: Single);
+var
+  V: TSedaiVoice;
 begin
-  if (AVoiceIndex < 0) or (AVoiceIndex >= GMaxVoices) then Exit;
+  V := HandleVoice(AVoiceIndex);
+  if V = nil then Exit;
   if AAmplitude < 0 then AAmplitude := 0;
   if AAmplitude > 1 then AAmplitude := 1;
-  GVoices[AVoiceIndex].Amplitude := AAmplitude;
+  V.OutputLevel := AAmplitude;
 end;
 
 procedure SetVoiceADSR(AVoiceIndex: Integer; AAttack, ADecay, ASustain, ARelease: Single);
+var
+  V: TSedaiVoice;
 begin
-  if (AVoiceIndex < 0) or (AVoiceIndex >= GMaxVoices) then Exit;
-
-  if Assigned(GVoices[AVoiceIndex].Envelope) then
-  begin
-    GVoices[AVoiceIndex].Envelope.AttackTime := AAttack;
-    GVoices[AVoiceIndex].Envelope.DecayTime := ADecay;
-    GVoices[AVoiceIndex].Envelope.SustainLevel := ASustain;
-    GVoices[AVoiceIndex].Envelope.ReleaseTime := ARelease;
-  end;
+  V := HandleVoice(AVoiceIndex);
+  if V <> nil then
+    V.SetEnvelopeADSR(0, AAttack, ADecay, ASustain, ARelease);  // amp envelope
 end;
 
 procedure RetriggerVoice(AVoiceIndex: Integer);
+var
+  V: TSedaiVoice;
 begin
-  if (AVoiceIndex < 0) or (AVoiceIndex >= GMaxVoices) then Exit;
-  if not GVoices[AVoiceIndex].Active then Exit;
-
-  // Re-trigger the envelope without reinitializing the voice
-  if Assigned(GVoices[AVoiceIndex].Envelope) then
-    GVoices[AVoiceIndex].Envelope.Trigger;
+  V := HandleVoice(AVoiceIndex);
+  if (V <> nil) and V.IsActive then
+    V.Envelopes[0].Trigger;
 end;
 
 procedure RetriggerVoiceHard(AVoiceIndex: Integer);
+var
+  V: TSedaiVoice;
 begin
-  if (AVoiceIndex < 0) or (AVoiceIndex >= GMaxVoices) then Exit;
-  if not GVoices[AVoiceIndex].Active then Exit;
+  V := HandleVoice(AVoiceIndex);
+  if V = nil then Exit;
 
-  // Hard reset: reset envelope to idle then trigger (SID-style for trills)
-  if Assigned(GVoices[AVoiceIndex].Envelope) then
-  begin
-    GVoices[AVoiceIndex].Envelope.Reset;
-    GVoices[AVoiceIndex].Envelope.Trigger;
-  end;
-
-  // Reset oscillator phase if assigned
-  if Assigned(GVoices[AVoiceIndex].Oscillator) then
-    GVoices[AVoiceIndex].Oscillator.Reset;
+  // Hard reset of the amp envelope then re-trigger (SID-style for trills).
+  V.Envelopes[0].Reset;
+  V.Envelopes[0].Trigger;
 end;
 
 procedure SetVoicePulseWidth(AVoiceIndex: Integer; APulseWidth: Single);
+var
+  V: TSedaiVoice;
 begin
-  if (AVoiceIndex < 0) or (AVoiceIndex >= GMaxVoices) then Exit;
+  V := HandleVoice(AVoiceIndex);
+  if V = nil then Exit;
 
-  // Clamp pulse width
   if APulseWidth < 0.0 then APulseWidth := 0.0;
   if APulseWidth > 1.0 then APulseWidth := 1.0;
 
-  if Assigned(GVoices[AVoiceIndex].Oscillator) then
-    GVoices[AVoiceIndex].Oscillator.PulseWidth := APulseWidth;
+  V.SetOscillatorPulseWidth(0, APulseWidth);
 end;
 
 procedure SetVoiceFilter(AVoiceIndex: Integer; AEnabled: Boolean;
   AFilterType: TFilterType; AFreq, AQ: Single; ASlope: TFilterSlope);
+var
+  V: TSedaiVoice;
 begin
-  if (AVoiceIndex < 0) or (AVoiceIndex >= GMaxVoices) then Exit;
+  V := HandleVoice(AVoiceIndex);
+  if V = nil then Exit;
 
-  if Assigned(GVoices[AVoiceIndex].Filter) then
-  begin
-    GVoices[AVoiceIndex].Filter.Enabled := AEnabled;
-    GVoices[AVoiceIndex].Filter.FilterType := AFilterType;
-    GVoices[AVoiceIndex].Filter.Cutoff := AFreq;
-    GVoices[AVoiceIndex].Filter.Resonance := AQ;
-    GVoices[AVoiceIndex].Filter.Slope := ASlope;
-  end;
+  V.FilterEnabled := AEnabled;
+  V.SetFilterType(AFilterType);
+  V.SetFilterCutoff(AFreq);
+  V.SetFilterResonance(AQ);
+  V.Filter.Slope := ASlope;
 end;
 
 procedure SetVoiceFilterEnabled(AVoiceIndex: Integer; AEnabled: Boolean);
+var
+  V: TSedaiVoice;
 begin
-  if (AVoiceIndex < 0) or (AVoiceIndex >= GMaxVoices) then Exit;
-
-  if Assigned(GVoices[AVoiceIndex].Filter) then
-    GVoices[AVoiceIndex].Filter.Enabled := AEnabled;
+  V := HandleVoice(AVoiceIndex);
+  if V <> nil then
+    V.FilterEnabled := AEnabled;
 end;
 
 procedure SetVoiceFilterParams(AVoiceIndex: Integer; AFreq, AQ: Single);
+var
+  V: TSedaiVoice;
 begin
-  if (AVoiceIndex < 0) or (AVoiceIndex >= GMaxVoices) then Exit;
-
-  if Assigned(GVoices[AVoiceIndex].Filter) then
-  begin
-    GVoices[AVoiceIndex].Filter.Cutoff := AFreq;
-    GVoices[AVoiceIndex].Filter.Resonance := AQ;
-  end;
+  V := HandleVoice(AVoiceIndex);
+  if V = nil then Exit;
+  V.SetFilterCutoff(AFreq);
+  V.SetFilterResonance(AQ);
 end;
 
 // ============================================================================
@@ -1428,29 +1039,19 @@ procedure StopAll;
 var
   I: Integer;
 begin
-  for I := 0 to GMaxVoices - 1 do
-    GVoices[I].Active := False;
+  if not Assigned(GEngine) then Exit;
+  for I := 0 to GEngine.PartCount - 1 do
+    GEngine.GetPart(I).AllSoundOff;   // immediate
 end;
 
 procedure SmoothStopAll(AFadeTimeMs: Integer);
 var
   I: Integer;
 begin
-  for I := 0 to GMaxVoices - 1 do
-  begin
-    if GVoices[I].Active then
-    begin
-      // Handle envelope-based synths
-      if Assigned(GVoices[I].Envelope) then
-      begin
-        GVoices[I].Envelope.ReleaseTime := AFadeTimeMs / 1000.0;
-        GVoices[I].Envelope.Release;
-      end;
-      // Handle FM synth (has internal envelopes)
-      if Assigned(GVoices[I].FMSynth) then
-        GVoices[I].FMSynth.NoteOff;
-    end;
-  end;
+  if not Assigned(GEngine) then Exit;
+  // Release all notes; voices fade out on their own release stage.
+  for I := 0 to GEngine.PartCount - 1 do
+    GEngine.GetPart(I).AllNotesOff;
 end;
 
 procedure PrintStatus;
@@ -1854,47 +1455,9 @@ end;
 
 procedure PlayOnVoice(AVoiceIndex: Integer; AFreq: Single; const APreset: string);
 begin
-  if (AVoiceIndex < 0) or (AVoiceIndex >= GMaxVoices) then Exit;
-
-  // Stop existing voice if active
-  if GVoices[AVoiceIndex].Active then
-    NoteOff(AVoiceIndex);
-
-  // Initialize voice components if needed
-  InitVoice(AVoiceIndex);
-
-  // Start new note on this specific voice
-  with GVoices[AVoiceIndex] do
-  begin
-    Active := True;
-    Frequency := AFreq;
-    Amplitude := 0.5;
-    Pan := 0.0;
-    SynthType := safClassic;
-
-    // Configure oscillator based on preset
-    Oscillator.Frequency := AFreq;
-
-    if APreset = 'square' then
-      Oscillator.Waveform := wtSquare
-    else if (APreset = 'saw') or (APreset = 'sawtooth') then
-      Oscillator.Waveform := wtSawtooth
-    else if APreset = 'triangle' then
-      Oscillator.Waveform := wtTriangle
-    else if APreset = 'pulse' then
-      Oscillator.Waveform := wtPulse
-    else if APreset = 'noise' then
-      Oscillator.Waveform := wtNoise
-    else
-      Oscillator.Waveform := wtSine;
-
-    // Configure envelope
-    Envelope.AttackTime := 0.01;
-    Envelope.DecayTime := 0.1;
-    Envelope.SustainLevel := 0.7;
-    Envelope.ReleaseTime := 0.3;
-    Envelope.Trigger;
-  end;
+  // The Part model pool-allocates voices, so targeting a fixed voice slot no
+  // longer applies; play the note on the matching classic instrument Part.
+  PlayClassic(AFreq, APreset);
 end;
 
 procedure ReleaseVoice(AVoiceIndex: Integer);
@@ -1938,7 +1501,7 @@ end;
 // ============================================================================
 
 initialization
-  FillChar(GVoices, SizeOf(GVoices), 0);
+  // Engine is created lazily by InitAudio; nothing to pre-initialize here.
 
 finalization
   if GInitialized then
