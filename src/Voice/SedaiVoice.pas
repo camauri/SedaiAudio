@@ -15,7 +15,8 @@ interface
 
 uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiSignalNode,
-  SedaiOscillator, SedaiEnvelope, SedaiLFO, SedaiFilter;
+  SedaiOscillator, SedaiEnvelope, SedaiLFO, SedaiFilter,
+  SedaiFMOperator, SedaiWavetableGenerator;
 
 const
   MAX_OSCILLATORS = 3;
@@ -23,12 +24,20 @@ const
   MAX_LFOS = 2;
 
 type
+  // The signal source a voice generates from. A voice is "universal": it can be
+  // a classic oscillator stack, an FM synth, or a wavetable generator. The rest
+  // of the chain (envelopes, filter, amp, pan) is shared across all source types.
+  TVoiceSourceType = (vstOscillators, vstFM, vstWavetable);
+
   { TSedaiVoice }
   // Single synthesizer voice with generator/modulator/processor chain
   TSedaiVoice = class(TSedaiSignalNode)
   private
     // Voice state
     FState: TVoiceState;
+    FSourceType: TVoiceSourceType;  // which generator drives this voice
+    FFMSynth: TSedaiFMSynth;        // created on demand when SourceType = vstFM
+    FWTGenerator: TSedaiWavetableGenerator;  // created on demand for vstWavetable
     FNote: Byte;                  // MIDI note number
     FVelocity: Single;            // Note velocity (0.0 - 1.0)
     FGate: Boolean;               // Note gate (on/off)
@@ -171,6 +180,18 @@ type
     procedure SetFilterEnvelopeAmount(AAmount: Single);
 
     // ========================================================================
+    // SOURCE TYPE (universal voice: oscillators / FM / wavetable)
+    // ========================================================================
+
+    // Select which generator drives the voice.
+    procedure SetSourceType(AType: TVoiceSourceType);
+    function GetSourceType: TVoiceSourceType;
+    // Access the FM synth / wavetable generator (created on first use) so the
+    // caller can configure presets. Returns nil for an out-of-range sample rate.
+    function GetFMSynth: TSedaiFMSynth;
+    function GetWavetableGenerator: TSedaiWavetableGenerator;
+
+    // ========================================================================
     // PROPERTIES
     // ========================================================================
 
@@ -215,6 +236,9 @@ begin
   inherited Create;
 
   FState := vsIdle;
+  FSourceType := vstOscillators;
+  FFMSynth := nil;
+  FWTGenerator := nil;
   FNote := 60;  // Middle C
   FVelocity := 1.0;
   FGate := False;
@@ -295,6 +319,8 @@ begin
     FLFOs[I].Free;
 
   FFilter.Free;
+  FFMSynth.Free;        // nil-safe
+  FWTGenerator.Free;    // nil-safe
 
   inherited Destroy;
 end;
@@ -319,6 +345,8 @@ begin
     FLFOs[I].Reset;
 
   FFilter.Reset;
+  if Assigned(FFMSynth) then FFMSynth.Reset;
+  if Assigned(FWTGenerator) then FWTGenerator.Reset;
 end;
 
 procedure TSedaiVoice.SetNote(AValue: Byte);
@@ -446,6 +474,10 @@ begin
   for I := 0 to MAX_LFOS - 1 do
     FLFOs[I].Trigger;
 
+  // FM source has its own per-operator envelopes — trigger them too.
+  if (FSourceType = vstFM) and Assigned(FFMSynth) then
+    FFMSynth.NoteOn(ANote, AVelocity);
+
   FState := vsAttack;
 end;
 
@@ -458,6 +490,9 @@ begin
   // Release envelopes
   for I := 0 to MAX_ENVELOPES - 1 do
     FEnvelopes[I].Release;
+
+  if (FSourceType = vstFM) and Assigned(FFMSynth) then
+    FFMSynth.NoteOff;
 
   if FState <> vsIdle then
     FState := vsReleasing;
@@ -481,12 +516,45 @@ begin
   Reset;
 end;
 
+procedure TSedaiVoice.SetSourceType(AType: TVoiceSourceType);
+begin
+  FSourceType := AType;
+end;
+
+function TSedaiVoice.GetSourceType: TVoiceSourceType;
+begin
+  Result := FSourceType;
+end;
+
+function TSedaiVoice.GetFMSynth: TSedaiFMSynth;
+begin
+  if not Assigned(FFMSynth) then
+  begin
+    FFMSynth := TSedaiFMSynth.Create;
+    if FSampleRate > 0 then
+      FFMSynth.SetSampleRate(FSampleRate);
+  end;
+  Result := FFMSynth;
+end;
+
+function TSedaiVoice.GetWavetableGenerator: TSedaiWavetableGenerator;
+begin
+  if not Assigned(FWTGenerator) then
+  begin
+    FWTGenerator := TSedaiWavetableGenerator.Create;
+    if FSampleRate > 0 then
+      FWTGenerator.SetSampleRate(FSampleRate);
+  end;
+  Result := FWTGenerator;
+end;
+
 function TSedaiVoice.ProcessSample: Single;
 var
   I: Integer;
-  OscOutput, FilteredOutput: Single;
+  SourceOut, FilteredOutput: Single;
   AmpEnv, FilterEnv: Single;
   FilterCutoff: Single;
+  Finished, UseAmpEnv: Boolean;
 begin
   if FState = vsIdle then
   begin
@@ -497,60 +565,79 @@ begin
   // Process glide
   ProcessGlide;
 
-  // Update oscillator frequencies
-  for I := 0 to MAX_OSCILLATORS - 1 do
-  begin
-    if FOscillatorEnabled[I] then
-      FOscillators[I].Frequency := FCurrentFrequency *
-        Power(2.0, FOscillatorDetune[I] / 1200.0);
-  end;
-
-  // Process envelopes
+  // Process envelopes (always advance) — env0=amp, env1=filter, env2=mod
   AmpEnv := FEnvelopes[0].Process;
   FilterEnv := FEnvelopes[1].Process;
-  FEnvelopes[2].Process;  // Mod envelope
+  FEnvelopes[2].Process;
 
   // Process LFOs
   for I := 0 to MAX_LFOS - 1 do
     FLFOs[I].Process;
 
-  // Mix oscillators
-  OscOutput := 0.0;
-  for I := 0 to MAX_OSCILLATORS - 1 do
-  begin
-    if FOscillatorEnabled[I] then
-      OscOutput := OscOutput + FOscillators[I].GenerateSample * FOscillatorLevels[I];
+  // ---- Generate from the selected source ----
+  UseAmpEnv := True;
+  case FSourceType of
+    vstFM:
+      begin
+        // FM synth has its own per-operator envelopes; the amp envelope is not
+        // applied, and the voice ends when the FM synth reports finished.
+        if Assigned(FFMSynth) then
+          SourceOut := FFMSynth.GenerateSample
+        else
+          SourceOut := 0.0;
+        Finished := (not Assigned(FFMSynth)) or FFMSynth.IsFinished;
+        UseAmpEnv := False;
+      end;
+    vstWavetable:
+      begin
+        if Assigned(FWTGenerator) then
+        begin
+          FWTGenerator.Frequency := FCurrentFrequency;
+          SourceOut := FWTGenerator.GenerateSample;
+        end
+        else
+          SourceOut := 0.0;
+        Finished := FEnvelopes[0].IsFinished;
+      end;
+  else
+    // vstOscillators: classic multi-oscillator mix
+    begin
+      for I := 0 to MAX_OSCILLATORS - 1 do
+        if FOscillatorEnabled[I] then
+          FOscillators[I].Frequency := FCurrentFrequency *
+            Power(2.0, FOscillatorDetune[I] / 1200.0);
+      SourceOut := 0.0;
+      for I := 0 to MAX_OSCILLATORS - 1 do
+        if FOscillatorEnabled[I] then
+          SourceOut := SourceOut + FOscillators[I].GenerateSample * FOscillatorLevels[I];
+      Finished := FEnvelopes[0].IsFinished;
+    end;
   end;
 
-  // Apply filter
+  // Apply filter (shared across all source types)
   if FFilterEnabled then
   begin
-    // Calculate modulated cutoff
     FilterCutoff := FFilter.Cutoff;
-
-    // Apply filter envelope
     FilterCutoff := FilterCutoff + (FilterCutoff * 4.0 * FilterEnv * FFilterEnvelopeAmount);
-
-    // Apply key tracking
     FilterCutoff := FilterCutoff * Power(2.0, ((FNote - 60) / 12.0) * FFilterKeyTracking);
-
-    // Clamp cutoff
     if FilterCutoff < 20.0 then
       FilterCutoff := 20.0
     else if FilterCutoff > 20000.0 then
       FilterCutoff := 20000.0;
-
     FFilter.Cutoff := FilterCutoff;
-    FilteredOutput := FFilter.ProcessSample(OscOutput, 0);
+    FilteredOutput := FFilter.ProcessSample(SourceOut, 0);
   end
   else
-    FilteredOutput := OscOutput;
+    FilteredOutput := SourceOut;
 
-  // Apply amplitude envelope
-  Result := FilteredOutput * AmpEnv * FVelocity * FOutputLevel;
+  // Apply amplitude (amp envelope only for non-FM sources)
+  if UseAmpEnv then
+    Result := FilteredOutput * AmpEnv * FVelocity * FOutputLevel
+  else
+    Result := FilteredOutput * FVelocity * FOutputLevel;
 
   // Check if voice finished
-  if FEnvelopes[0].IsFinished then
+  if Finished then
     FState := vsIdle;
 
   // Update age
