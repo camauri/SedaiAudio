@@ -265,7 +265,7 @@ TSAFEngine
 
 | Module | Description |
 |--------|-------------|
-| **SedaiOscillator** | Multi-waveform oscillator (PolyBLEP, SID mode) |
+| **SedaiOscillator** | Multi-waveform oscillator (PolyBLEP/PolyBLAMP band-limiting, SID mode) |
 | **SedaiNoiseGenerator** | Noise generators (White, Pink, Brown, Blue, Violet) |
 | **SedaiWavetableGenerator** | Wavetable synthesis with morphing & mipmaps |
 | **SedaiSamplePlayer** | Sample playback (loop modes, pitch, interpolation) |
@@ -1426,9 +1426,11 @@ Mathematical simulation of physical instrument behavior for realistic sounds.
 | Feature | Description | Priority |
 |---------|-------------|----------|
 | **OGG/FLAC Decoding** | Add OGG Vorbis and FLAC decoders to file reader | Medium |
-| **Sample Playback Engine** | One-shot and looped sample playback with pitch control | High |
-| **Voice Stealing** | Intelligent note stealing when polyphony limit reached | Medium |
-| **Improved Anti-aliasing** | PolyBLEP for oscillators, oversampling for distortion | Medium |
+| **AIFF Support** | Pure-Pascal AIFF reader/writer | Medium |
+
+*Done since this list was written:* sample playback engine (`vstSample`, one-shot/looped with
+pitch), voice stealing (oldest/quietest/priority, drops a note when none is stealable), and extended
+anti-aliasing (PolyBLEP on saw/square/pulse/supersaw/PWM, PolyBLAMP on triangle).
 
 ### Medium-Term Features
 
