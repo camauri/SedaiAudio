@@ -455,6 +455,44 @@ begin
   Result := PartIdx * HANDLE_PART_MUL + Slot;
 end;
 
+// Find (or lazily create) a wavetable Part backed by loaded/custom frame data.
+// One Part per distinct table name. Returns the engine part index, or -1.
+function GetOrCreateWavetablePart(const AName: string;
+  const AData: TWavetable): Integer;
+var
+  I: Integer;
+  Part: TSAFPart;
+  Table: TSedaiWavetable;
+  Key: string;
+begin
+  Key := 'LOADED:' + LowerCase(AName);
+
+  for I := 0 to GPartCount - 1 do
+    if (GPartSrc[I] = psWavetable) and (GPartPreset[I] = Key) then
+      Exit(I);
+
+  Result := -1;
+  if not Assigned(GEngine) then Exit;
+
+  Table := BuildWavetableFromData(AData);
+  if Table = nil then Exit;
+
+  Part := GEngine.AddPart('WT:' + AName, PART_VOICES);
+  if Part = nil then
+  begin
+    Table.Free;
+    Exit;
+  end;
+  Part.SetCustomWavetable(Table, AName);   // Part takes ownership of Table
+
+  SetLength(GPartSrc, GPartCount + 1);
+  SetLength(GPartPreset, GPartCount + 1);
+  GPartSrc[GPartCount] := psWavetable;
+  GPartPreset[GPartCount] := Key;
+  Result := GPartCount;
+  Inc(GPartCount);
+end;
+
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
@@ -814,16 +852,40 @@ begin
   Result := TSedaiWavetableLoader.GetCacheInfo;
 end;
 
-procedure PlayLoadedWavetable(AFreq: Single; const AWavetableName: string);
+function PlayLoadedWavetableAdv(AFreq: Single; const AWavetableName: string): Integer;
+var
+  WT: TWavetable;
+  PartIdx, Slot: Integer;
+  Part: TSAFPart;
 begin
-  // For now, just play a basic wavetable
-  // In a full implementation, this would load the wavetable from cache
-  PlayWavetable(AFreq, 'basic');
+  Result := -1;
+  if not GInitialized then Exit;
+
+  // Pull the parsed frames from the loader cache (LoadWavetableFile populates it).
+  WT := TSedaiWavetableLoader.FindWavetableByName(AWavetableName);
+  if not WT.IsLoaded then
+  begin
+    Result := PlayWavetableAdv(AFreq, 'basic');  // not loaded -> graceful fallback
+    Exit;
+  end;
+
+  PartIdx := GetOrCreateWavetablePart(AWavetableName, WT);
+  if PartIdx < 0 then
+  begin
+    Result := PlayWavetableAdv(AFreq, 'basic');
+    Exit;
+  end;
+
+  Part := GEngine.GetPart(PartIdx);
+  if Part = nil then Exit;
+  Slot := Part.NoteOnFreq(AFreq, 0.8);
+  if Slot < 0 then Exit;
+  Result := PartIdx * HANDLE_PART_MUL + Slot;
 end;
 
-function PlayLoadedWavetableAdv(AFreq: Single; const AWavetableName: string): Integer;
+procedure PlayLoadedWavetable(AFreq: Single; const AWavetableName: string);
 begin
-  Result := PlayWavetableAdv(AFreq, 'basic');
+  PlayLoadedWavetableAdv(AFreq, AWavetableName);
 end;
 
 procedure ListLoadedWavetables;
@@ -880,15 +942,41 @@ begin
   Result := TSedaiWavetableLoader.GetSupportedExtensions;
 end;
 
-procedure PlayCustomWavetable(AFreq: Single; const ACustomWavetable: TWavetable);
+function PlayCustomWavetableAdv(AFreq: Single; const ACustomWavetable: TWavetable): Integer;
+var
+  Nm: string;
+  PartIdx, Slot: Integer;
+  Part: TSAFPart;
 begin
-  // Custom TWavetable data loading is deferred to A4; play the basic table.
-  PlayWavetable(AFreq, 'basic');
+  Result := -1;
+  if not GInitialized then Exit;
+
+  if not ACustomWavetable.IsLoaded then
+  begin
+    Result := PlayWavetableAdv(AFreq, 'basic');
+    Exit;
+  end;
+
+  Nm := ACustomWavetable.Name;
+  if Nm = '' then Nm := 'custom';
+
+  PartIdx := GetOrCreateWavetablePart(Nm, ACustomWavetable);
+  if PartIdx < 0 then
+  begin
+    Result := PlayWavetableAdv(AFreq, 'basic');
+    Exit;
+  end;
+
+  Part := GEngine.GetPart(PartIdx);
+  if Part = nil then Exit;
+  Slot := Part.NoteOnFreq(AFreq, 0.8);
+  if Slot < 0 then Exit;
+  Result := PartIdx * HANDLE_PART_MUL + Slot;
 end;
 
-function PlayCustomWavetableAdv(AFreq: Single; const ACustomWavetable: TWavetable): Integer;
+procedure PlayCustomWavetable(AFreq: Single; const ACustomWavetable: TWavetable);
 begin
-  Result := PlayWavetableAdv(AFreq, 'basic');
+  PlayCustomWavetableAdv(AFreq, ACustomWavetable);
 end;
 
 // ============================================================================

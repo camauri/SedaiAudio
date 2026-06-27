@@ -37,6 +37,7 @@ type
     FPreset: string;
     FSampleRate: Cardinal;
     FName: string;
+    FCustomTable: TSedaiWavetable;  // owned; shared (read-only) by the pool voices
 
     // Voice configuration callback (of object) applied to every voice in the
     // pool by FManager.ConfigureAllVoices. Reads FSource / FPreset.
@@ -51,6 +52,11 @@ type
     // Select the instrument: source generator + a named preset. Re-applies the
     // configuration to all voices in the pool.
     procedure SetInstrument(ASource: TSAFPartSource; const APreset: string);
+
+    // Make this a wavetable instrument driven by a loaded/custom wavetable.
+    // The Part takes ownership of ATable and shares it (read-only) with every
+    // voice in the pool. Pass APreset as the display name.
+    procedure SetCustomWavetable(ATable: TSedaiWavetable; const APreset: string = 'loaded');
 
     // Note control (forwarded to the voice manager).
     procedure NoteOn(ANote: Byte; AVelocity: Single);
@@ -81,6 +87,10 @@ type
 procedure ConfigureClassicVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureFMVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureWavetableVoice(AVoice: TSedaiVoice; const APreset: string);
+
+// Build a generator-side wavetable (frames + mipmaps) from loaded data.
+// Returns nil if the data is not loaded. Caller owns the result.
+function BuildWavetableFromData(const AData: TWavetable): TSedaiWavetable;
 
 implementation
 
@@ -275,6 +285,23 @@ begin
   AVoice.OutputLevel := Trim;
 end;
 
+function BuildWavetableFromData(const AData: TWavetable): TSedaiWavetable;
+var
+  I, TableSize: Integer;
+begin
+  Result := nil;
+  if (not AData.IsLoaded) or (AData.WaveCount <= 0) or (AData.SampleLength <= 0) then
+    Exit;
+
+  // One generator table sized to the source frame length (2048 for Serum/Vital/
+  // Surge, the cycle length for single-cycle WAVs). AddFrame resizes per frame.
+  TableSize := AData.SampleLength;
+  Result := TSedaiWavetable.Create(TableSize);
+  Result.Name := AData.Name;
+  for I := 0 to AData.WaveCount - 1 do
+    Result.AddFrame(AData.Samples[I]);
+end;
+
 // ============================================================================
 // TSAFPart
 // ============================================================================
@@ -289,6 +316,7 @@ begin
   FPreset := 'saw';
   FSampleRate := SEDAI_DEFAULT_SAMPLE_RATE;
   FName := 'Part';
+  FCustomTable := nil;
 
   // Apply the default instrument so the pool is immediately playable.
   FManager.ConfigureAllVoices(@ApplyToVoice);
@@ -296,7 +324,8 @@ end;
 
 destructor TSAFPart.Destroy;
 begin
-  FManager.Free;
+  FManager.Free;       // voices reference FCustomTable but don't own it
+  FCustomTable.Free;   // nil-safe
   inherited Destroy;
 end;
 
@@ -309,8 +338,19 @@ end;
 procedure TSAFPart.ApplyToVoice(AVoice: TSedaiVoice);
 begin
   case FSource of
-    psFM:        ConfigureFMVoice(AVoice, FPreset);
-    psWavetable: ConfigureWavetableVoice(AVoice, FPreset);
+    psFM:
+      ConfigureFMVoice(AVoice, FPreset);
+    psWavetable:
+      if Assigned(FCustomTable) then
+      begin
+        // Loaded/custom wavetable: share the Part's table (read-only) with the voice.
+        AVoice.SetSourceType(vstWavetable);
+        AVoice.GetWavetableGenerator.LoadWavetable(FCustomTable, False);
+        AVoice.SetEnvelopeADSR(0, 0.01, 0.2, 0.7, 0.3);
+        AVoice.OutputLevel := 0.7;  // conservative gain stage for arbitrary tables
+      end
+      else
+        ConfigureWavetableVoice(AVoice, FPreset);
   else
     ConfigureClassicVoice(AVoice, FPreset);
   end;
@@ -319,6 +359,18 @@ end;
 procedure TSAFPart.SetInstrument(ASource: TSAFPartSource; const APreset: string);
 begin
   FSource := ASource;
+  FPreset := APreset;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.SetCustomWavetable(ATable: TSedaiWavetable; const APreset: string);
+begin
+  if FCustomTable <> ATable then
+  begin
+    FCustomTable.Free;   // nil-safe; drop any previously owned table
+    FCustomTable := ATable;
+  end;
+  FSource := psWavetable;
   FPreset := APreset;
   FManager.ConfigureAllVoices(@ApplyToVoice);
 end;
