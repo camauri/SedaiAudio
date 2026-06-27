@@ -30,7 +30,7 @@ Sedai Audio Foundation provides a comprehensive audio synthesis framework follow
 - **Professional Mixer**: Channels, aux buses, group buses, master bus with metering
 - **Audio Effects**: Delay, Reverb, Chorus, Flanger, Phaser, Distortion, Compressor, Limiter, EQ
 - **Advanced Filters**: 6 filter types, multi-pole cascading (12/24/48 dB/oct)
-- **DAW Foundation**: Transport, tracks, clips, automation, undo/redo
+- **DAW Foundation**: Transport-driven render, audio + MIDI tracks (MIDI tracks play through a per-track instrument), clips, automation, audio recording, working undo/redo, and project save/load (native `.safproj` text format, with a format-dispatch seam for SMF / Dawproject / etc.)
 - **Real-time MIDI Playback**: Standard MIDI file support with 16-channel polyphony
 - **GoatTracker Player**: Native playback of GoatTracker v2 .sng files with full command support
 - **Audio File I/O**: WAV read/write (8/16/24/32-bit PCM, 32/64-bit float) with professional dithering
@@ -190,6 +190,30 @@ audio buffer through each processor in turn.
 > hierarchy. These classes are **not** part of the current public API; voice
 > management lives inside each synth/player (e.g. `TSedaiSIDEvo`,
 > `TSedaiVoiceManager`).
+
+#### Modular Synth Engine (Part / Instrument)
+
+The high-level facade (`SedaiAudioFoundation`, the `Play*`/`MIDI*` API) is **not** a
+self-contained voice loop — it delegates to a modular **Part/Instrument engine** built
+from the framework's own units:
+
+```
+TSAFEngine
+ ├─ Part = Instrument(preset) → TSedaiVoiceManager (universal voices) → Mixer channel
+ ├─ Part ...                                                                  ↓
+ └─ ...                                                              MasterBus → output
+```
+
+- **`TSedaiVoice`** is a *universal* voice: a single voice can be an oscillator stack,
+  an FM synth, or a wavetable generator (`TVoiceSourceType`), with a shared envelope /
+  filter / amp / pan chain and a per-voice **modulation matrix** (`TSedaiModulationMatrix`)
+  routing envelopes / LFOs / velocity / key-track to pitch, cutoff and amplitude.
+- **`TSAFPart`** (`src/Engine/SedaiPart.pas`) is a monotimbral instrument: a
+  `TSedaiVoiceManager` pool configured from a preset (classic / FM / wavetable, or a
+  loaded wavetable table), rendered to a stereo buffer.
+- **`TSAFEngine`** (`src/Engine/SedaiEngine.pas`) hosts many Parts, one per mixer channel,
+  summed through the `TSedaiMixer` master bus. The facade drives a global `TSAFEngine`;
+  the audio backend runs in callback mode and pulls the engine render.
 
 #### Professional Mixer Architecture
 
