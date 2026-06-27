@@ -195,6 +195,7 @@ type
     FRecordBuffer: TSedaiAudioBuffer;
     FRecording: Boolean;
     FRecordStartPos: Int64;
+    FRecordWritePos: Integer;      // frames written into FRecordBuffer so far
 
   public
     constructor Create; override;
@@ -683,8 +684,9 @@ procedure TSedaiAudioTrack.StartRecording(APosition: Int64);
 begin
   FRecording := True;
   FRecordStartPos := APosition;
+  FRecordWritePos := 0;
 
-  // Allocate buffer for recording (1 minute initial)
+  // Allocate buffer for recording (1 minute initial; grows on demand)
   FRecordBuffer.Allocate(2, Round(FSampleRate * 60));
   FRecordBuffer.Clear;
 end;
@@ -699,14 +701,22 @@ begin
 
   FRecording := False;
 
+  // Nothing captured -> no clip.
+  if FRecordWritePos <= 0 then Exit;
+
+  // Trim the buffer to exactly what was recorded.
+  FRecordBuffer.Resize(FRecordWritePos);
+
   // Create new clip from recorded audio
   NewClip := TSedaiAudioClip.Create;
   NewClip.Name := Format('Recording %d', [FClipCount + 1]);
   NewClip.StartPosition := FRecordStartPos;
   NewClip.LoadBuffer(FRecordBuffer, True);  // Transfer ownership
+  NewClip.ClipLength := FRecordWritePos;
 
   // Create new record buffer for next recording
   FRecordBuffer := TSedaiAudioBuffer.Create;
+  FRecordWritePos := 0;
 
   // Add clip to track
   AddClip(NewClip);
@@ -716,24 +726,27 @@ end;
 
 procedure TSedaiAudioTrack.WriteRecordBuffer(AInput: PSingle; AFrameCount: Integer);
 var
-  I: Integer;
-  CurrentSize: Integer;
+  NeededFrames, NewSize, MaxFrames: Integer;
 begin
   if not FRecording then Exit;
+  if (AInput = nil) or (AFrameCount <= 0) then Exit;
 
-  // TODO: Implement proper circular buffer recording
-  // For now, just a simple approach
-  CurrentSize := FRecordBuffer.SampleCount;
+  NeededFrames := FRecordWritePos + AFrameCount;
+  MaxFrames := Round(FSampleRate * 600);  // 10-minute safety cap
 
-  // Expand buffer if needed
-  if CurrentSize < Round(FSampleRate * 600) then  // Max 10 minutes
+  // Grow the buffer (preserving data) if the incoming block overflows it.
+  if NeededFrames > FRecordBuffer.SampleCount then
   begin
-    // Copy samples to buffer
-    for I := 0 to AFrameCount - 1 do
-    begin
-      // TODO: Write to correct position in buffer
-    end;
+    NewSize := FRecordBuffer.SampleCount * 2;
+    if NewSize < NeededFrames then NewSize := NeededFrames;
+    if NewSize > MaxFrames then NewSize := MaxFrames;
+    if NeededFrames > NewSize then Exit;  // at the cap -> stop appending
+    FRecordBuffer.Resize(NewSize);
   end;
+
+  // Append the interleaved stereo block at the current write position.
+  FRecordBuffer.WriteInterleaved(AInput, FRecordWritePos, AFrameCount);
+  Inc(FRecordWritePos, AFrameCount);
 end;
 
 { TSedaiMIDITrack }
