@@ -470,7 +470,7 @@ end;
 
 procedure TSedaiProject.ProcessBlock(AOutput: PSingle; AFrameCount: Integer);
 var
-  I, J: Integer;
+  I, J, Ch: Integer;
   Position: Int64;
   TrackInputs: array of PSingle;
   TrackBuffers: array of array of Single;
@@ -480,21 +480,26 @@ begin
   // Get current position
   Position := FTransport.Position;
 
-  // Allocate track input pointers
-  SetLength(TrackInputs, FTrackCount);
+  // Inputs are indexed by MIXER CHANNEL SLOT (each track routes to its own
+  // channel via MixerChannelIndex), not by a compacted track counter — the
+  // mixer reads AInputs[channelSlot]. TrackBuffers holds the per-track storage.
+  SetLength(TrackInputs, MAX_MIXER_CHANNELS);
+  for I := 0 to MAX_MIXER_CHANNELS - 1 do
+    TrackInputs[I] := nil;
   SetLength(TrackBuffers, FTrackCount);
 
-  // Read audio from each track
+  // Read audio from each audio track into its channel slot.
   J := 0;
   for I := 0 to MAX_TRACKS - 1 do
   begin
     if Assigned(FTracks[I]) and (FTracks[I] is TSedaiAudioTrack) then
     begin
-      SetLength(TrackBuffers[J], AFrameCount * 2);
+      Ch := FTracks[I].MixerChannelIndex;
+      if (Ch < 0) or (Ch >= MAX_MIXER_CHANNELS) then Continue;
 
-      // Read track audio
+      SetLength(TrackBuffers[J], AFrameCount * 2);
       FTracks[I].ReadAudio(Position, @TrackBuffers[J][0], AFrameCount, 2);
-      TrackInputs[J] := @TrackBuffers[J][0];
+      TrackInputs[Ch] := @TrackBuffers[J][0];
       Inc(J);
     end;
   end;
