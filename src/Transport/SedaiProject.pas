@@ -92,6 +92,11 @@ type
     function SaveNative(APath: string): Boolean;
     function LoadNative(APath: string): Boolean;
 
+    // Apply (redo) or revert (undo) a single undo action. Value-based actions
+    // (clip move) reverse fully from Old/NewValue; structural actions that need
+    // the affected object retained are not yet applied (thin TUndoAction).
+    function ApplyUndoAction(const AAction: TUndoAction; AUndo: Boolean): Boolean;
+
   public
     constructor Create; override;
     destructor Destroy; override;
@@ -832,6 +837,35 @@ begin
   FUndoPosition := FUndoCount;
 end;
 
+function TSedaiProject.ApplyUndoAction(const AAction: TUndoAction; AUndo: Boolean): Boolean;
+var
+  Trk: TSedaiTrack;
+  Clip: TSedaiClip;
+  Pos: Int64;
+begin
+  Result := False;
+
+  case AAction.ActionType of
+    uatClipMove:
+      begin
+        Trk := GetTrack(AAction.TrackIndex);
+        if Trk = nil then Exit;
+        Clip := Trk.GetClip(AAction.ClipIndex);
+        if Clip = nil then Exit;
+        // Undo restores the old position; redo re-applies the new one.
+        if AUndo then
+          Pos := AAction.OldValue
+        else
+          Pos := AAction.NewValue;
+        Clip.MoveTo(Pos);
+        Result := True;
+      end;
+    // uatClipAdd/uatClipRemove/uatTrackAdd/uatTrackRemove/uatClipSplit and
+    // parameter/automation changes need the affected object (or a parameter
+    // target) retained in the action — extend TUndoAction to apply those.
+  end;
+end;
+
 function TSedaiProject.Undo: Boolean;
 begin
   Result := False;
@@ -839,9 +873,7 @@ begin
   if not CanUndo then Exit;
 
   Dec(FUndoPosition);
-
-  // TODO: Actually apply the undo action based on type
-  // For now, just track the position
+  ApplyUndoAction(FUndoStack[FUndoPosition], True);  // revert
 
   MarkModified;
   Result := True;
@@ -853,8 +885,7 @@ begin
 
   if not CanRedo then Exit;
 
-  // TODO: Actually apply the redo action based on type
-
+  ApplyUndoAction(FUndoStack[FUndoPosition], False);  // re-apply
   Inc(FUndoPosition);
 
   MarkModified;
