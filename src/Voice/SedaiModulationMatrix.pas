@@ -41,7 +41,10 @@ type
     mstCustom1,
     mstCustom2,
     mstCustom3,
-    mstCustom4
+    mstCustom4,
+    mstLFO             // Indexed LFO: the slot's SourceIndex selects which LFO
+                       // from the host voice's (unlimited) pool. mstLFO1/mstLFO2
+                       // remain as fixed aliases for the first two LFOs.
   );
 
   // Modulation destination types
@@ -81,6 +84,7 @@ type
     Amount: Single;               // -1.0 to +1.0
     Bipolar: Boolean;             // True = -1..+1, False = 0..+1
     Curve: TParameterCurve;       // Shaping curve
+    SourceIndex: Integer;         // selects the LFO when Source = mstLFO
   end;
 
   { TSedaiModulationMatrix }
@@ -93,6 +97,11 @@ type
 
     // Source values (updated each sample/block)
     FSourceValues: array[TModSourceType] of Single;
+
+    // Indexed LFO source values (dynamic pool, grows on demand). Read by slots
+    // whose Source = mstLFO; SourceIndex picks the LFO. This is what lets a
+    // voice host an arbitrary number of LFOs beyond mstLFO1/mstLFO2.
+    FLFOValues: array of Single;
 
     // Destination modulation amounts (accumulated)
     FDestinationMod: array[TModDestType] of Single;
@@ -115,9 +124,11 @@ type
     // SLOT MANAGEMENT
     // ========================================================================
 
-    // Add a new modulation routing
+    // Add a new modulation routing. ASourceIndex selects the LFO when
+    // ASource = mstLFO (ignored otherwise).
     function AddSlot(ASource: TModSourceType; ADest: TModDestType;
-                     AAmount: Single; ABipolar: Boolean = True): Integer;
+                     AAmount: Single; ABipolar: Boolean = True;
+                     ASourceIndex: Integer = -1): Integer;
 
     // Remove a modulation slot
     procedure RemoveSlot(AIndex: Integer);
@@ -143,6 +154,10 @@ type
 
     // Get current source value
     function GetSourceValue(ASource: TModSourceType): Single;
+
+    // Set / get an indexed LFO source value (pool grows to fit AIndex).
+    procedure SetLFOValue(AIndex: Integer; AValue: Single);
+    function GetLFOValue(AIndex: Integer): Single;
 
     // ========================================================================
     // DESTINATION VALUES
@@ -204,6 +219,7 @@ begin
     FSlots[I].Amount := 0.0;
     FSlots[I].Bipolar := True;
     FSlots[I].Curve := pcLinear;
+    FSlots[I].SourceIndex := -1;
   end;
 
   // Initialize source values
@@ -226,6 +242,7 @@ procedure TSedaiModulationMatrix.Reset;
 var
   S: TModSourceType;
   D: TModDestType;
+  I: Integer;
 begin
   inherited Reset;
 
@@ -236,6 +253,10 @@ begin
   // Reset destination modulation
   for D := Low(TModDestType) to High(TModDestType) do
     FDestinationMod[D] := 0.0;
+
+  // Reset indexed LFO values (keep the pool size)
+  for I := 0 to High(FLFOValues) do
+    FLFOValues[I] := 0.0;
 end;
 
 function TSedaiModulationMatrix.GetSlot(AIndex: Integer): TModulationSlot;
@@ -250,6 +271,7 @@ begin
     Result.Amount := 0.0;
     Result.Bipolar := True;
     Result.Curve := pcLinear;
+    Result.SourceIndex := -1;
   end;
 end;
 
@@ -287,7 +309,8 @@ begin
 end;
 
 function TSedaiModulationMatrix.AddSlot(ASource: TModSourceType; ADest: TModDestType;
-                                        AAmount: Single; ABipolar: Boolean): Integer;
+                                        AAmount: Single; ABipolar: Boolean;
+                                        ASourceIndex: Integer): Integer;
 var
   I: Integer;
 begin
@@ -304,6 +327,7 @@ begin
       FSlots[I].Amount := AAmount;
       FSlots[I].Bipolar := ABipolar;
       FSlots[I].Curve := pcLinear;
+      FSlots[I].SourceIndex := ASourceIndex;
       Inc(FSlotCount);
       Result := I;
       Exit;
@@ -384,6 +408,22 @@ begin
   Result := FSourceValues[ASource];
 end;
 
+procedure TSedaiModulationMatrix.SetLFOValue(AIndex: Integer; AValue: Single);
+begin
+  if AIndex < 0 then Exit;
+  if AIndex >= Length(FLFOValues) then
+    SetLength(FLFOValues, AIndex + 1);
+  FLFOValues[AIndex] := AValue;
+end;
+
+function TSedaiModulationMatrix.GetLFOValue(AIndex: Integer): Single;
+begin
+  if (AIndex >= 0) and (AIndex < Length(FLFOValues)) then
+    Result := FLFOValues[AIndex]
+  else
+    Result := 0.0;
+end;
+
 procedure TSedaiModulationMatrix.Process;
 var
   I: Integer;
@@ -400,8 +440,11 @@ begin
     if FSlots[I].Enabled and (FSlots[I].Source <> mstNone) and
        (FSlots[I].Destination <> mdtNone) then
     begin
-      // Get source value
-      SourceVal := FSourceValues[FSlots[I].Source];
+      // Get source value (indexed LFO pool when Source = mstLFO)
+      if FSlots[I].Source = mstLFO then
+        SourceVal := GetLFOValue(FSlots[I].SourceIndex)
+      else
+        SourceVal := FSourceValues[FSlots[I].Source];
 
       // Convert to unipolar if needed
       if not FSlots[I].Bipolar then
@@ -464,6 +507,7 @@ begin
     mstCustom2: Result := FCustomSourceNames[1];
     mstCustom3: Result := FCustomSourceNames[2];
     mstCustom4: Result := FCustomSourceNames[3];
+    mstLFO: Result := 'LFO (indexed)';
     else Result := 'Unknown';
   end;
 end;

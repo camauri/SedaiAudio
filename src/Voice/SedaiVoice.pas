@@ -21,7 +21,7 @@ uses
 const
   MAX_OSCILLATORS = 3;
   MAX_ENVELOPES = 3;
-  MAX_LFOS = 2;
+  DEFAULT_LFOS = 2;   // built-in LFOs (mstLFO1/mstLFO2); the pool grows via AddLFO
 
 type
   // The signal source a voice generates from. A voice is "universal": it can be
@@ -61,8 +61,10 @@ type
 
     // Modulators
     FEnvelopes: array[0..MAX_ENVELOPES-1] of TSedaiEnvelope;
-    FLFOs: array[0..MAX_LFOS-1] of TSedaiLFO;
-    FLFOValue: array[0..MAX_LFOS-1] of Single;  // last LFO outputs (for the mod matrix)
+    // LFO pool: dynamic, starts with DEFAULT_LFOS and grows via AddLFO so a voice
+    // can host an unlimited number of LFOs (vibrato + tremolo + auto-wah + ...).
+    FLFOs: array of TSedaiLFO;
+    FLFOValue: array of Single;  // last LFO outputs (for the mod matrix)
 
     // Modulation routing (env/LFO/velocity/keytrack -> pitch/cutoff/amp/...).
     // Layered ON TOP of the hardcoded core modulation; empty by default so the
@@ -217,6 +219,17 @@ type
       AAmount: Single; ABipolar: Boolean = True): Integer;
     procedure ClearModulation;
 
+    // Append a new LFO to the voice's pool and return its index. The new LFO is
+    // free-running at ARate Hz with the given waveform. No artificial ceiling.
+    function AddLFO(ARate: Single; AWaveform: TWaveformType): Integer;
+    // Trim the pool back to the built-in DEFAULT_LFOS (frees added LFOs).
+    procedure ResetExtraLFOs;
+    function LFOCount: Integer;
+    // Route an LFO from the pool (index from AddLFO, or 0/1 for the built-ins) to
+    // a destination. Same destination units as AddModulation. Returns slot index.
+    function AddModulationLFO(ALFOIndex: Integer; ADest: TModDestType;
+      AAmount: Single; ABipolar: Boolean = True): Integer;
+
     // ========================================================================
     // PROPERTIES
     // ========================================================================
@@ -311,12 +324,15 @@ begin
     end;
   end;
 
-  // Create LFOs
-  for I := 0 to MAX_LFOS - 1 do
+  // Create the built-in LFO pool (grows later via AddLFO)
+  SetLength(FLFOs, DEFAULT_LFOS);
+  SetLength(FLFOValue, DEFAULT_LFOS);
+  for I := 0 to High(FLFOs) do
   begin
     FLFOs[I] := TSedaiLFO.Create;
     FLFOs[I].Rate := 5.0;
     FLFOs[I].Waveform := wtSine;
+    FLFOValue[I] := 0.0;
   end;
 
   // Create filter
@@ -331,8 +347,6 @@ begin
 
   // Modulation matrix (empty by default -> no extra modulation)
   FModMatrix := TSedaiModulationMatrix.Create;
-  for I := 0 to MAX_LFOS - 1 do
-    FLFOValue[I] := 0.0;
 
   FOutputLevel := 1.0;
   FPan := 0.0;
@@ -348,8 +362,10 @@ begin
   for I := 0 to MAX_ENVELOPES - 1 do
     FEnvelopes[I].Free;
 
-  for I := 0 to MAX_LFOS - 1 do
+  for I := 0 to High(FLFOs) do
     FLFOs[I].Free;
+  SetLength(FLFOs, 0);
+  SetLength(FLFOValue, 0);
 
   FFilter.Free;
   FFMSynth.Free;        // nil-safe
@@ -375,14 +391,14 @@ begin
   for I := 0 to MAX_ENVELOPES - 1 do
     FEnvelopes[I].Reset;
 
-  for I := 0 to MAX_LFOS - 1 do
+  for I := 0 to High(FLFOs) do
     FLFOs[I].Reset;
 
   FFilter.Reset;
   if Assigned(FFMSynth) then FFMSynth.Reset;
   if Assigned(FWTGenerator) then FWTGenerator.Reset;
   FModMatrix.Reset;          // clears source/dest state, keeps the routings
-  for I := 0 to MAX_LFOS - 1 do
+  for I := 0 to High(FLFOValue) do
     FLFOValue[I] := 0.0;
 end;
 
@@ -475,7 +491,7 @@ end;
 
 function TSedaiVoice.GetLFO(AIndex: Integer): TSedaiLFO;
 begin
-  if (AIndex >= 0) and (AIndex < MAX_LFOS) then
+  if (AIndex >= 0) and (AIndex <= High(FLFOs)) then
     Result := FLFOs[AIndex]
   else
     Result := nil;
@@ -508,7 +524,7 @@ begin
     FEnvelopes[I].Trigger;
 
   // Trigger LFOs (for key sync)
-  for I := 0 to MAX_LFOS - 1 do
+  for I := 0 to High(FLFOs) do
     FLFOs[I].Trigger;
 
   // FM source has its own per-operator envelopes — trigger them too.
@@ -616,6 +632,45 @@ begin
   FModMatrix.ClearAllSlots;
 end;
 
+function TSedaiVoice.AddLFO(ARate: Single; AWaveform: TWaveformType): Integer;
+var
+  LFO: TSedaiLFO;
+begin
+  LFO := TSedaiLFO.Create;
+  // Sample rate first so SetRate computes the phase increment correctly.
+  if FSampleRate > 0 then
+    LFO.SetSampleRate(FSampleRate);
+  LFO.Rate := ARate;
+  LFO.Waveform := AWaveform;
+
+  SetLength(FLFOs, Length(FLFOs) + 1);
+  SetLength(FLFOValue, Length(FLFOValue) + 1);
+  FLFOs[High(FLFOs)] := LFO;
+  FLFOValue[High(FLFOValue)] := 0.0;
+  Result := High(FLFOs);
+end;
+
+procedure TSedaiVoice.ResetExtraLFOs;
+var
+  I: Integer;
+begin
+  for I := DEFAULT_LFOS to High(FLFOs) do
+    FLFOs[I].Free;
+  SetLength(FLFOs, DEFAULT_LFOS);
+  SetLength(FLFOValue, DEFAULT_LFOS);
+end;
+
+function TSedaiVoice.LFOCount: Integer;
+begin
+  Result := Length(FLFOs);
+end;
+
+function TSedaiVoice.AddModulationLFO(ALFOIndex: Integer; ADest: TModDestType;
+  AAmount: Single; ABipolar: Boolean): Integer;
+begin
+  Result := FModMatrix.AddSlot(mstLFO, ADest, AAmount, ABipolar, ALFOIndex);
+end;
+
 function TSedaiVoice.ProcessSample: Single;
 var
   I: Integer;
@@ -640,7 +695,7 @@ begin
   ModEnv := FEnvelopes[2].Process;
 
   // Process LFOs (keep their outputs for the modulation matrix)
-  for I := 0 to MAX_LFOS - 1 do
+  for I := 0 to High(FLFOs) do
     FLFOValue[I] := FLFOs[I].Process;
 
   // ---- Modulation matrix (extra layer on top of the hardcoded core) ----
@@ -653,6 +708,10 @@ begin
     FModMatrix.SetSourceValue(mstEnvelope1, AmpEnv);
     FModMatrix.SetSourceValue(mstEnvelope2, FilterEnv);
     FModMatrix.SetSourceValue(mstEnvelope3, ModEnv);
+    // Publish every LFO to the indexed pool (mstLFO sources)...
+    for I := 0 to High(FLFOValue) do
+      FModMatrix.SetLFOValue(I, FLFOValue[I]);
+    // ...and keep the fixed mstLFO1/mstLFO2 aliases for the first two.
     FModMatrix.SetSourceValue(mstLFO1, FLFOValue[0]);
     FModMatrix.SetSourceValue(mstLFO2, FLFOValue[1]);
     FModMatrix.SetSourceValue(mstVelocity, FVelocity);

@@ -21,12 +21,28 @@ interface
 uses
   Classes, SysUtils, Math, SedaiAudioTypes,
   SedaiOscillator, SedaiFilter, SedaiFMOperator, SedaiWavetableGenerator,
-  SedaiVoice, SedaiVoiceManager;
+  SedaiVoice, SedaiVoiceManager, SedaiModulationMatrix;
 
 type
   // Which generator the part's voices use. Mirrors TVoiceSourceType but is the
   // public, instrument-level selector exposed by the Part.
   TSAFPartSource = (psClassic, psFM, psWavetable);
+
+  // Stored per-Part modulation. Re-applied to every voice of the pool in
+  // ApplyToVoice, so the whole instrument shares the same modulation and it
+  // survives a preset reconfigure. LFOs are unlimited (FPartLFOs grows freely).
+  TPartLFOConfig = record
+    Rate: Single;
+    Waveform: TWaveformType;
+  end;
+  TPartModRouting = record
+    SourceIsLFO: Boolean;
+    LFOIndex: Integer;          // index into FPartLFOs when SourceIsLFO
+    Source: TModSourceType;     // used when not SourceIsLFO
+    Dest: TModDestType;
+    Amount: Single;
+    Bipolar: Boolean;
+  end;
 
   { TSAFPart }
   // A monotimbral instrument backed by a polyphonic universal-voice manager.
@@ -39,8 +55,12 @@ type
     FName: string;
     FCustomTable: TSedaiWavetable;  // owned; shared (read-only) by the pool voices
 
+    // Instrument-level modulation, applied to the whole voice pool.
+    FPartLFOs: array of TPartLFOConfig;
+    FPartMods: array of TPartModRouting;
+
     // Voice configuration callback (of object) applied to every voice in the
-    // pool by FManager.ConfigureAllVoices. Reads FSource / FPreset.
+    // pool by FManager.ConfigureAllVoices. Reads FSource / FPreset / modulation.
     procedure ApplyToVoice(AVoice: TSedaiVoice);
 
   public
@@ -69,6 +89,20 @@ type
     procedure NoteOff(ANote: Byte);
     procedure AllNotesOff;
     procedure AllSoundOff;
+
+    // ------------------------------------------------------------------------
+    // MODULATION (instrument-level; shared by the whole voice pool)
+    // ------------------------------------------------------------------------
+    // Append an LFO to the instrument and return its index. Unlimited.
+    function AddLFO(ARate: Single; AWaveform: TWaveformType): Integer;
+    // Route a fixed source (envelope/velocity/keytrack/...) to a destination.
+    procedure AddModulation(ASource: TModSourceType; ADest: TModDestType;
+      AAmount: Single; ABipolar: Boolean = True);
+    // Route an LFO (index from AddLFO) to a destination.
+    procedure AddModulationLFO(ALFOIndex: Integer; ADest: TModDestType;
+      AAmount: Single; ABipolar: Boolean = True);
+    // Drop all routings and added LFOs (back to a clean instrument).
+    procedure ClearModulation;
 
     // Render a block of audio into AOutput (stereo, interleaved L/R).
     procedure RenderBlock(AOutput: PSingle; AFrameCount: Integer);
@@ -336,7 +370,11 @@ begin
 end;
 
 procedure TSAFPart.ApplyToVoice(AVoice: TSedaiVoice);
+var
+  I: Integer;
+  LFOMap: array of Integer;
 begin
+  // 1. Preset: source generator + timbre.
   case FSource of
     psFM:
       ConfigureFMVoice(AVoice, FPreset);
@@ -353,6 +391,30 @@ begin
         ConfigureWavetableVoice(AVoice, FPreset);
   else
     ConfigureClassicVoice(AVoice, FPreset);
+  end;
+
+  // 2. Rebuild the modulation layer from the Part's stored config. Done from a
+  //    clean slate every time so the call is idempotent (no slot/LFO build-up
+  //    across reconfigures). LFO indices are captured per-voice into LFOMap so
+  //    routings resolve to the right LFO regardless of the built-in count.
+  AVoice.ClearModulation;
+  AVoice.ResetExtraLFOs;
+
+  SetLength(LFOMap, Length(FPartLFOs));
+  for I := 0 to High(FPartLFOs) do
+    LFOMap[I] := AVoice.AddLFO(FPartLFOs[I].Rate, FPartLFOs[I].Waveform);
+
+  for I := 0 to High(FPartMods) do
+  begin
+    if FPartMods[I].SourceIsLFO then
+    begin
+      if (FPartMods[I].LFOIndex >= 0) and (FPartMods[I].LFOIndex < Length(LFOMap)) then
+        AVoice.AddModulationLFO(LFOMap[FPartMods[I].LFOIndex], FPartMods[I].Dest,
+          FPartMods[I].Amount, FPartMods[I].Bipolar);
+    end
+    else
+      AVoice.AddModulation(FPartMods[I].Source, FPartMods[I].Dest,
+        FPartMods[I].Amount, FPartMods[I].Bipolar);
   end;
 end;
 
@@ -421,6 +483,54 @@ end;
 procedure TSAFPart.AllSoundOff;
 begin
   FManager.AllSoundOff;
+end;
+
+function TSAFPart.AddLFO(ARate: Single; AWaveform: TWaveformType): Integer;
+begin
+  SetLength(FPartLFOs, Length(FPartLFOs) + 1);
+  FPartLFOs[High(FPartLFOs)].Rate := ARate;
+  FPartLFOs[High(FPartLFOs)].Waveform := AWaveform;
+  Result := High(FPartLFOs);
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.AddModulation(ASource: TModSourceType; ADest: TModDestType;
+  AAmount: Single; ABipolar: Boolean);
+begin
+  SetLength(FPartMods, Length(FPartMods) + 1);
+  with FPartMods[High(FPartMods)] do
+  begin
+    SourceIsLFO := False;
+    LFOIndex := -1;
+    Source := ASource;
+    Dest := ADest;
+    Amount := AAmount;
+    Bipolar := ABipolar;
+  end;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.AddModulationLFO(ALFOIndex: Integer; ADest: TModDestType;
+  AAmount: Single; ABipolar: Boolean);
+begin
+  SetLength(FPartMods, Length(FPartMods) + 1);
+  with FPartMods[High(FPartMods)] do
+  begin
+    SourceIsLFO := True;
+    LFOIndex := ALFOIndex;
+    Source := mstNone;
+    Dest := ADest;
+    Amount := AAmount;
+    Bipolar := ABipolar;
+  end;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.ClearModulation;
+begin
+  SetLength(FPartMods, 0);
+  SetLength(FPartLFOs, 0);
+  FManager.ConfigureAllVoices(@ApplyToVoice);
 end;
 
 procedure TSAFPart.RenderBlock(AOutput: PSingle; AFrameCount: Integer);

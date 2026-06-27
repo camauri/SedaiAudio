@@ -17,7 +17,8 @@ uses
   Classes, SysUtils, Math,
   SedaiAudioTypes, SedaiAudioBackend, SedaiOscillator, SedaiEnvelope,
   SedaiFilter, SedaiFMOperator, SedaiWavetableGenerator, SedaiWavetableLoader,
-  SedaiVoice, SedaiVoiceManager, SedaiPart, SedaiEngine, SedaiSpatialAudio;
+  SedaiVoice, SedaiVoiceManager, SedaiPart, SedaiEngine, SedaiSpatialAudio,
+  SedaiModulationMatrix;
 
 const
   // ============================================================================
@@ -253,6 +254,37 @@ procedure SetVoiceFilter(AVoiceIndex: Integer; AEnabled: Boolean;
   AFilterType: TFilterType; AFreq, AQ: Single; ASlope: TFilterSlope = fs12dB);
 procedure SetVoiceFilterEnabled(AVoiceIndex: Integer; AEnabled: Boolean);
 procedure SetVoiceFilterParams(AVoiceIndex: Integer; AFreq, AQ: Single);
+
+// ============================================================================
+// INSTRUMENT MODULATION (LFO / envelope / velocity -> pitch / cutoff / amp ...)
+// ============================================================================
+// Modulation is an instrument property: it applies to the WHOLE voice pool of
+// the Part identified by (synth, preset) — i.e. the same Part the matching
+// Play* call targets. LFOs are unlimited: every SetInstrumentLFO and every
+// vibrato/tremolo/filter helper allocates its own dedicated LFO.
+//
+// Destination units (TModDestType): mdtOscAllPitch = semitones,
+// mdtFilterCutoff = octaves, mdtAmplitude = linear gain offset.
+
+// Add an LFO to the instrument; returns its index (-1 on failure).
+function SetInstrumentLFO(ASynth: TSAFSynthType; const APreset: string;
+  ARateHz: Single; AWaveform: TWaveformType = wtSine): Integer;
+// Route a fixed source (envelope/velocity/keytrack/pitch-bend) to a destination.
+procedure SetInstrumentModulation(ASynth: TSAFSynthType; const APreset: string;
+  ASource: TModSourceType; ADest: TModDestType; AAmount: Single; ABipolar: Boolean = True);
+// Route an LFO (index from SetInstrumentLFO) to a destination.
+procedure SetInstrumentModulationLFO(ASynth: TSAFSynthType; const APreset: string;
+  ALFOIndex: Integer; ADest: TModDestType; AAmount: Single; ABipolar: Boolean = True);
+// Remove all modulation (routings + added LFOs) from the instrument.
+procedure ClearInstrumentModulation(ASynth: TSAFSynthType; const APreset: string);
+
+// One-call helpers — each allocates its own dedicated LFO (no sharing).
+procedure SetInstrumentVibrato(ASynth: TSAFSynthType; const APreset: string;
+  ADepthSemitones, ARateHz: Single);
+procedure SetInstrumentTremolo(ASynth: TSAFSynthType; const APreset: string;
+  ADepth, ARateHz: Single);
+procedure SetInstrumentFilterLFO(ASynth: TSAFSynthType; const APreset: string;
+  ADepthOctaves, ARateHz: Single);
 
 // ============================================================================
 // SYSTEM CONTROL
@@ -977,6 +1009,109 @@ end;
 procedure PlayCustomWavetable(AFreq: Single; const ACustomWavetable: TWavetable);
 begin
   PlayCustomWavetableAdv(AFreq, ACustomWavetable);
+end;
+
+// ============================================================================
+// INSTRUMENT MODULATION
+// ============================================================================
+
+function SynthToPartSource(ASynth: TSAFSynthType): TSAFPartSource;
+begin
+  case ASynth of
+    safFM:        Result := psFM;
+    safWavetable: Result := psWavetable;
+  else
+    Result := psClassic;
+  end;
+end;
+
+// Resolve (or lazily create) the Part for (synth, preset) — the same Part the
+// matching Play* call uses. Returns nil if not initialized / on failure.
+function EnsureInstrumentPart(ASynth: TSAFSynthType; const APreset: string): TSAFPart;
+var
+  Idx: Integer;
+begin
+  Result := nil;
+  if not GInitialized then Exit;
+  Idx := GetOrCreatePart(SynthToPartSource(ASynth), LowerCase(APreset));
+  if Idx < 0 then Exit;
+  Result := GEngine.GetPart(Idx);
+end;
+
+function SetInstrumentLFO(ASynth: TSAFSynthType; const APreset: string;
+  ARateHz: Single; AWaveform: TWaveformType): Integer;
+var
+  P: TSAFPart;
+begin
+  Result := -1;
+  P := EnsureInstrumentPart(ASynth, APreset);
+  if P = nil then Exit;
+  Result := P.AddLFO(ARateHz, AWaveform);
+end;
+
+procedure SetInstrumentModulation(ASynth: TSAFSynthType; const APreset: string;
+  ASource: TModSourceType; ADest: TModDestType; AAmount: Single; ABipolar: Boolean);
+var
+  P: TSAFPart;
+begin
+  P := EnsureInstrumentPart(ASynth, APreset);
+  if P <> nil then
+    P.AddModulation(ASource, ADest, AAmount, ABipolar);
+end;
+
+procedure SetInstrumentModulationLFO(ASynth: TSAFSynthType; const APreset: string;
+  ALFOIndex: Integer; ADest: TModDestType; AAmount: Single; ABipolar: Boolean);
+var
+  P: TSAFPart;
+begin
+  P := EnsureInstrumentPart(ASynth, APreset);
+  if P <> nil then
+    P.AddModulationLFO(ALFOIndex, ADest, AAmount, ABipolar);
+end;
+
+procedure ClearInstrumentModulation(ASynth: TSAFSynthType; const APreset: string);
+var
+  P: TSAFPart;
+begin
+  P := EnsureInstrumentPart(ASynth, APreset);
+  if P <> nil then
+    P.ClearModulation;
+end;
+
+procedure SetInstrumentVibrato(ASynth: TSAFSynthType; const APreset: string;
+  ADepthSemitones, ARateHz: Single);
+var
+  P: TSAFPart;
+  Idx: Integer;
+begin
+  P := EnsureInstrumentPart(ASynth, APreset);
+  if P = nil then Exit;
+  Idx := P.AddLFO(ARateHz, wtSine);
+  P.AddModulationLFO(Idx, mdtOscAllPitch, ADepthSemitones, True);
+end;
+
+procedure SetInstrumentTremolo(ASynth: TSAFSynthType; const APreset: string;
+  ADepth, ARateHz: Single);
+var
+  P: TSAFPart;
+  Idx: Integer;
+begin
+  P := EnsureInstrumentPart(ASynth, APreset);
+  if P = nil then Exit;
+  Idx := P.AddLFO(ARateHz, wtSine);
+  P.AddModulationLFO(Idx, mdtAmplitude, ADepth, True);
+end;
+
+procedure SetInstrumentFilterLFO(ASynth: TSAFSynthType; const APreset: string;
+  ADepthOctaves, ARateHz: Single);
+var
+  P: TSAFPart;
+  Idx: Integer;
+begin
+  P := EnsureInstrumentPart(ASynth, APreset);
+  if P = nil then Exit;
+  Idx := P.AddLFO(ARateHz, wtSine);
+  P.AddModulationLFO(Idx, mdtFilterCutoff, ADepthOctaves, True);
 end;
 
 // ============================================================================
