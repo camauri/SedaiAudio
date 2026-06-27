@@ -16,7 +16,8 @@ interface
 uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiSignalNode,
   SedaiOscillator, SedaiEnvelope, SedaiLFO, SedaiFilter,
-  SedaiFMOperator, SedaiWavetableGenerator, SedaiModulationMatrix;
+  SedaiFMOperator, SedaiWavetableGenerator, SedaiAdditiveGenerator,
+  SedaiModulationMatrix;
 
 const
   MAX_OSCILLATORS = 3;
@@ -27,7 +28,7 @@ type
   // The signal source a voice generates from. A voice is "universal": it can be
   // a classic oscillator stack, an FM synth, or a wavetable generator. The rest
   // of the chain (envelopes, filter, amp, pan) is shared across all source types.
-  TVoiceSourceType = (vstOscillators, vstFM, vstWavetable);
+  TVoiceSourceType = (vstOscillators, vstFM, vstWavetable, vstAdditive);
 
   // How the three oscillators combine in the vstOscillators source.
   TVoiceOscMode = (
@@ -45,6 +46,7 @@ type
     FSourceType: TVoiceSourceType;  // which generator drives this voice
     FFMSynth: TSedaiFMSynth;        // created on demand when SourceType = vstFM
     FWTGenerator: TSedaiWavetableGenerator;  // created on demand for vstWavetable
+    FAdditive: TSedaiAdditiveGenerator;      // created on demand for vstAdditive
     FNote: Byte;                  // MIDI note number
     FVelocity: Single;            // Note velocity (0.0 - 1.0)
     FGate: Boolean;               // Note gate (on/off)
@@ -217,6 +219,7 @@ type
     // caller can configure presets. Returns nil for an out-of-range sample rate.
     function GetFMSynth: TSedaiFMSynth;
     function GetWavetableGenerator: TSedaiWavetableGenerator;
+    function GetAdditiveGenerator: TSedaiAdditiveGenerator;
 
     // ========================================================================
     // MODULATION ROUTING (env / LFO / velocity / keytrack -> pitch / cutoff / amp)
@@ -292,6 +295,7 @@ begin
   FSourceType := vstOscillators;
   FFMSynth := nil;
   FWTGenerator := nil;
+  FAdditive := nil;
   FNote := 60;  // Middle C
   FVelocity := 1.0;
   FGate := False;
@@ -384,6 +388,7 @@ begin
   FFilter.Free;
   FFMSynth.Free;        // nil-safe
   FWTGenerator.Free;    // nil-safe
+  FAdditive.Free;       // nil-safe
   FModMatrix.Free;
 
   inherited Destroy;
@@ -411,6 +416,7 @@ begin
   FFilter.Reset;
   if Assigned(FFMSynth) then FFMSynth.Reset;
   if Assigned(FWTGenerator) then FWTGenerator.Reset;
+  if Assigned(FAdditive) then FAdditive.Kill;   // resets envelope + phases
   FModMatrix.Reset;          // clears source/dest state, keeps the routings
   for I := 0 to High(FLFOValue) do
     FLFOValue[I] := 0.0;
@@ -568,6 +574,10 @@ begin
   if (FSourceType = vstFM) and Assigned(FFMSynth) then
     FFMSynth.NoteOn(ANote, AVelocity);
 
+  // Additive source has its own amplitude envelope.
+  if (FSourceType = vstAdditive) and Assigned(FAdditive) then
+    FAdditive.NoteOn(ANote, AVelocity);
+
   FState := vsAttack;
 end;
 
@@ -583,6 +593,9 @@ begin
 
   if (FSourceType = vstFM) and Assigned(FFMSynth) then
     FFMSynth.NoteOff;
+
+  if (FSourceType = vstAdditive) and Assigned(FAdditive) then
+    FAdditive.NoteOff;
 
   if FState <> vsIdle then
     FState := vsReleasing;
@@ -656,6 +669,17 @@ begin
       FWTGenerator.SetSampleRate(FSampleRate);
   end;
   Result := FWTGenerator;
+end;
+
+function TSedaiVoice.GetAdditiveGenerator: TSedaiAdditiveGenerator;
+begin
+  if not Assigned(FAdditive) then
+  begin
+    FAdditive := TSedaiAdditiveGenerator.Create;
+    if FSampleRate > 0 then
+      FAdditive.SetSampleRate(FSampleRate);
+  end;
+  Result := FAdditive;
 end;
 
 function TSedaiVoice.AddModulation(ASource: TModSourceType; ADest: TModDestType;
@@ -786,6 +810,21 @@ begin
         else
           SourceOut := 0.0;
         Finished := FEnvelopes[0].IsFinished;
+      end;
+    vstAdditive:
+      begin
+        // Additive runs its own amplitude envelope; drive its pitch from the
+        // voice's current frequency (so glide / explicit freq / pitch mod work).
+        if Assigned(FAdditive) then
+        begin
+          FAdditive.Frequency := FCurrentFrequency * PitchFactor;
+          SourceOut := FAdditive.GenerateSample;
+        end
+        else
+          SourceOut := 0.0;
+        Finished := (not Assigned(FAdditive)) or
+                    ((not FAdditive.GateOpen) and (not FAdditive.Releasing));
+        UseAmpEnv := False;
       end;
   else
     // vstOscillators: 3-oscillator source (mix / ring-mod / sync)

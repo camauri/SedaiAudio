@@ -21,12 +21,12 @@ interface
 uses
   Classes, SysUtils, Math, SedaiAudioTypes,
   SedaiOscillator, SedaiFilter, SedaiFMOperator, SedaiWavetableGenerator,
-  SedaiVoice, SedaiVoiceManager, SedaiModulationMatrix;
+  SedaiAdditiveGenerator, SedaiVoice, SedaiVoiceManager, SedaiModulationMatrix;
 
 type
   // Which generator the part's voices use. Mirrors TVoiceSourceType but is the
   // public, instrument-level selector exposed by the Part.
-  TSAFPartSource = (psClassic, psFM, psWavetable);
+  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive);
 
   // Stored per-Part modulation. Re-applied to every voice of the pool in
   // ApplyToVoice, so the whole instrument shares the same modulation and it
@@ -146,6 +146,7 @@ type
 procedure ConfigureClassicVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureFMVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureWavetableVoice(AVoice: TSedaiVoice; const APreset: string);
+procedure ConfigureAdditiveVoice(AVoice: TSedaiVoice; const APreset: string);
 
 // Build a generator-side wavetable (frames + mipmaps) from loaded data.
 // Returns nil if the data is not loaded. Caller owns the result.
@@ -344,6 +345,93 @@ begin
   AVoice.OutputLevel := Trim;
 end;
 
+procedure ConfigureAdditiveVoice(AVoice: TSedaiVoice; const APreset: string);
+var
+  AG: TSedaiAdditiveGenerator;
+  P: string;
+  Trim: Single;
+begin
+  AVoice.SetSourceType(vstAdditive);
+  AG := AVoice.GetAdditiveGenerator;  // created on demand
+  if AG = nil then Exit;
+
+  P := LowerCase(APreset);
+
+  // Harmonic spectrum + amplitude-envelope shaping per preset. The additive
+  // generator owns its own amp envelope (the voice amp env is bypassed), so the
+  // envelope is what gives organ/bell/strings their character. Trim = gain stage
+  // (additive sums many harmonics; conservative ceilings, tunable in polish).
+  Trim := 0.6;
+  if P = 'sine' then
+  begin
+    AG.LoadPreset(apSine); Trim := 0.9;
+    AG.AmpEnvelope.AttackTime := 0.01; AG.AmpEnvelope.DecayTime := 0.1;
+    AG.AmpEnvelope.SustainLevel := 0.8; AG.AmpEnvelope.ReleaseTime := 0.3;
+  end
+  else if (P = 'saw') or (P = 'sawtooth') then
+  begin
+    AG.LoadPreset(apSaw); Trim := 0.5;
+    AG.AmpEnvelope.AttackTime := 0.01; AG.AmpEnvelope.DecayTime := 0.1;
+    AG.AmpEnvelope.SustainLevel := 0.8; AG.AmpEnvelope.ReleaseTime := 0.3;
+  end
+  else if P = 'square' then
+  begin
+    AG.LoadPreset(apSquare); Trim := 0.5;
+    AG.AmpEnvelope.AttackTime := 0.01; AG.AmpEnvelope.DecayTime := 0.1;
+    AG.AmpEnvelope.SustainLevel := 0.8; AG.AmpEnvelope.ReleaseTime := 0.3;
+  end
+  else if P = 'triangle' then
+  begin
+    AG.LoadPreset(apTriangle); Trim := 0.7;
+    AG.AmpEnvelope.AttackTime := 0.01; AG.AmpEnvelope.DecayTime := 0.1;
+    AG.AmpEnvelope.SustainLevel := 0.8; AG.AmpEnvelope.ReleaseTime := 0.3;
+  end
+  else if P = 'organ' then
+  begin
+    AG.LoadPreset(apOrgan); Trim := 0.5;
+    AG.AmpEnvelope.AttackTime := 0.01; AG.AmpEnvelope.DecayTime := 0.0;
+    AG.AmpEnvelope.SustainLevel := 1.0; AG.AmpEnvelope.ReleaseTime := 0.12;
+  end
+  else if P = 'bell' then
+  begin
+    AG.LoadPreset(apBell); Trim := 0.6;
+    AG.AmpEnvelope.AttackTime := 0.001; AG.AmpEnvelope.DecayTime := 1.6;
+    AG.AmpEnvelope.SustainLevel := 0.0; AG.AmpEnvelope.ReleaseTime := 0.8;
+  end
+  else if P = 'strings' then
+  begin
+    AG.LoadPreset(apStrings); Trim := 0.5;
+    AG.AmpEnvelope.AttackTime := 0.3; AG.AmpEnvelope.DecayTime := 0.2;
+    AG.AmpEnvelope.SustainLevel := 0.85; AG.AmpEnvelope.ReleaseTime := 0.5;
+  end
+  else if P = 'choir' then
+  begin
+    AG.LoadPreset(apChoir); Trim := 0.6;
+    AG.AmpEnvelope.AttackTime := 0.25; AG.AmpEnvelope.DecayTime := 0.2;
+    AG.AmpEnvelope.SustainLevel := 0.9; AG.AmpEnvelope.ReleaseTime := 0.5;
+  end
+  else if P = 'brass' then
+  begin
+    AG.LoadPreset(apBrass); Trim := 0.5;
+    AG.AmpEnvelope.AttackTime := 0.05; AG.AmpEnvelope.DecayTime := 0.1;
+    AG.AmpEnvelope.SustainLevel := 0.85; AG.AmpEnvelope.ReleaseTime := 0.2;
+  end
+  else if P = 'flute' then
+  begin
+    AG.LoadPreset(apFlute); Trim := 0.7;
+    AG.AmpEnvelope.AttackTime := 0.08; AG.AmpEnvelope.DecayTime := 0.1;
+    AG.AmpEnvelope.SustainLevel := 0.9; AG.AmpEnvelope.ReleaseTime := 0.2;
+  end
+  else
+  begin
+    AG.LoadPreset(apOrgan); Trim := 0.5;
+    AG.AmpEnvelope.AttackTime := 0.01; AG.AmpEnvelope.DecayTime := 0.0;
+    AG.AmpEnvelope.SustainLevel := 1.0; AG.AmpEnvelope.ReleaseTime := 0.12;
+  end;
+
+  AVoice.OutputLevel := Trim;
+end;
+
 function BuildWavetableFromData(const AData: TWavetable): TSedaiWavetable;
 var
   I, TableSize: Integer;
@@ -409,6 +497,8 @@ begin
   case FSource of
     psFM:
       ConfigureFMVoice(AVoice, FPreset);
+    psAdditive:
+      ConfigureAdditiveVoice(AVoice, FPreset);
     psWavetable:
       if Assigned(FCustomTable) then
       begin

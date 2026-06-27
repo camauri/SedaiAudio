@@ -126,7 +126,8 @@ type
   TSAFSynthType = (
     safClassic,       // Classic subtractive synthesis
     safFM,            // FM synthesis (DX7-style)
-    safWavetable      // Wavetable synthesis
+    safWavetable,     // Wavetable synthesis
+    safAdditive       // Additive synthesis (up to 64 harmonics)
   );
 
   // Voice state
@@ -202,6 +203,16 @@ procedure PlayFMBell(AFreq: Single);
 procedure PlayFMOrgan(AFreq: Single);
 procedure PlayFMLead(AFreq: Single);
 procedure PlayFMBass(AFreq: Single);
+
+// ============================================================================
+// ADDITIVE SYNTHESIS (up to 64 harmonics)
+// ============================================================================
+
+procedure PlayAdditive(AFreq: Single; const APreset: string = 'organ');
+function PlayAdditiveAdv(AFreq: Single; const APreset: string = 'organ'): Integer;
+procedure PlayAdditiveOrgan(AFreq: Single);
+procedure PlayAdditiveBell(AFreq: Single);
+procedure PlayAdditiveStrings(AFreq: Single);
 
 // ============================================================================
 // WAVETABLE SYNTHESIS
@@ -795,6 +806,37 @@ begin
 end;
 
 // ============================================================================
+// ADDITIVE SYNTHESIS
+// ============================================================================
+
+function PlayAdditiveAdv(AFreq: Single; const APreset: string): Integer;
+begin
+  // Additive presets configured per-Part (ConfigureAdditiveVoice); the voice
+  // drives the generator pitch, so exact Hz works (not note-quantized).
+  Result := PlayOnPart(psAdditive, APreset, AFreq, 0.8);
+end;
+
+procedure PlayAdditive(AFreq: Single; const APreset: string);
+begin
+  PlayAdditiveAdv(AFreq, APreset);
+end;
+
+procedure PlayAdditiveOrgan(AFreq: Single);
+begin
+  PlayAdditive(AFreq, 'organ');
+end;
+
+procedure PlayAdditiveBell(AFreq: Single);
+begin
+  PlayAdditive(AFreq, 'bell');
+end;
+
+procedure PlayAdditiveStrings(AFreq: Single);
+begin
+  PlayAdditive(AFreq, 'strings');
+end;
+
+// ============================================================================
 // WAVETABLE SYNTHESIS
 // ============================================================================
 
@@ -1037,6 +1079,7 @@ begin
   case ASynth of
     safFM:        Result := psFM;
     safWavetable: Result := psWavetable;
+    safAdditive:  Result := psAdditive;
   else
     Result := psClassic;
   end;
