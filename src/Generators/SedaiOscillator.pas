@@ -106,10 +106,11 @@ type
     function GenerateTriangle: Single;
     function GenerateNoise: Single;
 
-    // Bandlimited waveform generators (PolyBLEP)
+    // Bandlimited waveform generators (PolyBLEP / PolyBLAMP)
     function GenerateBandlimitedSaw: Single;
     function GenerateBandlimitedSquare: Single;
     function GenerateBandlimitedPulse: Single;
+    function GenerateBandlimitedTriangle: Single;
 
     // SID-authentic waveform generators
     function GenerateSIDSaw: Single;
@@ -130,8 +131,10 @@ type
     function GenerateCombinedWaveform: Single;
     function GenerateWaveformByType(AWaveform: TWaveformType): Single;
 
-    // PolyBLEP correction
+    // PolyBLEP correction (band-limited step — fixes amplitude discontinuities)
     function PolyBLEP(APhase, APhaseInc: Single): Single;
+    // PolyBLAMP correction (band-limited ramp — fixes slope discontinuities)
+    function PolyBLAMP(APhase, APhaseInc: Single): Single;
 
   public
     constructor Create; override;
@@ -429,10 +432,48 @@ begin
     Result := 0.0;
 end;
 
+function TSedaiOscillator.PolyBLAMP(APhase, APhaseInc: Single): Single;
+var
+  T: Single;
+begin
+  // PolyBLAMP (polynomial band-limited ramp) = integral of PolyBLEP.
+  // Corrects the slope discontinuities (corners) of a triangle. The caller
+  // scales the result by (slopeChange/2)*APhaseInc, mirroring the PolyBLEP
+  // step convention used for saw/square (calibrated for a -1..+1 waveform).
+  if APhase < APhaseInc then
+  begin
+    T := APhase / APhaseInc - 1.0;
+    Result := -1.0 / 3.0 * T * T * T;
+  end
+  else if APhase > 1.0 - APhaseInc then
+  begin
+    T := (APhase - 1.0) / APhaseInc + 1.0;
+    Result := 1.0 / 3.0 * T * T * T;
+  end
+  else
+    Result := 0.0;
+end;
+
 function TSedaiOscillator.GenerateBandlimitedSaw: Single;
 begin
   // Naive sawtooth with PolyBLEP correction
   Result := GenerateSawtooth - PolyBLEP(FPhase, FPhaseIncrement);
+end;
+
+function TSedaiOscillator.GenerateBandlimitedTriangle: Single;
+var
+  Phase2: Single;
+begin
+  // Naive triangle has slope kinks at the trough (phase 0, slope -4 -> +4,
+  // delta +8) and the peak (phase 0.5, slope +4 -> -4, delta -8). PolyBLAMP
+  // rounds each corner; coefficient = (slopeDelta/2)*phaseInc = +/-4*inc.
+  Result := GenerateTriangle;
+  Result := Result + 4.0 * FPhaseIncrement * PolyBLAMP(FPhase, FPhaseIncrement);
+
+  Phase2 := FPhase + 0.5;
+  if Phase2 >= 1.0 then
+    Phase2 := Phase2 - 1.0;
+  Result := Result - 4.0 * FPhaseIncrement * PolyBLAMP(Phase2, FPhaseIncrement);
 end;
 
 function TSedaiOscillator.GenerateBandlimitedSquare: Single;
@@ -578,9 +619,11 @@ begin
     if FSuperSawPhases[I] >= 1.0 then
       FSuperSawPhases[I] := FSuperSawPhases[I] - 1.0;
 
-    // Generate saw value
+    // Generate saw value (band-limit each saw at its own detuned rate)
     SawPhase := FSuperSawPhases[I];
     Sample := 2.0 * SawPhase - 1.0;
+    if FBandlimited then
+      Sample := Sample - PolyBLEP(SawPhase, PhaseInc);
 
     // Apply weight
     if I = 3 then
@@ -595,7 +638,7 @@ end;
 
 function TSedaiOscillator.GeneratePWM: Single;
 var
-  ModulatedPW: Single;
+  ModulatedPW, Phase2: Single;
 begin
   // Auto-modulating pulse width
   // Advance PWM LFO phase
@@ -611,6 +654,16 @@ begin
     Result := 1.0
   else
     Result := -1.0;
+
+  // Band-limit both transitions (rising at phase 0, falling at ModulatedPW)
+  if FBandlimited then
+  begin
+    Result := Result - PolyBLEP(FPhase, FPhaseIncrement);
+    Phase2 := FPhase + (1.0 - ModulatedPW);
+    if Phase2 >= 1.0 then
+      Phase2 := Phase2 - 1.0;
+    Result := Result + PolyBLEP(Phase2, FPhaseIncrement);
+  end;
 end;
 
 function TSedaiOscillator.GenerateHalfSine: Single;
@@ -745,7 +798,10 @@ begin
           Result := GeneratePulse;
 
       wtTriangle:
-        Result := GenerateTriangle;  // Triangle is already bandlimited
+        if FBandlimited then
+          Result := GenerateBandlimitedTriangle
+        else
+          Result := GenerateTriangle;
 
       wtNoise:
         Result := GenerateNoise;
@@ -867,7 +923,10 @@ begin
       else
         Result := GeneratePulse;
     wtTriangle:
-      Result := GenerateTriangle;
+      if FBandlimited then
+        Result := GenerateBandlimitedTriangle
+      else
+        Result := GenerateTriangle;
     wtNoise:
       Result := GenerateNoise;
     wtSuperSaw:
