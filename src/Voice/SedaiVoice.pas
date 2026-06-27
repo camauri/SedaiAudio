@@ -16,7 +16,7 @@ interface
 uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiSignalNode,
   SedaiOscillator, SedaiEnvelope, SedaiLFO, SedaiFilter,
-  SedaiFMOperator, SedaiWavetableGenerator;
+  SedaiFMOperator, SedaiWavetableGenerator, SedaiModulationMatrix;
 
 const
   MAX_OSCILLATORS = 3;
@@ -62,6 +62,12 @@ type
     // Modulators
     FEnvelopes: array[0..MAX_ENVELOPES-1] of TSedaiEnvelope;
     FLFOs: array[0..MAX_LFOS-1] of TSedaiLFO;
+    FLFOValue: array[0..MAX_LFOS-1] of Single;  // last LFO outputs (for the mod matrix)
+
+    // Modulation routing (env/LFO/velocity/keytrack -> pitch/cutoff/amp/...).
+    // Layered ON TOP of the hardcoded core modulation; empty by default so the
+    // voice sounds identical until routings are added.
+    FModMatrix: TSedaiModulationMatrix;
 
     // Processor
     FFilter: TSedaiFilter;
@@ -198,6 +204,20 @@ type
     function GetWavetableGenerator: TSedaiWavetableGenerator;
 
     // ========================================================================
+    // MODULATION ROUTING (env / LFO / velocity / keytrack -> pitch / cutoff / amp)
+    // ========================================================================
+
+    // Add a modulation routing on top of the core modulation. Destination units:
+    //   mdtOscAllPitch  -> semitones, applied to oscillator & wavetable pitch
+    //   mdtFilterCutoff -> octaves, applied to the (already enveloped) cutoff
+    //   mdtAmplitude    -> linear gain offset (output *= 1 + mod)
+    // Sources: LFO1/2 and pitch-bend are bipolar (-1..1); envelopes, velocity
+    // and keytrack are 0..1. Returns the slot index (-1 if the matrix is full).
+    function AddModulation(ASource: TModSourceType; ADest: TModDestType;
+      AAmount: Single; ABipolar: Boolean = True): Integer;
+    procedure ClearModulation;
+
+    // ========================================================================
     // PROPERTIES
     // ========================================================================
 
@@ -220,6 +240,7 @@ type
     property Envelopes[AIndex: Integer]: TSedaiEnvelope read GetEnvelope;
     property LFOs[AIndex: Integer]: TSedaiLFO read GetLFO;
     property Filter: TSedaiFilter read FFilter;
+    property ModMatrix: TSedaiModulationMatrix read FModMatrix;
 
     // Filter
     property FilterEnabled: Boolean read FFilterEnabled write FFilterEnabled;
@@ -308,6 +329,11 @@ begin
   FFilterEnvelopeAmount := 0.5;
   FFilterKeyTracking := 0.5;
 
+  // Modulation matrix (empty by default -> no extra modulation)
+  FModMatrix := TSedaiModulationMatrix.Create;
+  for I := 0 to MAX_LFOS - 1 do
+    FLFOValue[I] := 0.0;
+
   FOutputLevel := 1.0;
   FPan := 0.0;
 end;
@@ -328,6 +354,7 @@ begin
   FFilter.Free;
   FFMSynth.Free;        // nil-safe
   FWTGenerator.Free;    // nil-safe
+  FModMatrix.Free;
 
   inherited Destroy;
 end;
@@ -354,6 +381,9 @@ begin
   FFilter.Reset;
   if Assigned(FFMSynth) then FFMSynth.Reset;
   if Assigned(FWTGenerator) then FWTGenerator.Reset;
+  FModMatrix.Reset;          // clears source/dest state, keeps the routings
+  for I := 0 to MAX_LFOS - 1 do
+    FLFOValue[I] := 0.0;
 end;
 
 procedure TSedaiVoice.SetNote(AValue: Byte);
@@ -575,13 +605,25 @@ begin
   Result := FWTGenerator;
 end;
 
+function TSedaiVoice.AddModulation(ASource: TModSourceType; ADest: TModDestType;
+  AAmount: Single; ABipolar: Boolean): Integer;
+begin
+  Result := FModMatrix.AddSlot(ASource, ADest, AAmount, ABipolar);
+end;
+
+procedure TSedaiVoice.ClearModulation;
+begin
+  FModMatrix.ClearAllSlots;
+end;
+
 function TSedaiVoice.ProcessSample: Single;
 var
   I: Integer;
   SourceOut, FilteredOutput: Single;
-  AmpEnv, FilterEnv: Single;
+  AmpEnv, FilterEnv, ModEnv: Single;
   FilterCutoff: Single;
   Finished, UseAmpEnv: Boolean;
+  ModPitch, ModCutoff, ModAmp, PitchFactor, AmpFactor: Single;
 begin
   if FState = vsIdle then
   begin
@@ -595,11 +637,33 @@ begin
   // Process envelopes (always advance) — env0=amp, env1=filter, env2=mod
   AmpEnv := FEnvelopes[0].Process;
   FilterEnv := FEnvelopes[1].Process;
-  FEnvelopes[2].Process;
+  ModEnv := FEnvelopes[2].Process;
 
-  // Process LFOs
+  // Process LFOs (keep their outputs for the modulation matrix)
   for I := 0 to MAX_LFOS - 1 do
-    FLFOs[I].Process;
+    FLFOValue[I] := FLFOs[I].Process;
+
+  // ---- Modulation matrix (extra layer on top of the hardcoded core) ----
+  // Empty by default -> all modulations are 0 -> sound is unchanged.
+  ModPitch := 0.0;   // semitones
+  ModCutoff := 0.0;  // octaves
+  ModAmp := 0.0;     // linear gain offset
+  if FModMatrix.SlotCount > 0 then
+  begin
+    FModMatrix.SetSourceValue(mstEnvelope1, AmpEnv);
+    FModMatrix.SetSourceValue(mstEnvelope2, FilterEnv);
+    FModMatrix.SetSourceValue(mstEnvelope3, ModEnv);
+    FModMatrix.SetSourceValue(mstLFO1, FLFOValue[0]);
+    FModMatrix.SetSourceValue(mstLFO2, FLFOValue[1]);
+    FModMatrix.SetSourceValue(mstVelocity, FVelocity);
+    FModMatrix.SetSourceValue(mstPitchBend, FPitchBend);
+    FModMatrix.SetSourceValue(mstKeytrack, (FNote - 60) / 63.0);
+    FModMatrix.Process;
+    ModPitch := FModMatrix.GetModulation(mdtOscAllPitch);
+    ModCutoff := FModMatrix.GetModulation(mdtFilterCutoff);
+    ModAmp := FModMatrix.GetModulation(mdtAmplitude);
+  end;
+  PitchFactor := Power(2.0, ModPitch / 12.0);
 
   // ---- Generate from the selected source ----
   UseAmpEnv := True;
@@ -619,7 +683,7 @@ begin
       begin
         if Assigned(FWTGenerator) then
         begin
-          FWTGenerator.Frequency := FCurrentFrequency;
+          FWTGenerator.Frequency := FCurrentFrequency * PitchFactor;
           SourceOut := FWTGenerator.GenerateSample;
         end
         else
@@ -632,7 +696,7 @@ begin
       for I := 0 to MAX_OSCILLATORS - 1 do
         if FOscillatorEnabled[I] then
           FOscillators[I].Frequency := FCurrentFrequency *
-            Power(2.0, FOscillatorDetune[I] / 1200.0);
+            Power(2.0, FOscillatorDetune[I] / 1200.0) * PitchFactor;
       SourceOut := 0.0;
       for I := 0 to MAX_OSCILLATORS - 1 do
         if FOscillatorEnabled[I] then
@@ -650,6 +714,9 @@ begin
     FilterCutoff := FFilterBaseCutoff;
     FilterCutoff := FilterCutoff + (FilterCutoff * 4.0 * FilterEnv * FFilterEnvelopeAmount);
     FilterCutoff := FilterCutoff * Power(2.0, ((FNote - 60) / 12.0) * FFilterKeyTracking);
+    // Matrix cutoff modulation (octaves)
+    if ModCutoff <> 0.0 then
+      FilterCutoff := FilterCutoff * Power(2.0, ModCutoff);
     if FilterCutoff < 20.0 then
       FilterCutoff := 20.0
     else if FilterCutoff > 20000.0 then
@@ -665,6 +732,15 @@ begin
     Result := FilteredOutput * AmpEnv * FVelocity * FOutputLevel
   else
     Result := FilteredOutput * FVelocity * FOutputLevel;
+
+  // Matrix amplitude modulation (tremolo): linear gain offset, no phase flip.
+  if ModAmp <> 0.0 then
+  begin
+    AmpFactor := 1.0 + ModAmp;
+    if AmpFactor < 0.0 then
+      AmpFactor := 0.0;
+    Result := Result * AmpFactor;
+  end;
 
   // Check if voice finished
   if Finished then
