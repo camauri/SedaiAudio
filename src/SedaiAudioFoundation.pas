@@ -287,6 +287,23 @@ procedure SetInstrumentFilterLFO(ASynth: TSAFSynthType; const APreset: string;
   ADepthOctaves, ARateHz: Single);
 
 // ============================================================================
+// INSTRUMENT OSCILLATORS (classic source: mix / ring-mod / sync, sub-osc, ...)
+// ============================================================================
+// How the 3 oscillators combine on a classic instrument.
+procedure SetInstrumentOscMode(ASynth: TSAFSynthType; const APreset: string;
+  AMode: TVoiceOscMode);
+// Override one oscillator (index 0..2) of the classic instrument.
+procedure SetInstrumentOscillator(ASynth: TSAFSynthType; const APreset: string;
+  AIndex: Integer; AEnabled: Boolean; AWaveform: TWaveformType;
+  ALevel, ADetuneCents: Single);
+// One-call helpers (hide the enum).
+procedure SetInstrumentSubOsc(ASynth: TSAFSynthType; const APreset: string;
+  ALevel: Single = 0.5);
+procedure SetInstrumentRingMod(ASynth: TSAFSynthType; const APreset: string);
+procedure SetInstrumentSync(ASynth: TSAFSynthType; const APreset: string;
+  ADetuneSemitones: Single = 7.0);
+
+// ============================================================================
 // SYSTEM CONTROL
 // ============================================================================
 
@@ -1112,6 +1129,64 @@ begin
   if P = nil then Exit;
   Idx := P.AddLFO(ARateHz, wtSine);
   P.AddModulationLFO(Idx, mdtFilterCutoff, ADepthOctaves, True);
+end;
+
+// ============================================================================
+// INSTRUMENT OSCILLATORS
+// ============================================================================
+
+procedure SetInstrumentOscMode(ASynth: TSAFSynthType; const APreset: string;
+  AMode: TVoiceOscMode);
+var
+  P: TSAFPart;
+begin
+  P := EnsureInstrumentPart(ASynth, APreset);
+  if P <> nil then
+    P.SetOscMode(AMode);
+end;
+
+procedure SetInstrumentOscillator(ASynth: TSAFSynthType; const APreset: string;
+  AIndex: Integer; AEnabled: Boolean; AWaveform: TWaveformType;
+  ALevel, ADetuneCents: Single);
+var
+  P: TSAFPart;
+begin
+  P := EnsureInstrumentPart(ASynth, APreset);
+  if P <> nil then
+    P.ConfigureOscillator(AIndex, AEnabled, AWaveform, ALevel, ADetuneCents);
+end;
+
+procedure SetInstrumentSubOsc(ASynth: TSAFSynthType; const APreset: string;
+  ALevel: Single);
+var
+  P: TSAFPart;
+begin
+  P := EnsureInstrumentPart(ASynth, APreset);
+  if P <> nil then
+    P.EnableSubOscillator(ALevel);
+end;
+
+procedure SetInstrumentRingMod(ASynth: TSAFSynthType; const APreset: string);
+var
+  P: TSAFPart;
+begin
+  P := EnsureInstrumentPart(ASynth, APreset);
+  if P = nil then Exit;
+  // osc1 becomes the ring partner; product osc0 x osc1 -> metallic timbre.
+  P.ConfigureOscillator(1, True, wtSawtooth, 1.0, 0.0);
+  P.SetOscMode(vomRingMod);
+end;
+
+procedure SetInstrumentSync(ASynth: TSAFSynthType; const APreset: string;
+  ADetuneSemitones: Single);
+var
+  P: TSAFPart;
+begin
+  P := EnsureInstrumentPart(ASynth, APreset);
+  if P = nil then Exit;
+  // osc0 stays the master (from the preset); osc1 is the slave, detuned up.
+  P.ConfigureOscillator(1, True, wtSawtooth, 1.0, ADetuneSemitones * 100.0);
+  P.SetOscMode(vomSync);
 end;
 
 // ============================================================================

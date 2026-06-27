@@ -29,6 +29,13 @@ type
   // of the chain (envelopes, filter, amp, pan) is shared across all source types.
   TVoiceSourceType = (vstOscillators, vstFM, vstWavetable);
 
+  // How the three oscillators combine in the vstOscillators source.
+  TVoiceOscMode = (
+    vomMix,      // sum of enabled oscillators (classic subtractive)
+    vomRingMod,  // osc1 x osc2 (ring modulation), plus osc3 if enabled
+    vomSync      // osc2/osc3 hard-synced to osc1 (sync lead)
+  );
+
   { TSedaiVoice }
   // Single synthesizer voice with generator/modulator/processor chain
   TSedaiVoice = class(TSedaiSignalNode)
@@ -58,6 +65,7 @@ type
     FOscillatorLevels: array[0..MAX_OSCILLATORS-1] of Single;
     FOscillatorEnabled: array[0..MAX_OSCILLATORS-1] of Boolean;
     FOscillatorDetune: array[0..MAX_OSCILLATORS-1] of Single;  // In cents
+    FOscMode: TVoiceOscMode;       // how the oscillators combine (mix/ring/sync)
 
     // Modulators
     FEnvelopes: array[0..MAX_ENVELOPES-1] of TSedaiEnvelope;
@@ -86,6 +94,8 @@ type
     procedure SetVelocity(AValue: Single);
     procedure SetPitchBend(AValue: Single);
     procedure SetGlideTime(AValue: Single);
+    procedure SetOscMode(AValue: TVoiceOscMode);
+    procedure UpdateOscRouting;    // wires hard-sync sources for vomSync
 
     procedure UpdateFrequency;
     procedure ProcessGlide;
@@ -161,6 +171,9 @@ type
 
     // Set oscillator pulse width
     procedure SetOscillatorPulseWidth(AIndex: Integer; AWidth: Single);
+
+    // How the 3 oscillators combine: mix (sum) / ring-mod / sync.
+    property OscMode: TVoiceOscMode read FOscMode write SetOscMode;
 
     // ========================================================================
     // ENVELOPE CONFIGURATION
@@ -302,6 +315,7 @@ begin
     FOscillatorEnabled[I] := (I = 0);  // Only first oscillator enabled by default
     FOscillatorDetune[I] := 0.0;
   end;
+  FOscMode := vomMix;  // classic sum (no sync/ring) -> presets unchanged
 
   // Create envelopes
   for I := 0 to MAX_ENVELOPES - 1 do
@@ -443,6 +457,29 @@ begin
     FGlideCoeff := Exp(-1.0 / (FGlideTime * FSampleRate))
   else
     FGlideCoeff := 0.0;  // Instant
+end;
+
+procedure TSedaiVoice.SetOscMode(AValue: TVoiceOscMode);
+begin
+  FOscMode := AValue;
+  UpdateOscRouting;
+end;
+
+procedure TSedaiVoice.UpdateOscRouting;
+begin
+  // Sync mode: osc1 and osc2 are slaves hard-synced to osc0 (the master).
+  if FOscMode = vomSync then
+  begin
+    FOscillators[1].SyncTo(FOscillators[0]);
+    FOscillators[2].SyncTo(FOscillators[0]);
+  end
+  else
+  begin
+    FOscillators[1].SyncSource := nil;
+    FOscillators[1].HardSync := False;
+    FOscillators[2].SyncSource := nil;
+    FOscillators[2].HardSync := False;
+  end;
 end;
 
 procedure TSedaiVoice.UpdateFrequency;
@@ -679,6 +716,7 @@ var
   FilterCutoff: Single;
   Finished, UseAmpEnv: Boolean;
   ModPitch, ModCutoff, ModAmp, PitchFactor, AmpFactor: Single;
+  OscA, OscB: Single;
 begin
   if FState = vsIdle then
   begin
@@ -750,16 +788,47 @@ begin
         Finished := FEnvelopes[0].IsFinished;
       end;
   else
-    // vstOscillators: classic multi-oscillator mix
+    // vstOscillators: 3-oscillator source (mix / ring-mod / sync)
     begin
+      // Set every oscillator's frequency. Ring-mod and sync need all three
+      // running (a muted-in-the-mix oscillator can still be a ring operand or a
+      // sync master), so set all three uniformly.
       for I := 0 to MAX_OSCILLATORS - 1 do
-        if FOscillatorEnabled[I] then
-          FOscillators[I].Frequency := FCurrentFrequency *
-            Power(2.0, FOscillatorDetune[I] / 1200.0) * PitchFactor;
-      SourceOut := 0.0;
-      for I := 0 to MAX_OSCILLATORS - 1 do
-        if FOscillatorEnabled[I] then
-          SourceOut := SourceOut + FOscillators[I].GenerateSample * FOscillatorLevels[I];
+        FOscillators[I].Frequency := FCurrentFrequency *
+          Power(2.0, FOscillatorDetune[I] / 1200.0) * PitchFactor;
+
+      case FOscMode of
+        vomRingMod:
+          begin
+            // Classic ring modulation: osc0 x osc1, plus osc2 if enabled.
+            OscA := FOscillators[0].GenerateSample;
+            OscB := FOscillators[1].GenerateSample;
+            SourceOut := OscA * OscB * FOscillatorLevels[0];
+            OscA := FOscillators[2].GenerateSample;  // keep osc2 advancing
+            if FOscillatorEnabled[2] then
+              SourceOut := SourceOut + OscA * FOscillatorLevels[2];
+          end;
+        vomSync:
+          begin
+            // osc1/osc2 hard-synced to osc0; generate all (master must advance),
+            // sum the enabled ones.
+            SourceOut := 0.0;
+            for I := 0 to MAX_OSCILLATORS - 1 do
+            begin
+              OscA := FOscillators[I].GenerateSample;
+              if FOscillatorEnabled[I] then
+                SourceOut := SourceOut + OscA * FOscillatorLevels[I];
+            end;
+          end;
+      else
+        // vomMix: classic sum of enabled oscillators (behaviour unchanged).
+        begin
+          SourceOut := 0.0;
+          for I := 0 to MAX_OSCILLATORS - 1 do
+            if FOscillatorEnabled[I] then
+              SourceOut := SourceOut + FOscillators[I].GenerateSample * FOscillatorLevels[I];
+        end;
+      end;
       Finished := FEnvelopes[0].IsFinished;
     end;
   end;

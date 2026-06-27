@@ -44,6 +44,16 @@ type
     Bipolar: Boolean;
   end;
 
+  // Per-oscillator override (classic source only). Active=False -> keep the
+  // preset's setting for that oscillator.
+  TPartOscConfig = record
+    Active: Boolean;
+    Enabled: Boolean;
+    Waveform: TWaveformType;
+    Level: Single;
+    DetuneCents: Single;
+  end;
+
   { TSAFPart }
   // A monotimbral instrument backed by a polyphonic universal-voice manager.
   TSAFPart = class
@@ -58,6 +68,10 @@ type
     // Instrument-level modulation, applied to the whole voice pool.
     FPartLFOs: array of TPartLFOConfig;
     FPartMods: array of TPartModRouting;
+
+    // Instrument-level oscillator config (classic source).
+    FOscMode: TVoiceOscMode;
+    FOscCfg: array[0..2] of TPartOscConfig;
 
     // Voice configuration callback (of object) applied to every voice in the
     // pool by FManager.ConfigureAllVoices. Reads FSource / FPreset / modulation.
@@ -103,6 +117,17 @@ type
       AAmount: Single; ABipolar: Boolean = True);
     // Drop all routings and added LFOs (back to a clean instrument).
     procedure ClearModulation;
+
+    // ------------------------------------------------------------------------
+    // OSCILLATOR CONFIG (classic source; applied to the whole pool)
+    // ------------------------------------------------------------------------
+    // How the 3 oscillators combine: mix / ring-mod / sync.
+    procedure SetOscMode(AMode: TVoiceOscMode);
+    // Override one oscillator (0..2). Overrides the preset's setting for it.
+    procedure ConfigureOscillator(AIndex: Integer; AEnabled: Boolean;
+      AWaveform: TWaveformType; ALevel, ADetuneCents: Single);
+    // Convenience: osc2 = square, one octave below the fundamental.
+    procedure EnableSubOscillator(ALevel: Single = 0.5);
 
     // Render a block of audio into AOutput (stereo, interleaved L/R).
     procedure RenderBlock(AOutput: PSingle; AFrameCount: Integer);
@@ -341,6 +366,8 @@ end;
 // ============================================================================
 
 constructor TSAFPart.Create(AMaxVoices: Integer);
+var
+  I: Integer;
 begin
   inherited Create;
 
@@ -351,6 +378,10 @@ begin
   FSampleRate := SEDAI_DEFAULT_SAMPLE_RATE;
   FName := 'Part';
   FCustomTable := nil;
+
+  FOscMode := vomMix;
+  for I := 0 to 2 do
+    FOscCfg[I].Active := False;
 
   // Apply the default instrument so the pool is immediately playable.
   FManager.ConfigureAllVoices(@ApplyToVoice);
@@ -391,6 +422,21 @@ begin
         ConfigureWavetableVoice(AVoice, FPreset);
   else
     ConfigureClassicVoice(AVoice, FPreset);
+  end;
+
+  // 1b. Oscillator config (classic source only): combine mode + per-oscillator
+  //     overrides on top of the preset. vomMix + no overrides = unchanged.
+  if FSource = psClassic then
+  begin
+    AVoice.OscMode := FOscMode;
+    for I := 0 to 2 do
+      if FOscCfg[I].Active then
+      begin
+        AVoice.SetOscillatorEnabled(I, FOscCfg[I].Enabled);
+        AVoice.SetOscillatorWaveform(I, FOscCfg[I].Waveform);
+        AVoice.SetOscillatorLevel(I, FOscCfg[I].Level);
+        AVoice.SetOscillatorDetune(I, FOscCfg[I].DetuneCents);
+      end;
   end;
 
   // 2. Rebuild the modulation layer from the Part's stored config. Done from a
@@ -531,6 +577,30 @@ begin
   SetLength(FPartMods, 0);
   SetLength(FPartLFOs, 0);
   FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.SetOscMode(AMode: TVoiceOscMode);
+begin
+  FOscMode := AMode;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.ConfigureOscillator(AIndex: Integer; AEnabled: Boolean;
+  AWaveform: TWaveformType; ALevel, ADetuneCents: Single);
+begin
+  if (AIndex < 0) or (AIndex > 2) then Exit;
+  FOscCfg[AIndex].Active := True;
+  FOscCfg[AIndex].Enabled := AEnabled;
+  FOscCfg[AIndex].Waveform := AWaveform;
+  FOscCfg[AIndex].Level := ALevel;
+  FOscCfg[AIndex].DetuneCents := ADetuneCents;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.EnableSubOscillator(ALevel: Single);
+begin
+  // Sub-oscillator: osc2 = square, one octave below the fundamental.
+  ConfigureOscillator(2, True, wtSquare, ALevel, -1200.0);
 end;
 
 procedure TSAFPart.RenderBlock(AOutput: PSingle; AFrameCount: Integer);
