@@ -88,6 +88,10 @@ type
     procedure MarkModified;
     procedure EnsureBufferSize(AFrameCount: Integer);
 
+    // Native .safproj text format (the default Save/Load implementation).
+    function SaveNative(APath: string): Boolean;
+    function LoadNative(APath: string): Boolean;
+
   public
     constructor Create; override;
     destructor Destroy; override;
@@ -318,25 +322,300 @@ begin
   FModified := Now;
 end;
 
+// Locale-independent float format for the file (always '.' decimal separator).
+function ProjectFloatFmt: TFormatSettings;
+begin
+  Result := DefaultFormatSettings;
+  Result.DecimalSeparator := '.';
+  Result.ThousandSeparator := #0;
+end;
+
+function TSedaiProject.SaveNative(APath: string): Boolean;
+var
+  L: TStringList;
+  Fmt: TFormatSettings;
+  I, J, K: Integer;
+  Trk: TSedaiTrack;
+  Ch: TSedaiMixerChannel;
+  AClip: TSedaiAudioClip;
+  MClip: TSedaiMIDIClip;
+  Clip: TSedaiClip;
+  Note: TMIDINoteEvent;
+
+  function F(V: Single): string;
+  begin
+    Result := FloatToStr(V, Fmt);
+  end;
+
+begin
+  Result := False;
+  Fmt := ProjectFloatFmt;
+  L := TStringList.Create;
+  try
+    // Header + project settings
+    L.Add('SAFPROJECT 1');
+    L.Add('NAME ' + FName);
+    L.Add('TEMPO ' + F(FTransport.BaseTempo));
+    L.Add(Format('TIMESIG %d %d', [FTransport.TimeSignature.Numerator,
+                                    FTransport.TimeSignature.Denominator]));
+    L.Add('LENGTH ' + IntToStr(FProjectLength));
+    L.Add('BITDEPTH ' + IntToStr(FBitDepth));
+
+    // Mixer channels (settings restored after the tracks recreate them)
+    for I := 0 to MAX_MIXER_CHANNELS - 1 do
+    begin
+      Ch := FMixer.GetChannel(I);
+      if Assigned(Ch) then
+        L.Add(Format('CH %d %s %s %d',
+          [I, F(Ch.Volume), F(Ch.Pan), Ord(Ch.Muted)]));
+    end;
+
+    // Tracks (name last so it may contain spaces)
+    for I := 0 to MAX_TRACKS - 1 do
+    begin
+      Trk := FTracks[I];
+      if not Assigned(Trk) then Continue;
+
+      if Trk is TSedaiMIDITrack then
+        L.Add(Format('TRACK midi %d %d %s',
+          [Trk.MixerChannelIndex, Ord(Trk.Muted), Trk.Name]))
+      else
+        L.Add(Format('TRACK audio %d %d %s',
+          [Trk.MixerChannelIndex, Ord(Trk.Muted), Trk.Name]));
+
+      for J := 0 to MAX_CLIPS_PER_TRACK - 1 do
+      begin
+        Clip := Trk.GetClip(J);
+        if not Assigned(Clip) then Continue;
+
+        if Clip is TSedaiAudioClip then
+        begin
+          AClip := TSedaiAudioClip(Clip);
+          // Audio samples are not embedded yet (no source-path field) -> metadata only.
+          L.Add(Format('ACLIP %d %d %d %s',
+            [AClip.StartPosition, AClip.ClipLength, AClip.SourceOffset, F(AClip.Gain)]));
+        end
+        else if Clip is TSedaiMIDIClip then
+        begin
+          MClip := TSedaiMIDIClip(Clip);
+          L.Add(Format('MCLIP %d %d %d',
+            [MClip.StartPosition, MClip.ClipLength, MClip.NoteCount]));
+          for K := 0 to MClip.NoteCount - 1 do
+          begin
+            Note := MClip.GetNote(K);
+            L.Add(Format('NOTE %d %d %d %d %d',
+              [Note.Position, Note.Duration, Note.Note, Note.Velocity, Note.Channel]));
+          end;
+        end;
+      end;
+      L.Add('ENDTRACK');
+    end;
+    L.Add('END');
+
+    L.SaveToFile(APath);
+    Result := True;
+  finally
+    L.Free;
+  end;
+end;
+
+function TSedaiProject.LoadNative(APath: string): Boolean;
+var
+  L: TStringList;
+  Fmt: TFormatSettings;
+  LineNo, P: Integer;
+  Line, Tok, Rest: string;
+  ATrk: TSedaiAudioTrack;
+  MTrk: TSedaiMIDITrack;
+  CurTrack: TSedaiTrack;
+  AClip: TSedaiAudioClip;
+  MClip: TSedaiMIDIClip;
+  ChIdx: Integer;
+  Ch: TSedaiMixerChannel;
+  // Pending channel settings, applied after tracks recreate the channels.
+  ChI: array of Integer;
+  ChV, ChP: array of Single;
+  ChM: array of Boolean;
+  ChN: Integer;
+  // Scratch locals: NextXxx have side effects, so multi-arg calls must read each
+  // token into a local first (argument evaluation order is unspecified in FPC).
+  sv1, sv2, sv3, sv4, sv5: Int64;
+
+  // Pop the next whitespace-delimited token from Rest.
+  function NextTok: string;
+  var Sp: Integer;
+  begin
+    Rest := TrimLeft(Rest);
+    Sp := Pos(' ', Rest);
+    if Sp = 0 then
+    begin
+      Result := Rest; Rest := '';
+    end
+    else
+    begin
+      Result := Copy(Rest, 1, Sp - 1);
+      Rest := Copy(Rest, Sp + 1, MaxInt);
+    end;
+  end;
+
+  function NextInt: Integer;
+  begin
+    Result := StrToIntDef(NextTok, 0);
+  end;
+
+  function NextI64: Int64;
+  begin
+    Result := StrToInt64Def(NextTok, 0);
+  end;
+
+  function NextFloat: Single;
+  begin
+    Result := StrToFloatDef(NextTok, 0.0, Fmt);
+  end;
+
+begin
+  Result := False;
+  if not FileExists(APath) then Exit;
+
+  Fmt := ProjectFloatFmt;
+  ChN := 0;
+  CurTrack := nil;
+  MClip := nil;
+
+  L := TStringList.Create;
+  try
+    L.LoadFromFile(APath);
+    if (L.Count = 0) or (Copy(L[0], 1, 10) <> 'SAFPROJECT') then Exit;
+
+    NewProject('Untitled');  // clears tracks/mixer/undo
+
+    for LineNo := 1 to L.Count - 1 do
+    begin
+      Line := Trim(L[LineNo]);
+      if Line = '' then Continue;
+
+      Rest := Line;
+      Tok := NextTok;
+
+      if Tok = 'NAME' then
+        FName := Rest
+      else if Tok = 'TEMPO' then
+        FTransport.BaseTempo := NextFloat
+      else if Tok = 'TIMESIG' then
+      begin
+        sv1 := NextInt; sv2 := NextInt;
+        FTransport.SetTimeSignature(sv1, sv2);
+      end
+      else if Tok = 'LENGTH' then
+      begin
+        FProjectLength := NextI64;
+        FTransport.Length := FProjectLength;
+      end
+      else if Tok = 'BITDEPTH' then
+        FBitDepth := NextInt
+      else if Tok = 'CH' then
+      begin
+        SetLength(ChI, ChN + 1); SetLength(ChV, ChN + 1);
+        SetLength(ChP, ChN + 1); SetLength(ChM, ChN + 1);
+        ChI[ChN] := NextInt; ChV[ChN] := NextFloat;
+        ChP[ChN] := NextFloat; ChM[ChN] := NextInt <> 0;
+        Inc(ChN);
+      end
+      else if Tok = 'TRACK' then
+      begin
+        Tok := NextTok;          // type
+        ChIdx := NextInt;        // (declared channel; recreated tracks reassign)
+        P := NextInt;            // mute
+        if Tok = 'midi' then
+        begin
+          MTrk := AddMIDITrack(Rest);
+          CurTrack := MTrk;
+        end
+        else
+        begin
+          ATrk := AddAudioTrack(Rest);
+          CurTrack := ATrk;
+        end;
+        if Assigned(CurTrack) then CurTrack.Muted := P <> 0;
+      end
+      else if Tok = 'ACLIP' then
+      begin
+        if Assigned(CurTrack) then
+        begin
+          AClip := TSedaiAudioClip.Create;
+          AClip.StartPosition := NextI64;
+          AClip.ClipLength := NextI64;
+          AClip.SourceOffset := NextI64;
+          AClip.Gain := NextFloat;
+          CurTrack.AddClip(AClip);
+        end;
+      end
+      else if Tok = 'MCLIP' then
+      begin
+        if Assigned(CurTrack) then
+        begin
+          MClip := TSedaiMIDIClip.Create;
+          MClip.StartPosition := NextI64;
+          MClip.ClipLength := NextI64;
+          NextInt;  // note count (informational; notes follow)
+          CurTrack.AddClip(MClip);
+        end;
+      end
+      else if Tok = 'NOTE' then
+      begin
+        if Assigned(MClip) then
+        begin
+          sv1 := NextI64;  // position
+          sv2 := NextI64;  // duration
+          sv3 := NextInt;  // note
+          sv4 := NextInt;  // velocity
+          sv5 := NextInt;  // channel
+          MClip.AddNote(sv1, sv2, sv3, sv4, sv5);
+        end;
+      end
+      else if Tok = 'ENDTRACK' then
+      begin
+        CurTrack := nil;
+        MClip := nil;
+      end;
+    end;
+
+    // Apply saved channel settings now that the tracks recreated the channels.
+    for P := 0 to ChN - 1 do
+    begin
+      Ch := FMixer.GetChannel(ChI[P]);
+      if Assigned(Ch) then
+      begin
+        Ch.Volume := ChV[P];
+        Ch.Pan := ChP[P];
+        Ch.Muted := ChM[P];
+      end;
+    end;
+
+    FFilePath := APath;
+    FState := psSaved;
+    Result := True;
+  finally
+    L.Free;
+  end;
+end;
+
 function TSedaiProject.SaveProject(APath: string): Boolean;
 begin
-  // TODO: Implement actual project saving
-  // This would serialize all project data to a file
-
-  FFilePath := APath;
-  FState := psSaved;
-  FModified := Now;
-  Result := True;
+  // Format dispatch by extension (the seam for multi-format: .mid SMF, Dawproject
+  // XML, etc. can plug in here). Default is the native .safproj text format.
+  Result := SaveNative(APath);
+  if Result then
+  begin
+    FFilePath := APath;
+    FState := psSaved;
+    FModified := Now;
+  end;
 end;
 
 function TSedaiProject.LoadProject(APath: string): Boolean;
 begin
-  // TODO: Implement actual project loading
-  // This would deserialize project data from a file
-
-  FFilePath := APath;
-  FState := psSaved;
-  Result := True;
+  Result := LoadNative(APath);
 end;
 
 function TSedaiProject.AddAudioTrack(AName: string): TSedaiAudioTrack;
