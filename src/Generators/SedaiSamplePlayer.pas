@@ -68,6 +68,10 @@ type
     function LinearInterpolate(A, B, Frac: Single): Single;
     function CubicInterpolate(Y0, Y1, Y2, Y3, Frac: Single): Single;
 
+  protected
+    // Setting Frequency (Hz) repitches the sample relative to RootNote.
+    procedure SetFrequency(AValue: Single); override;
+
   public
     constructor Create; override;
     destructor Destroy; override;
@@ -272,6 +276,12 @@ end;
 procedure TSedaiSamplePlayer.SetNoteFrequency(ANote: Integer);
 begin
   FFrequency := MIDINoteToFrequency(ANote);
+  UpdatePlaybackRateFromFrequency;
+end;
+
+procedure TSedaiSamplePlayer.SetFrequency(AValue: Single);
+begin
+  inherited SetFrequency(AValue);
   UpdatePlaybackRateFromFrequency;
 end;
 

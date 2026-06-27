@@ -19,14 +19,15 @@ unit SedaiPart;
 interface
 
 uses
-  Classes, SysUtils, Math, SedaiAudioTypes,
+  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer,
   SedaiOscillator, SedaiFilter, SedaiFMOperator, SedaiWavetableGenerator,
-  SedaiAdditiveGenerator, SedaiVoice, SedaiVoiceManager, SedaiModulationMatrix;
+  SedaiAdditiveGenerator, SedaiSamplePlayer,
+  SedaiVoice, SedaiVoiceManager, SedaiModulationMatrix;
 
 type
   // Which generator the part's voices use. Mirrors TVoiceSourceType but is the
   // public, instrument-level selector exposed by the Part.
-  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive);
+  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample);
 
   // Stored per-Part modulation. Re-applied to every voice of the pool in
   // ApplyToVoice, so the whole instrument shares the same modulation and it
@@ -64,6 +65,9 @@ type
     FSampleRate: Cardinal;
     FName: string;
     FCustomTable: TSedaiWavetable;  // owned; shared (read-only) by the pool voices
+    FSampleData: TSedaiAudioBuffer; // owned; shared (read-only) by the pool players
+    FSampleRootNote: Integer;       // MIDI note the sample was recorded at
+    FSampleLoop: TLoopMode;         // loop mode for the sample
 
     // Instrument-level modulation, applied to the whole voice pool.
     FPartLFOs: array of TPartLFOConfig;
@@ -91,6 +95,12 @@ type
     // The Part takes ownership of ATable and shares it (read-only) with every
     // voice in the pool. Pass APreset as the display name.
     procedure SetCustomWavetable(ATable: TSedaiWavetable; const APreset: string = 'loaded');
+
+    // Make this a sample instrument. The Part takes ownership of ABuffer and
+    // shares it (read-only) with every voice's player. ARootNote = the pitch the
+    // sample was recorded at; ALoop selects one-shot vs forward loop.
+    procedure SetSample(ABuffer: TSedaiAudioBuffer; ARootNote: Integer = 60;
+      ALoop: TLoopMode = lmNone);
 
     // Note control (forwarded to the voice manager).
     procedure NoteOn(ANote: Byte; AVelocity: Single);
@@ -466,6 +476,9 @@ begin
   FSampleRate := SEDAI_DEFAULT_SAMPLE_RATE;
   FName := 'Part';
   FCustomTable := nil;
+  FSampleData := nil;
+  FSampleRootNote := 60;
+  FSampleLoop := lmNone;
 
   FOscMode := vomMix;
   for I := 0 to 2 do
@@ -477,8 +490,11 @@ end;
 
 destructor TSAFPart.Destroy;
 begin
-  FManager.Free;       // voices reference FCustomTable but don't own it
+  FManager.Free;       // voices reference FCustomTable / FSampleData but don't own them
   FCustomTable.Free;   // nil-safe
+  // TSedaiAudioBuffer shadows Free with a non-virtual data-clear (not nil-safe),
+  // so go through FreeAndNil (TObject.Free) to destroy the object safely.
+  FreeAndNil(FSampleData);
   inherited Destroy;
 end;
 
@@ -499,6 +515,20 @@ begin
       ConfigureFMVoice(AVoice, FPreset);
     psAdditive:
       ConfigureAdditiveVoice(AVoice, FPreset);
+    psSample:
+      if Assigned(FSampleData) then
+      begin
+        AVoice.SetSourceType(vstSample);
+        AVoice.GetSamplePlayer.LoadSample(FSampleData, False);  // shared, not owned
+        AVoice.GetSamplePlayer.RootNote := FSampleRootNote;
+        AVoice.GetSamplePlayer.LoopMode := FSampleLoop;
+        AVoice.GetSamplePlayer.Interpolation := imLinear;
+        // Sampler amp envelope: near-instant attack, hold, short release.
+        AVoice.SetEnvelopeADSR(0, 0.001, 0.0, 1.0, 0.1);
+        AVoice.OutputLevel := 0.9;
+      end
+      else
+        ConfigureClassicVoice(AVoice, FPreset);  // no data -> audible fallback
     psWavetable:
       if Assigned(FCustomTable) then
       begin
@@ -570,6 +600,21 @@ begin
   end;
   FSource := psWavetable;
   FPreset := APreset;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.SetSample(ABuffer: TSedaiAudioBuffer; ARootNote: Integer;
+  ALoop: TLoopMode);
+begin
+  if FSampleData <> ABuffer then
+  begin
+    FreeAndNil(FSampleData);   // drop any previously owned buffer (nil-safe)
+    FSampleData := ABuffer;
+  end;
+  FSampleRootNote := ARootNote;
+  FSampleLoop := ALoop;
+  FSource := psSample;
+  FPreset := 'sample';
   FManager.ConfigureAllVoices(@ApplyToVoice);
 end;
 

@@ -17,7 +17,7 @@ uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiSignalNode,
   SedaiOscillator, SedaiEnvelope, SedaiLFO, SedaiFilter,
   SedaiFMOperator, SedaiWavetableGenerator, SedaiAdditiveGenerator,
-  SedaiModulationMatrix;
+  SedaiSamplePlayer, SedaiModulationMatrix;
 
 const
   MAX_OSCILLATORS = 3;
@@ -28,7 +28,7 @@ type
   // The signal source a voice generates from. A voice is "universal": it can be
   // a classic oscillator stack, an FM synth, or a wavetable generator. The rest
   // of the chain (envelopes, filter, amp, pan) is shared across all source types.
-  TVoiceSourceType = (vstOscillators, vstFM, vstWavetable, vstAdditive);
+  TVoiceSourceType = (vstOscillators, vstFM, vstWavetable, vstAdditive, vstSample);
 
   // How the three oscillators combine in the vstOscillators source.
   TVoiceOscMode = (
@@ -47,6 +47,7 @@ type
     FFMSynth: TSedaiFMSynth;        // created on demand when SourceType = vstFM
     FWTGenerator: TSedaiWavetableGenerator;  // created on demand for vstWavetable
     FAdditive: TSedaiAdditiveGenerator;      // created on demand for vstAdditive
+    FSamplePlayer: TSedaiSamplePlayer;       // created on demand for vstSample
     FNote: Byte;                  // MIDI note number
     FVelocity: Single;            // Note velocity (0.0 - 1.0)
     FGate: Boolean;               // Note gate (on/off)
@@ -220,6 +221,7 @@ type
     function GetFMSynth: TSedaiFMSynth;
     function GetWavetableGenerator: TSedaiWavetableGenerator;
     function GetAdditiveGenerator: TSedaiAdditiveGenerator;
+    function GetSamplePlayer: TSedaiSamplePlayer;
 
     // ========================================================================
     // MODULATION ROUTING (env / LFO / velocity / keytrack -> pitch / cutoff / amp)
@@ -296,6 +298,7 @@ begin
   FFMSynth := nil;
   FWTGenerator := nil;
   FAdditive := nil;
+  FSamplePlayer := nil;
   FNote := 60;  // Middle C
   FVelocity := 1.0;
   FGate := False;
@@ -389,6 +392,7 @@ begin
   FFMSynth.Free;        // nil-safe
   FWTGenerator.Free;    // nil-safe
   FAdditive.Free;       // nil-safe
+  FSamplePlayer.Free;   // nil-safe (does not own the sample buffer)
   FModMatrix.Free;
 
   inherited Destroy;
@@ -417,6 +421,7 @@ begin
   if Assigned(FFMSynth) then FFMSynth.Reset;
   if Assigned(FWTGenerator) then FWTGenerator.Reset;
   if Assigned(FAdditive) then FAdditive.Kill;   // resets envelope + phases
+  if Assigned(FSamplePlayer) then FSamplePlayer.Stop;
   FModMatrix.Reset;          // clears source/dest state, keeps the routings
   for I := 0 to High(FLFOValue) do
     FLFOValue[I] := 0.0;
@@ -578,6 +583,13 @@ begin
   if (FSourceType = vstAdditive) and Assigned(FAdditive) then
     FAdditive.NoteOn(ANote, AVelocity);
 
+  // Sample source: pitch from the current frequency, then (re)start playback.
+  if (FSourceType = vstSample) and Assigned(FSamplePlayer) then
+  begin
+    FSamplePlayer.Frequency := FCurrentFrequency;
+    FSamplePlayer.Play;
+  end;
+
   FState := vsAttack;
 end;
 
@@ -680,6 +692,17 @@ begin
       FAdditive.SetSampleRate(FSampleRate);
   end;
   Result := FAdditive;
+end;
+
+function TSedaiVoice.GetSamplePlayer: TSedaiSamplePlayer;
+begin
+  if not Assigned(FSamplePlayer) then
+  begin
+    FSamplePlayer := TSedaiSamplePlayer.Create;
+    if FSampleRate > 0 then
+      FSamplePlayer.SetSampleRate(FSampleRate);
+  end;
+  Result := FSamplePlayer;
 end;
 
 function TSedaiVoice.AddModulation(ASource: TModSourceType; ADest: TModDestType;
@@ -825,6 +848,21 @@ begin
         Finished := (not Assigned(FAdditive)) or
                     ((not FAdditive.GateOpen) and (not FAdditive.Releasing));
         UseAmpEnv := False;
+      end;
+    vstSample:
+      begin
+        // Sample playback, repitched from the voice frequency; shaped by the
+        // shared amp envelope (UseAmpEnv stays True). A one-shot ends the voice
+        // when it stops; a looped sample rings until the release finishes.
+        if Assigned(FSamplePlayer) then
+        begin
+          FSamplePlayer.Frequency := FCurrentFrequency * PitchFactor;
+          SourceOut := FSamplePlayer.GenerateSample;
+        end
+        else
+          SourceOut := 0.0;
+        Finished := (not Assigned(FSamplePlayer)) or
+                    (not FSamplePlayer.Playing) or FEnvelopes[0].IsFinished;
       end;
   else
     // vstOscillators: 3-oscillator source (mix / ring-mod / sync)

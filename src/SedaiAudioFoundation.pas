@@ -18,7 +18,7 @@ uses
   SedaiAudioTypes, SedaiAudioBackend, SedaiOscillator, SedaiEnvelope,
   SedaiFilter, SedaiFMOperator, SedaiWavetableGenerator, SedaiWavetableLoader,
   SedaiVoice, SedaiVoiceManager, SedaiPart, SedaiEngine, SedaiSpatialAudio,
-  SedaiModulationMatrix;
+  SedaiModulationMatrix, SedaiAudioBuffer, SedaiSamplePlayer, SedaiAudioFileReader;
 
 const
   // ============================================================================
@@ -213,6 +213,21 @@ function PlayAdditiveAdv(AFreq: Single; const APreset: string = 'organ'): Intege
 procedure PlayAdditiveOrgan(AFreq: Single);
 procedure PlayAdditiveBell(AFreq: Single);
 procedure PlayAdditiveStrings(AFreq: Single);
+
+// ============================================================================
+// SAMPLE PLAYBACK (load a buffer or a WAV file and play it pitched)
+// ============================================================================
+// Register an in-memory sample under a name (the engine takes ownership of the
+// buffer). ARootNote = the MIDI note the sample was recorded at.
+function RegisterSample(const AName: string; ABuffer: TSedaiAudioBuffer;
+  ARootNote: Integer = 60; ALoop: Boolean = False): Boolean;
+// Load a WAV file into a named sample instrument (uses the WAV reader).
+function LoadSampleFile(const AName, AFilename: string;
+  ARootNote: Integer = 60; ALoop: Boolean = False): Boolean;
+function IsSampleRegistered(const AName: string): Boolean;
+// Play a registered sample at AFreq (repitched relative to its root note).
+function PlaySampleAdv(AFreq: Single; const AName: string): Integer;
+procedure PlaySample(AFreq: Single; const AName: string);
 
 // ============================================================================
 // WAVETABLE SYNTHESIS
@@ -834,6 +849,103 @@ end;
 procedure PlayAdditiveStrings(AFreq: Single);
 begin
   PlayAdditive(AFreq, 'strings');
+end;
+
+// ============================================================================
+// SAMPLE PLAYBACK
+// ============================================================================
+
+// Locate the engine Part registered for a sample name (-1 if none).
+function FindSamplePart(const AName: string): Integer;
+var
+  I: Integer;
+  Key: string;
+begin
+  Result := -1;
+  Key := 'SAMPLE:' + LowerCase(AName);
+  for I := 0 to GPartCount - 1 do
+    if (GPartSrc[I] = psSample) and (GPartPreset[I] = Key) then
+      Exit(I);
+end;
+
+function RegisterSample(const AName: string; ABuffer: TSedaiAudioBuffer;
+  ARootNote: Integer; ALoop: Boolean): Boolean;
+var
+  Idx: Integer;
+  Part: TSAFPart;
+  LM: TLoopMode;
+begin
+  Result := False;
+  if (not GInitialized) or (ABuffer = nil) then Exit;
+
+  if ALoop then LM := lmForward else LM := lmNone;
+
+  // Re-registering a name replaces its data (the Part frees the old buffer).
+  Idx := FindSamplePart(AName);
+  if Idx >= 0 then
+  begin
+    Part := GEngine.GetPart(Idx);
+    if Part = nil then begin ABuffer.Free; Exit; end;
+    Part.SetSample(ABuffer, ARootNote, LM);
+    Result := True;
+    Exit;
+  end;
+
+  Part := GEngine.AddPart('SMP:' + AName, PART_VOICES);
+  if Part = nil then begin ABuffer.Free; Exit; end;
+  Part.SetSample(ABuffer, ARootNote, LM);
+
+  SetLength(GPartSrc, GPartCount + 1);
+  SetLength(GPartPreset, GPartCount + 1);
+  GPartSrc[GPartCount] := psSample;
+  GPartPreset[GPartCount] := 'SAMPLE:' + LowerCase(AName);
+  Inc(GPartCount);
+  Result := True;
+end;
+
+function LoadSampleFile(const AName, AFilename: string; ARootNote: Integer;
+  ALoop: Boolean): Boolean;
+var
+  Reader: TSedaiAudioFileReader;
+  Buf: TSedaiAudioBuffer;
+begin
+  Result := False;
+  Buf := nil;
+  Reader := TSedaiAudioFileReader.Create;
+  try
+    if Reader.OpenFile(AFilename) then
+      Reader.ReadAll(Buf);
+  finally
+    Reader.Free;
+  end;
+  if Buf = nil then Exit;
+  Result := RegisterSample(AName, Buf, ARootNote, ALoop);  // engine takes ownership
+end;
+
+function IsSampleRegistered(const AName: string): Boolean;
+begin
+  Result := FindSamplePart(AName) >= 0;
+end;
+
+function PlaySampleAdv(AFreq: Single; const AName: string): Integer;
+var
+  Idx, Slot: Integer;
+  Part: TSAFPart;
+begin
+  Result := -1;
+  if not GInitialized then Exit;
+  Idx := FindSamplePart(AName);
+  if Idx < 0 then Exit;
+  Part := GEngine.GetPart(Idx);
+  if Part = nil then Exit;
+  Slot := Part.NoteOnFreq(AFreq, 0.9);
+  if Slot < 0 then Exit;
+  Result := Idx * HANDLE_PART_MUL + Slot;
+end;
+
+procedure PlaySample(AFreq: Single; const AName: string);
+begin
+  PlaySampleAdv(AFreq, AName);
 end;
 
 // ============================================================================
