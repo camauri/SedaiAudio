@@ -14,7 +14,7 @@ interface
 
 uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject,
-  SedaiClip, SedaiAudioBuffer;
+  SedaiClip, SedaiAudioBuffer, SedaiPart;
 
 const
   MAX_CLIPS_PER_TRACK = 1024;
@@ -217,14 +217,32 @@ type
     FInstrumentIndex: Integer;     // Index of instrument in instrument list
     FMIDIChannel: Integer;         // Output MIDI channel
 
+    // Instrument + block sequencer state (drives the instrument from MIDI clips)
+    FInstrument: TSAFPart;
+    FActiveNotes: array of record
+      Note: Byte;
+      EndPos: Int64;               // timeline sample at which the note releases
+    end;
+    FActiveCount: Integer;
+    FLastEndPos: Int64;            // end of the previous rendered block (continuity)
+
     // Recording state
     FRecordingNotes: array of TMIDINoteEvent;
     FRecordingNoteCount: Integer;
     FRecording: Boolean;
     FRecordStartPos: Int64;
 
+  protected
+    procedure SampleRateChanged; override;
+
   public
     constructor Create; override;
+    destructor Destroy; override;
+
+    // Render the instrument for one block, driven by the MIDI clips at the
+    // given timeline position (block-quantized note on/off). Output is stereo
+    // interleaved (same layout the audio tracks produce).
+    procedure RenderInstrument(APosition: Int64; AOutput: PSingle; AFrameCount: Integer);
 
     // Recording
     procedure StartRecording(APosition: Int64);
@@ -232,6 +250,8 @@ type
     procedure RecordNoteOn(APosition: Int64; ANote, AVelocity: Byte);
     procedure RecordNoteOff(APosition: Int64; ANote: Byte);
 
+    // The instrument that plays this track's MIDI (configure via TSAFPart API).
+    property Instrument: TSAFPart read FInstrument;
     property InstrumentIndex: Integer read FInstrumentIndex write FInstrumentIndex;
     property MIDIChannel: Integer read FMIDIChannel write FMIDIChannel;
     property Recording: Boolean read FRecording;
@@ -761,6 +781,88 @@ begin
   FRecording := False;
   FRecordStartPos := 0;
   FRecordingNoteCount := 0;
+
+  // Default instrument so the track is immediately audible; reconfigure via
+  // the Instrument property (TSAFPart API).
+  FInstrument := TSAFPart.Create(16);
+  FInstrument.SetInstrument(psClassic, 'lead');
+  FInstrument.SetSampleRate(FSampleRate);
+  FActiveCount := 0;
+  FLastEndPos := -1;   // force a clean start on the first rendered block
+end;
+
+destructor TSedaiMIDITrack.Destroy;
+begin
+  FInstrument.Free;
+  inherited Destroy;
+end;
+
+procedure TSedaiMIDITrack.SampleRateChanged;
+begin
+  inherited SampleRateChanged;
+  if Assigned(FInstrument) then
+    FInstrument.SetSampleRate(SampleRate);
+end;
+
+procedure TSedaiMIDITrack.RenderInstrument(APosition: Int64; AOutput: PSingle;
+  AFrameCount: Integer);
+var
+  BlockEnd: Int64;
+  Events: TMIDINoteEventArray;
+  I: Integer;
+begin
+  if not Assigned(FInstrument) then
+  begin
+    for I := 0 to AFrameCount * 2 - 1 do AOutput[I] := 0.0;
+    Exit;
+  end;
+
+  BlockEnd := APosition + AFrameCount;
+
+  // Position discontinuity (seek/loop) or mute: drop all sounding notes.
+  if (APosition <> FLastEndPos) or FMuted then
+  begin
+    FInstrument.AllSoundOff;
+    FActiveCount := 0;
+  end;
+
+  if FMuted then
+  begin
+    for I := 0 to AFrameCount * 2 - 1 do AOutput[I] := 0.0;
+    FLastEndPos := BlockEnd;
+    Exit;
+  end;
+
+  // Note-offs: active notes that have reached their end within this block.
+  I := 0;
+  while I < FActiveCount do
+  begin
+    if FActiveNotes[I].EndPos <= BlockEnd then
+    begin
+      FInstrument.NoteOff(FActiveNotes[I].Note);
+      FActiveNotes[I] := FActiveNotes[FActiveCount - 1];  // swap-remove
+      Dec(FActiveCount);
+    end
+    else
+      Inc(I);
+  end;
+
+  // Note-ons: notes whose (timeline) start falls in [APosition, BlockEnd).
+  Events := GetMIDIEventsInRange(APosition, BlockEnd);
+  for I := 0 to High(Events) do
+  begin
+    FInstrument.NoteOn(Events[I].Note, Events[I].Velocity / 127.0);
+    if FActiveCount >= Length(FActiveNotes) then
+      SetLength(FActiveNotes, FActiveCount + 16);
+    FActiveNotes[FActiveCount].Note := Events[I].Note;
+    FActiveNotes[FActiveCount].EndPos := Events[I].Position + Events[I].Duration;
+    Inc(FActiveCount);
+  end;
+
+  // Render the instrument for this block (stereo interleaved).
+  FInstrument.RenderBlock(AOutput, AFrameCount);
+
+  FLastEndPos := BlockEnd;
 end;
 
 procedure TSedaiMIDITrack.StartRecording(APosition: Int64);

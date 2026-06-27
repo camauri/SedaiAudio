@@ -772,20 +772,26 @@ begin
     TrackInputs[I] := nil;
   SetLength(TrackBuffers, FTrackCount);
 
-  // Read audio from each audio track into its channel slot.
+  // Render each track into its channel slot: audio tracks read their clips,
+  // MIDI tracks play their clips through their instrument.
   J := 0;
   for I := 0 to MAX_TRACKS - 1 do
   begin
-    if Assigned(FTracks[I]) and (FTracks[I] is TSedaiAudioTrack) then
-    begin
-      Ch := FTracks[I].MixerChannelIndex;
-      if (Ch < 0) or (Ch >= MAX_MIXER_CHANNELS) then Continue;
+    if not Assigned(FTracks[I]) then Continue;
+    if not ((FTracks[I] is TSedaiAudioTrack) or (FTracks[I] is TSedaiMIDITrack)) then
+      Continue;
 
-      SetLength(TrackBuffers[J], AFrameCount * 2);
-      FTracks[I].ReadAudio(Position, @TrackBuffers[J][0], AFrameCount, 2);
-      TrackInputs[Ch] := @TrackBuffers[J][0];
-      Inc(J);
-    end;
+    Ch := FTracks[I].MixerChannelIndex;
+    if (Ch < 0) or (Ch >= MAX_MIXER_CHANNELS) then Continue;
+
+    SetLength(TrackBuffers[J], AFrameCount * 2);
+    if FTracks[I] is TSedaiAudioTrack then
+      FTracks[I].ReadAudio(Position, @TrackBuffers[J][0], AFrameCount, 2)
+    else
+      TSedaiMIDITrack(FTracks[I]).RenderInstrument(Position, @TrackBuffers[J][0], AFrameCount);
+
+    TrackInputs[Ch] := @TrackBuffers[J][0];
+    Inc(J);
   end;
 
   // Process through mixer
