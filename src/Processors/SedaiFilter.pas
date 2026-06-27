@@ -33,6 +33,13 @@ type
     property DryWet: Single read FDryWet write FDryWet;
   end;
 
+  // One 2nd-order section's biquad coefficients (Direct Form I), double
+  // precision to avoid single-precision cancellation at low cutoffs.
+  TBiquadCoeff = record
+    A0, A1, A2: Double;   // feedforward
+    B1, B2: Double;       // feedback
+  end;
+
   { TSedaiFilter }
   // Multi-mode resonant filter
   TSedaiFilter = class(TSedaiSignalProcessor)
@@ -44,25 +51,16 @@ type
     FResonance: Single;           // Resonance (0.0 - 1.0, maps to Q)
     FGain: Single;                // Gain for peaking filter (dB)
 
-    // Internal filter coefficients (biquad)
-    FA0, FA1, FA2: Single;        // Feedforward coefficients
-    FB1, FB2: Single;             // Feedback coefficients
+    // Per-stage biquad coefficients. The number of cascaded 2nd-order stages
+    // depends on the slope: 12dB=1, 24dB=2, 48dB=4. 24/48dB low/high-pass use
+    // Butterworth pole-Q per stage for a flat passband and a clean slope.
+    FCoeff: array[0..3] of TBiquadCoeff;
+    FStageCount: Integer;
 
-    // Filter state (per channel, supports stereo)
-    FX1, FX2: array[0..1] of Single;  // Input history
-    FY1, FY2: array[0..1] of Single;  // Output history
-
-    // Second stage for 24dB
-    FX1_2, FX2_2: array[0..1] of Single;
-    FY1_2, FY2_2: array[0..1] of Single;
-
-    // Third stage for 48dB
-    FX1_3, FX2_3: array[0..1] of Single;
-    FY1_3, FY2_3: array[0..1] of Single;
-
-    // Fourth stage for 48dB
-    FX1_4, FX2_4: array[0..1] of Single;
-    FY1_4, FY2_4: array[0..1] of Single;
+    // Per-stage, per-channel (stereo) filter state, double precision.
+    FState: array[0..3, 0..1] of record
+      X1, X2, Y1, Y2: Double;
+    end;
 
     // SID filter emulation
     FSIDMode: Boolean;
@@ -81,16 +79,13 @@ type
     procedure SetGain(AValue: Single);
 
     procedure CalculateCoefficients;
-    procedure CalculateLowPass(AW0, AAlpha: Single);
-    procedure CalculateHighPass(AW0, AAlpha: Single);
-    procedure CalculateBandPass(AW0, AAlpha: Single);
-    procedure CalculateNotch(AW0, AAlpha: Single);
-    procedure CalculateAllPass(AW0, AAlpha: Single);
-    procedure CalculatePeaking(AW0, AAlpha, AGainLinear: Single);
+    // Fill one 2nd-order section's coefficients for the given type / Q / gain.
+    procedure CalcStage(AType: TFilterType; AW0, AQ, AGainLinear: Double;
+      out C: TBiquadCoeff);
 
-    // Process single biquad stage
-    function ProcessBiquad(AInput: Single; AChannel: Integer;
-      var X1, X2, Y1, Y2: Single): Single;
+    // Process single biquad stage (double-precision state, Single I/O).
+    function ProcessBiquad(AInput: Single; const C: TBiquadCoeff;
+      var X1, X2, Y1, Y2: Double): Single;
 
     // SID filter processing
     function ProcessSIDFilter(AInput: Single): Single;
@@ -150,8 +145,6 @@ end;
 { TSedaiFilter }
 
 constructor TSedaiFilter.Create;
-var
-  I: Integer;
 begin
   inherited Create;
 
@@ -161,36 +154,10 @@ begin
   FResonance := 0.0;
   FGain := 0.0;
 
-  // Initialize coefficients
-  FA0 := 1.0;
-  FA1 := 0.0;
-  FA2 := 0.0;
-  FB1 := 0.0;
-  FB2 := 0.0;
-
-  // Clear state
-  for I := 0 to 1 do
-  begin
-    FX1[I] := 0.0;
-    FX2[I] := 0.0;
-    FY1[I] := 0.0;
-    FY2[I] := 0.0;
-
-    FX1_2[I] := 0.0;
-    FX2_2[I] := 0.0;
-    FY1_2[I] := 0.0;
-    FY2_2[I] := 0.0;
-
-    FX1_3[I] := 0.0;
-    FX2_3[I] := 0.0;
-    FY1_3[I] := 0.0;
-    FY2_3[I] := 0.0;
-
-    FX1_4[I] := 0.0;
-    FX2_4[I] := 0.0;
-    FY1_4[I] := 0.0;
-    FY2_4[I] := 0.0;
-  end;
+  FStageCount := 1;
+  FillChar(FCoeff, SizeOf(FCoeff), 0);
+  FCoeff[0].A0 := 1.0;            // unity pass-through until first calc
+  FillChar(FState, SizeOf(FState), 0);
 
   // SID mode off by default
   FSIDMode := False;
@@ -205,33 +172,10 @@ begin
 end;
 
 procedure TSedaiFilter.Reset;
-var
-  I: Integer;
 begin
   inherited Reset;
 
-  for I := 0 to 1 do
-  begin
-    FX1[I] := 0.0;
-    FX2[I] := 0.0;
-    FY1[I] := 0.0;
-    FY2[I] := 0.0;
-
-    FX1_2[I] := 0.0;
-    FX2_2[I] := 0.0;
-    FY1_2[I] := 0.0;
-    FY2_2[I] := 0.0;
-
-    FX1_3[I] := 0.0;
-    FX2_3[I] := 0.0;
-    FY1_3[I] := 0.0;
-    FY2_3[I] := 0.0;
-
-    FX1_4[I] := 0.0;
-    FX2_4[I] := 0.0;
-    FY1_4[I] := 0.0;
-    FY2_4[I] := 0.0;
-  end;
+  FillChar(FState, SizeOf(FState), 0);
 
   FSIDLowPass := 0.0;
   FSIDBandPass := 0.0;
@@ -285,150 +229,145 @@ begin
 end;
 
 procedure TSedaiFilter.CalculateCoefficients;
+const
+  // Butterworth pole-Q for cascaded 2nd-order sections (maximally-flat passband).
+  BW_Q4: array[0..1] of Double = (0.54119610, 1.30656296);          // order 4 (24dB)
+  BW_Q8: array[0..3] of Double =                                    // order 8 (48dB)
+    (0.50979558, 0.60134489, 0.89997622, 2.56291545);
 var
-  W0, Alpha, Q: Single;
-  GainLinear: Single;
+  W0, ResQ, GainLinear, StageQ, BaseQ: Double;
+  I: Integer;
+  ButterworthCascade: Boolean;
 begin
   if FSampleRate = 0 then
     Exit;
 
-  // Calculate normalized angular frequency
   W0 := 2.0 * PI * FCutoff / FSampleRate;
+  ResQ := MIN_Q + FResonance * (MAX_Q - MIN_Q);   // resonance -> Q (0.5 .. 20)
+  GainLinear := Power(10.0, FGain / 40.0);         // dB to linear (half for biquad)
 
-  // Map resonance (0-1) to Q (0.5 - 20)
-  Q := MIN_Q + FResonance * (MAX_Q - MIN_Q);
+  case FSlope of
+    fs24dB: FStageCount := 2;
+    fs48dB: FStageCount := 4;
+  else      FStageCount := 1;
+  end;
 
-  // Calculate alpha (bandwidth coefficient)
-  Alpha := Sin(W0) / (2.0 * Q);
+  // Per-stage Butterworth Q only applies to low/high-pass cascades; for a single
+  // stage (12dB) or the other responses we keep the resonance Q on every stage
+  // (the historical behaviour), so 12dB and BP/notch/allpass/peaking are unchanged.
+  ButterworthCascade := (FStageCount > 1) and
+                        (FFilterType in [ftLowPass, ftHighPass]);
 
-  // Calculate gain for peaking filter
-  GainLinear := Power(10.0, FGain / 40.0);  // dB to linear (half for biquad)
+  for I := 0 to FStageCount - 1 do
+  begin
+    if ButterworthCascade then
+    begin
+      if FStageCount = 2 then BaseQ := BW_Q4[I] else BaseQ := BW_Q8[I];
+      // Resonance peaks the LAST stage only: the earlier stages keep the flat
+      // Butterworth shape, the final one rises from BaseQ (res=0) up to MAX_Q.
+      if I = FStageCount - 1 then
+        StageQ := BaseQ + FResonance * (MAX_Q - BaseQ)
+      else
+        StageQ := BaseQ;
+    end
+    else
+      StageQ := ResQ;
 
-  // Calculate coefficients based on filter type
-  case FFilterType of
-    ftLowPass:   CalculateLowPass(W0, Alpha);
-    ftHighPass:  CalculateHighPass(W0, Alpha);
-    ftBandPass:  CalculateBandPass(W0, Alpha);
-    ftNotch:     CalculateNotch(W0, Alpha);
-    ftAllPass:   CalculateAllPass(W0, Alpha);
-    ftPeaking:   CalculatePeaking(W0, Alpha, GainLinear);
+    CalcStage(FFilterType, W0, StageQ, GainLinear, FCoeff[I]);
   end;
 end;
 
-procedure TSedaiFilter.CalculateLowPass(AW0, AAlpha: Single);
+procedure TSedaiFilter.CalcStage(AType: TFilterType; AW0, AQ, AGainLinear: Double;
+  out C: TBiquadCoeff);
 var
-  CosW0, A0Inv: Single;
+  CosW0, SinW0, Alpha, A0Inv, AlphaA, AlphaOverA: Double;
 begin
   CosW0 := Cos(AW0);
+  SinW0 := Sin(AW0);
+  Alpha := SinW0 / (2.0 * AQ);
 
-  // LPF: H(s) = 1 / (s^2 + s/Q + 1)
-  A0Inv := 1.0 / (1.0 + AAlpha);
-
-  FA0 := ((1.0 - CosW0) / 2.0) * A0Inv;
-  FA1 := (1.0 - CosW0) * A0Inv;
-  FA2 := FA0;
-  FB1 := (-2.0 * CosW0) * A0Inv;
-  FB2 := (1.0 - AAlpha) * A0Inv;
+  case AType of
+    ftLowPass:
+      begin
+        A0Inv := 1.0 / (1.0 + Alpha);
+        C.A0 := ((1.0 - CosW0) / 2.0) * A0Inv;
+        C.A1 := (1.0 - CosW0) * A0Inv;
+        C.A2 := C.A0;
+        C.B1 := (-2.0 * CosW0) * A0Inv;
+        C.B2 := (1.0 - Alpha) * A0Inv;
+      end;
+    ftHighPass:
+      begin
+        A0Inv := 1.0 / (1.0 + Alpha);
+        C.A0 := ((1.0 + CosW0) / 2.0) * A0Inv;
+        C.A1 := -(1.0 + CosW0) * A0Inv;
+        C.A2 := C.A0;
+        C.B1 := (-2.0 * CosW0) * A0Inv;
+        C.B2 := (1.0 - Alpha) * A0Inv;
+      end;
+    ftBandPass:
+      begin
+        A0Inv := 1.0 / (1.0 + Alpha);
+        C.A0 := Alpha * A0Inv;
+        C.A1 := 0.0;
+        C.A2 := -Alpha * A0Inv;
+        C.B1 := (-2.0 * CosW0) * A0Inv;
+        C.B2 := (1.0 - Alpha) * A0Inv;
+      end;
+    ftNotch:
+      begin
+        A0Inv := 1.0 / (1.0 + Alpha);
+        C.A0 := A0Inv;
+        C.A1 := (-2.0 * CosW0) * A0Inv;
+        C.A2 := A0Inv;
+        C.B1 := C.A1;
+        C.B2 := (1.0 - Alpha) * A0Inv;
+      end;
+    ftAllPass:
+      begin
+        A0Inv := 1.0 / (1.0 + Alpha);
+        C.A0 := (1.0 - Alpha) * A0Inv;
+        C.A1 := (-2.0 * CosW0) * A0Inv;
+        C.A2 := (1.0 + Alpha) * A0Inv;
+        C.B1 := C.A1;
+        C.B2 := C.A0;
+      end;
+    ftPeaking:
+      begin
+        AlphaA := Alpha * AGainLinear;
+        AlphaOverA := Alpha / AGainLinear;
+        A0Inv := 1.0 / (1.0 + AlphaOverA);
+        C.A0 := (1.0 + AlphaA) * A0Inv;
+        C.A1 := (-2.0 * CosW0) * A0Inv;
+        C.A2 := (1.0 - AlphaA) * A0Inv;
+        C.B1 := C.A1;
+        C.B2 := (1.0 - AlphaOverA) * A0Inv;
+      end;
+  else
+    begin
+      C.A0 := 1.0; C.A1 := 0.0; C.A2 := 0.0; C.B1 := 0.0; C.B2 := 0.0;
+    end;
+  end;
 end;
 
-procedure TSedaiFilter.CalculateHighPass(AW0, AAlpha: Single);
+function TSedaiFilter.ProcessBiquad(AInput: Single; const C: TBiquadCoeff;
+  var X1, X2, Y1, Y2: Double): Single;
 var
-  CosW0, A0Inv: Single;
+  Acc: Double;
 begin
-  CosW0 := Cos(AW0);
+  // Direct Form I biquad, double-precision accumulation and state.
+  Acc := C.A0 * AInput + C.A1 * X1 + C.A2 * X2 - C.B1 * Y1 - C.B2 * Y2;
 
-  // HPF: H(s) = s^2 / (s^2 + s/Q + 1)
-  A0Inv := 1.0 / (1.0 + AAlpha);
+  // Denormal prevention (applied to the stored state too).
+  if Abs(Acc) < 1e-20 then
+    Acc := 0.0;
 
-  FA0 := ((1.0 + CosW0) / 2.0) * A0Inv;
-  FA1 := -(1.0 + CosW0) * A0Inv;
-  FA2 := FA0;
-  FB1 := (-2.0 * CosW0) * A0Inv;
-  FB2 := (1.0 - AAlpha) * A0Inv;
-end;
-
-procedure TSedaiFilter.CalculateBandPass(AW0, AAlpha: Single);
-var
-  CosW0, A0Inv: Single;
-begin
-  CosW0 := Cos(AW0);
-
-  // BPF: H(s) = s / (s^2 + s/Q + 1) (constant skirt gain)
-  A0Inv := 1.0 / (1.0 + AAlpha);
-
-  FA0 := AAlpha * A0Inv;
-  FA1 := 0.0;
-  FA2 := -AAlpha * A0Inv;
-  FB1 := (-2.0 * CosW0) * A0Inv;
-  FB2 := (1.0 - AAlpha) * A0Inv;
-end;
-
-procedure TSedaiFilter.CalculateNotch(AW0, AAlpha: Single);
-var
-  CosW0, A0Inv: Single;
-begin
-  CosW0 := Cos(AW0);
-
-  // Notch: H(s) = (s^2 + 1) / (s^2 + s/Q + 1)
-  A0Inv := 1.0 / (1.0 + AAlpha);
-
-  FA0 := 1.0 * A0Inv;
-  FA1 := (-2.0 * CosW0) * A0Inv;
-  FA2 := 1.0 * A0Inv;
-  FB1 := FA1;
-  FB2 := (1.0 - AAlpha) * A0Inv;
-end;
-
-procedure TSedaiFilter.CalculateAllPass(AW0, AAlpha: Single);
-var
-  CosW0, A0Inv: Single;
-begin
-  CosW0 := Cos(AW0);
-
-  // APF: H(s) = (s^2 - s/Q + 1) / (s^2 + s/Q + 1)
-  A0Inv := 1.0 / (1.0 + AAlpha);
-
-  FA0 := (1.0 - AAlpha) * A0Inv;
-  FA1 := (-2.0 * CosW0) * A0Inv;
-  FA2 := (1.0 + AAlpha) * A0Inv;
-  FB1 := FA1;
-  FB2 := FA0;
-end;
-
-procedure TSedaiFilter.CalculatePeaking(AW0, AAlpha, AGainLinear: Single);
-var
-  CosW0, A0Inv: Single;
-  AlphaA, AlphaOverA: Single;
-begin
-  CosW0 := Cos(AW0);
-  AlphaA := AAlpha * AGainLinear;
-  AlphaOverA := AAlpha / AGainLinear;
-
-  // Peaking EQ
-  A0Inv := 1.0 / (1.0 + AlphaOverA);
-
-  FA0 := (1.0 + AlphaA) * A0Inv;
-  FA1 := (-2.0 * CosW0) * A0Inv;
-  FA2 := (1.0 - AlphaA) * A0Inv;
-  FB1 := FA1;
-  FB2 := (1.0 - AlphaOverA) * A0Inv;
-end;
-
-function TSedaiFilter.ProcessBiquad(AInput: Single; AChannel: Integer;
-  var X1, X2, Y1, Y2: Single): Single;
-begin
-  // Direct Form I biquad
-  Result := FA0 * AInput + FA1 * X1 + FA2 * X2 - FB1 * Y1 - FB2 * Y2;
-
-  // Update state
   X2 := X1;
   X1 := AInput;
   Y2 := Y1;
-  Y1 := Result;
+  Y1 := Acc;
 
-  // Denormal prevention
-  if Abs(Result) < 1e-20 then
-    Result := 0.0;
+  Result := Acc;
 end;
 
 function TSedaiFilter.ProcessSIDFilter(AInput: Single): Single;
@@ -484,6 +423,7 @@ end;
 function TSedaiFilter.ProcessSample(AInput: Single; AChannel: Integer): Single;
 var
   Output: Single;
+  I: Integer;
 begin
   // SID mode uses state variable filter
   if FSIDMode then
@@ -492,26 +432,14 @@ begin
     Exit;
   end;
 
-  // Standard biquad processing
-  Output := ProcessBiquad(AInput, AChannel,
-    FX1[AChannel], FX2[AChannel], FY1[AChannel], FY2[AChannel]);
+  if (AChannel < 0) or (AChannel > 1) then AChannel := 0;
 
-  // Additional stages for higher slopes
-  case FSlope of
-    fs24dB:
-      Output := ProcessBiquad(Output, AChannel,
-        FX1_2[AChannel], FX2_2[AChannel], FY1_2[AChannel], FY2_2[AChannel]);
-
-    fs48dB:
-      begin
-        Output := ProcessBiquad(Output, AChannel,
-          FX1_2[AChannel], FX2_2[AChannel], FY1_2[AChannel], FY2_2[AChannel]);
-        Output := ProcessBiquad(Output, AChannel,
-          FX1_3[AChannel], FX2_3[AChannel], FY1_3[AChannel], FY2_3[AChannel]);
-        Output := ProcessBiquad(Output, AChannel,
-          FX1_4[AChannel], FX2_4[AChannel], FY1_4[AChannel], FY2_4[AChannel]);
-      end;
-  end;
+  // Cascade the active 2nd-order sections (1 / 2 / 4 for 12 / 24 / 48 dB).
+  Output := AInput;
+  for I := 0 to FStageCount - 1 do
+    Output := ProcessBiquad(Output, FCoeff[I],
+      FState[I, AChannel].X1, FState[I, AChannel].X2,
+      FState[I, AChannel].Y1, FState[I, AChannel].Y2);
 
   // Apply dry/wet mix
   Result := MixDryWet(AInput, Output);
