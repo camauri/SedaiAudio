@@ -172,6 +172,7 @@ implementation
 procedure ConfigureClassicVoice(AVoice: TSedaiVoice; const APreset: string);
 var
   P: string;
+  Trim: Single;
 begin
   AVoice.SetSourceType(vstOscillators);
   P := LowerCase(APreset);
@@ -185,23 +186,44 @@ begin
   AVoice.SetFilterResonance(0.2);
   AVoice.SetEnvelopeADSR(0, 0.01, 0.1, 0.7, 0.3);
 
+  // Per-preset output trim (gain staging): the raw classic voice peaked well
+  // over 1.0 on the richer waveforms (square/pulse 1.52, saw 1.38, lead 1.60,
+  // bass 1.80), pinning the master limiter. Trims = ~0.85/peak measured offline
+  // (saf_preset_levels, note A3, vel 0.9) -> ~0.85 peak ceiling. The mellow
+  // tones (sine/triangle/pad ~0.64 peak) keep their full level (Trim 1.0).
+  Trim := 0.62;   // base = saw level
+
   if P = 'sine' then
   begin
     AVoice.SetOscillatorWaveform(0, wtSine);
     AVoice.SetFilterCutoff(10000.0);
+    Trim := 1.0;
   end
   else if P = 'square' then
-    AVoice.SetOscillatorWaveform(0, wtSquare)
+  begin
+    AVoice.SetOscillatorWaveform(0, wtSquare);
+    Trim := 0.56;
+  end
   else if (P = 'saw') or (P = 'sawtooth') then
-    AVoice.SetOscillatorWaveform(0, wtSawtooth)
+  begin
+    AVoice.SetOscillatorWaveform(0, wtSawtooth);
+    Trim := 0.62;
+  end
   else if P = 'triangle' then
-    AVoice.SetOscillatorWaveform(0, wtTriangle)
+  begin
+    AVoice.SetOscillatorWaveform(0, wtTriangle);
+    Trim := 1.0;
+  end
   else if P = 'pulse' then
-    AVoice.SetOscillatorWaveform(0, wtPulse)
+  begin
+    AVoice.SetOscillatorWaveform(0, wtPulse);
+    Trim := 0.56;
+  end
   else if P = 'noise' then
   begin
     AVoice.SetOscillatorWaveform(0, wtNoise);
     AVoice.FilterEnabled := False;
+    Trim := 0.5;
   end
   else if P = 'lead' then
   begin
@@ -209,6 +231,7 @@ begin
     AVoice.SetFilterCutoff(2500.0);
     AVoice.SetFilterResonance(0.6);
     AVoice.SetEnvelopeADSR(0, 0.01, 0.1, 0.8, 0.2);
+    Trim := 0.53;
   end
   else if P = 'bass' then
   begin
@@ -216,13 +239,17 @@ begin
     AVoice.SetFilterCutoff(800.0);
     AVoice.SetFilterResonance(0.4);
     AVoice.SetEnvelopeADSR(0, 0.01, 0.2, 0.6, 0.15);
+    Trim := 0.47;
   end
   else if P = 'pad' then
   begin
     AVoice.SetOscillatorWaveform(0, wtTriangle);
     AVoice.SetFilterCutoff(1800.0);
     AVoice.SetEnvelopeADSR(0, 0.5, 0.5, 0.7, 1.0);
+    Trim := 1.0;
   end;
+
+  AVoice.OutputLevel := Trim;
 end;
 
 procedure ConfigureFMVoice(AVoice: TSedaiVoice; const APreset: string);
@@ -381,7 +408,7 @@ begin
   end
   else if (P = 'saw') or (P = 'sawtooth') then
   begin
-    AG.LoadPreset(apSaw); Trim := 0.5;
+    AG.LoadPreset(apSaw); Trim := 0.42;   // was 0.5: peaked 1.01
     AG.AmpEnvelope.AttackTime := 0.01; AG.AmpEnvelope.DecayTime := 0.1;
     AG.AmpEnvelope.SustainLevel := 0.8; AG.AmpEnvelope.ReleaseTime := 0.3;
   end
@@ -405,25 +432,25 @@ begin
   end
   else if P = 'bell' then
   begin
-    AG.LoadPreset(apBell); Trim := 0.6;
+    AG.LoadPreset(apBell); Trim := 0.50;   // was 0.6: peaked 1.01
     AG.AmpEnvelope.AttackTime := 0.001; AG.AmpEnvelope.DecayTime := 1.6;
     AG.AmpEnvelope.SustainLevel := 0.0; AG.AmpEnvelope.ReleaseTime := 0.8;
   end
   else if P = 'strings' then
   begin
-    AG.LoadPreset(apStrings); Trim := 0.5;
+    AG.LoadPreset(apStrings); Trim := 0.42;   // was 0.5: peaked 1.02
     AG.AmpEnvelope.AttackTime := 0.3; AG.AmpEnvelope.DecayTime := 0.2;
     AG.AmpEnvelope.SustainLevel := 0.85; AG.AmpEnvelope.ReleaseTime := 0.5;
   end
   else if P = 'choir' then
   begin
-    AG.LoadPreset(apChoir); Trim := 0.6;
+    AG.LoadPreset(apChoir); Trim := 0.37;   // was 0.6: peaked 1.37
     AG.AmpEnvelope.AttackTime := 0.25; AG.AmpEnvelope.DecayTime := 0.2;
     AG.AmpEnvelope.SustainLevel := 0.9; AG.AmpEnvelope.ReleaseTime := 0.5;
   end
   else if P = 'brass' then
   begin
-    AG.LoadPreset(apBrass); Trim := 0.5;
+    AG.LoadPreset(apBrass); Trim := 0.39;   // was 0.5: peaked 1.10
     AG.AmpEnvelope.AttackTime := 0.05; AG.AmpEnvelope.DecayTime := 0.1;
     AG.AmpEnvelope.SustainLevel := 0.85; AG.AmpEnvelope.ReleaseTime := 0.2;
   end
