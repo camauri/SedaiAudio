@@ -66,6 +66,7 @@ type
     // Processor
     FFilter: TSedaiFilter;
     FFilterEnabled: Boolean;
+    FFilterBaseCutoff: Single;      // Unmodulated cutoff; env/keytrack derive from this
     FFilterEnvelopeAmount: Single;  // How much envelope affects filter cutoff
     FFilterKeyTracking: Single;     // How much note pitch affects cutoff (0-1)
 
@@ -302,6 +303,7 @@ begin
   FFilter.FilterType := ftLowPass;
   FFilter.Cutoff := 5000.0;
   FFilter.Resonance := 0.2;
+  FFilterBaseCutoff := 5000.0;
   FFilterEnabled := True;
   FFilterEnvelopeAmount := 0.5;
   FFilterKeyTracking := 0.5;
@@ -639,10 +641,13 @@ begin
     end;
   end;
 
-  // Apply filter (shared across all source types)
+  // Apply filter (shared across all source types). The effective cutoff is
+  // derived each sample from the STABLE base cutoff (not the filter's current,
+  // already-modulated value) — otherwise the read-modify-write recursion makes
+  // the cutoff run away to the rails and the biquad self-oscillates.
   if FFilterEnabled then
   begin
-    FilterCutoff := FFilter.Cutoff;
+    FilterCutoff := FFilterBaseCutoff;
     FilterCutoff := FilterCutoff + (FilterCutoff * 4.0 * FilterEnv * FFilterEnvelopeAmount);
     FilterCutoff := FilterCutoff * Power(2.0, ((FNote - 60) / 12.0) * FFilterKeyTracking);
     if FilterCutoff < 20.0 then
@@ -787,6 +792,7 @@ end;
 
 procedure TSedaiVoice.SetFilterCutoff(ACutoff: Single);
 begin
+  FFilterBaseCutoff := ACutoff;
   FFilter.Cutoff := ACutoff;
 end;
 

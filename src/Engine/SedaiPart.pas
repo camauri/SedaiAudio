@@ -150,6 +150,7 @@ var
   Op: TSedaiFMOperator;
   P: string;
   I: Integer;
+  Trim: Single;
 begin
   AVoice.SetSourceType(vstFM);
   FM := AVoice.GetFMSynth;   // created on demand
@@ -161,8 +162,15 @@ begin
   for I := 0 to 5 do
     FM.GetOperator(I).Level := 0.0;
 
+  // Per-preset output trim (gain staging): the raw FM presets span ~0.17..2.9
+  // peak, which clips and pins the shared master limiter. Each Trim = roughly
+  // min(0.9/peak, 0.32/rms) measured offline (note 60, stable filter) → ~0.9
+  // peak ceiling, consistent RMS where the preset isn't peak-limited.
+  Trim := 1.0;
+
   if P = 'epiano' then
   begin
+    Trim := 0.72;
     FM.Algorithm := 5;
     FM.FeedbackLevel := 0.3;
     Op := FM.GetOperator(0);
@@ -174,6 +182,7 @@ begin
   end
   else if P = 'brass' then
   begin
+    Trim := 0.42;
     FM.Algorithm := 1;
     FM.FeedbackLevel := 0.5;
     Op := FM.GetOperator(0);
@@ -185,6 +194,7 @@ begin
   end
   else if P = 'bell' then
   begin
+    Trim := 0.47;
     FM.Algorithm := 1;
     FM.FeedbackLevel := 0.0;
     Op := FM.GetOperator(0);
@@ -196,6 +206,7 @@ begin
   end
   else if P = 'organ' then
   begin
+    Trim := 3.90;        // additive /6 → quiet; boosted back up
     FM.Algorithm := 32;  // all carriers (additive)
     FM.GetOperator(0).Ratio := 0.5; FM.GetOperator(0).Level := 0.6;
     FM.GetOperator(1).Ratio := 1.0; FM.GetOperator(1).Level := 0.8;
@@ -206,6 +217,7 @@ begin
   end
   else if P = 'bass' then
   begin
+    Trim := 0.31;
     FM.Algorithm := 1;
     FM.FeedbackLevel := 0.6;
     Op := FM.GetOperator(0);
@@ -217,17 +229,21 @@ begin
   end
   else  // default: simple 2-op FM
   begin
+    Trim := 0.36;
     FM.Algorithm := 1;
     FM.FeedbackLevel := 0.2;
     FM.GetOperator(0).Ratio := 1.0; FM.GetOperator(0).Level := 0.8;
     FM.GetOperator(1).Ratio := 2.0; FM.GetOperator(1).Level := 0.5;
   end;
+
+  AVoice.OutputLevel := Trim;
 end;
 
 procedure ConfigureWavetableVoice(AVoice: TSedaiVoice; const APreset: string);
 var
   WT: TSedaiWavetableGenerator;
   P: string;
+  Trim: Single;
 begin
   AVoice.SetSourceType(vstWavetable);
   WT := AVoice.GetWavetableGenerator;  // created on demand
@@ -235,10 +251,17 @@ begin
 
   P := LowerCase(APreset);
 
+  // Per-preset output trim (gain staging, same scheme as the FM presets).
+  Trim := 0.72;  // basic
+
   if P = 'pwm' then
-    WT.CreatePWMWavetable(64)
+  begin
+    Trim := 0.49;
+    WT.CreatePWMWavetable(64);
+  end
   else if P = 'supersaw' then
   begin
+    Trim := 0.66;
     WT.CreateSuperSawWavetable(32);
     WT.UnisonVoices := 7;
     WT.UnisonDetune := 20.0;
@@ -249,6 +272,7 @@ begin
 
   // Wavetable voices use the shared amp envelope for their lifecycle.
   AVoice.SetEnvelopeADSR(0, 0.01, 0.2, 0.7, 0.3);
+  AVoice.OutputLevel := Trim;
 end;
 
 // ============================================================================
