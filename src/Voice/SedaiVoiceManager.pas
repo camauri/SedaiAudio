@@ -341,8 +341,11 @@ var
   LowestPriority: Integer;
   BestVoice: Integer;
 begin
-  Result := -1;
-  BestVoice := 0;
+  // BestVoice stays -1 unless an actually-stealable voice is found. Returning -1
+  // makes NoteOn drop the note rather than cut a voice that refused to be stolen
+  // (e.g. one still in its attack) — the previous default of 0 silently stole
+  // voice 0 even when no voice was eligible.
+  BestVoice := -1;
 
   case FStealPolicy of
     vspOldest:
@@ -350,13 +353,12 @@ begin
         OldestAge := 0;
         for I := 0 to High(FVoices) do
         begin
-          if FVoices[I].CanSteal and (FVoices[I].Age > OldestAge) then
+          if FVoices[I].CanSteal and ((BestVoice < 0) or (FVoices[I].Age > OldestAge)) then
           begin
             OldestAge := FVoices[I].Age;
             BestVoice := I;
           end;
         end;
-        Result := BestVoice;
       end;
 
     vspQuietest:
@@ -364,13 +366,12 @@ begin
         QuietestLevel := 2.0;  // Above max
         for I := 0 to High(FVoices) do
         begin
-          if FVoices[I].CanSteal and (FVoices[I].GetCurrentLevel < QuietestLevel) then
+          if FVoices[I].CanSteal and ((BestVoice < 0) or (FVoices[I].GetCurrentLevel < QuietestLevel)) then
           begin
             QuietestLevel := FVoices[I].GetCurrentLevel;
             BestVoice := I;
           end;
         end;
-        Result := BestVoice;
       end;
 
     vspLowestPriority:
@@ -378,18 +379,19 @@ begin
         LowestPriority := MaxInt;
         for I := 0 to High(FVoices) do
         begin
-          if FVoices[I].CanSteal and (FVoices[I].StealPriority < LowestPriority) then
+          if FVoices[I].CanSteal and ((BestVoice < 0) or (FVoices[I].StealPriority < LowestPriority)) then
           begin
             LowestPriority := FVoices[I].StealPriority;
             BestVoice := I;
           end;
         end;
-        Result := BestVoice;
       end;
 
     vspNone:
-      Result := -1;  // No stealing
+      ;  // No stealing -> BestVoice stays -1
   end;
+
+  Result := BestVoice;
 end;
 
 function TSedaiVoiceManager.FindVoiceByNote(ANote: Byte): Integer;
@@ -680,14 +682,9 @@ begin
     end;
   end;
 
-  // Simple limiting to prevent clipping
-  for I := 0 to SampleCount - 1 do
-  begin
-    if AOutput[I] > 1.0 then
-      AOutput[I] := 1.0
-    else if AOutput[I] < -1.0 then
-      AOutput[I] := -1.0;
-  end;
+  // No hard clip here: the Part's voice sum is mixed and then limited cleanly by
+  // the master bus limiter downstream (TSedaiMasterBus, enabled by default).
+  // Clipping per-Part before the mix added a redundant harsh non-linearity.
 end;
 
 function TSedaiVoiceManager.GetVoice(AIndex: Integer): TSedaiVoice;
