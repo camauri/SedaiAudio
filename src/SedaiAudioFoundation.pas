@@ -127,7 +127,8 @@ type
     safClassic,       // Classic subtractive synthesis
     safFM,            // FM synthesis (DX7-style)
     safWavetable,     // Wavetable synthesis
-    safAdditive       // Additive synthesis (up to 64 harmonics)
+    safAdditive,      // Additive synthesis (up to 64 harmonics)
+    safKarplus        // Karplus-Strong plucked string
   );
 
   // Voice state
@@ -213,6 +214,15 @@ function PlayAdditiveAdv(AFreq: Single; const APreset: string = 'organ'): Intege
 procedure PlayAdditiveOrgan(AFreq: Single);
 procedure PlayAdditiveBell(AFreq: Single);
 procedure PlayAdditiveStrings(AFreq: Single);
+
+// ============================================================================
+// KARPLUS-STRONG (plucked string)
+// ============================================================================
+
+procedure PlayKarplus(AFreq: Single; const APreset: string = 'guitar');
+function PlayKarplusAdv(AFreq: Single; const APreset: string = 'guitar'): Integer;
+procedure PlayPluck(AFreq: Single);     // guitar
+procedure PlayKarplusBass(AFreq: Single);
 
 // ============================================================================
 // SAMPLE PLAYBACK (load a buffer or a WAV file and play it pitched)
@@ -852,6 +862,30 @@ begin
 end;
 
 // ============================================================================
+// KARPLUS-STRONG
+// ============================================================================
+
+function PlayKarplusAdv(AFreq: Single; const APreset: string): Integer;
+begin
+  Result := PlayOnPart(psKarplus, APreset, AFreq, 0.9);
+end;
+
+procedure PlayKarplus(AFreq: Single; const APreset: string);
+begin
+  PlayKarplusAdv(AFreq, APreset);
+end;
+
+procedure PlayPluck(AFreq: Single);
+begin
+  PlayKarplus(AFreq, 'guitar');
+end;
+
+procedure PlayKarplusBass(AFreq: Single);
+begin
+  PlayKarplus(AFreq, 'bass');
+end;
+
+// ============================================================================
 // SAMPLE PLAYBACK
 // ============================================================================
 
@@ -1192,6 +1226,7 @@ begin
     safFM:        Result := psFM;
     safWavetable: Result := psWavetable;
     safAdditive:  Result := psAdditive;
+    safKarplus:   Result := psKarplus;
   else
     Result := psClassic;
   end;

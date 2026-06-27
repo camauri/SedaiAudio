@@ -17,7 +17,7 @@ uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiSignalNode,
   SedaiOscillator, SedaiEnvelope, SedaiLFO, SedaiFilter,
   SedaiFMOperator, SedaiWavetableGenerator, SedaiAdditiveGenerator,
-  SedaiSamplePlayer, SedaiModulationMatrix;
+  SedaiSamplePlayer, SedaiKarplusGenerator, SedaiModulationMatrix;
 
 const
   MAX_OSCILLATORS = 3;
@@ -28,7 +28,8 @@ type
   // The signal source a voice generates from. A voice is "universal": it can be
   // a classic oscillator stack, an FM synth, or a wavetable generator. The rest
   // of the chain (envelopes, filter, amp, pan) is shared across all source types.
-  TVoiceSourceType = (vstOscillators, vstFM, vstWavetable, vstAdditive, vstSample);
+  TVoiceSourceType = (vstOscillators, vstFM, vstWavetable, vstAdditive, vstSample,
+    vstKarplus);
 
   // How the three oscillators combine in the vstOscillators source.
   TVoiceOscMode = (
@@ -48,6 +49,7 @@ type
     FWTGenerator: TSedaiWavetableGenerator;  // created on demand for vstWavetable
     FAdditive: TSedaiAdditiveGenerator;      // created on demand for vstAdditive
     FSamplePlayer: TSedaiSamplePlayer;       // created on demand for vstSample
+    FKarplus: TSedaiKarplusGenerator;        // created on demand for vstKarplus
     FNote: Byte;                  // MIDI note number
     FVelocity: Single;            // Note velocity (0.0 - 1.0)
     FGate: Boolean;               // Note gate (on/off)
@@ -222,6 +224,7 @@ type
     function GetWavetableGenerator: TSedaiWavetableGenerator;
     function GetAdditiveGenerator: TSedaiAdditiveGenerator;
     function GetSamplePlayer: TSedaiSamplePlayer;
+    function GetKarplusGenerator: TSedaiKarplusGenerator;
 
     // ========================================================================
     // MODULATION ROUTING (env / LFO / velocity / keytrack -> pitch / cutoff / amp)
@@ -299,6 +302,7 @@ begin
   FWTGenerator := nil;
   FAdditive := nil;
   FSamplePlayer := nil;
+  FKarplus := nil;
   FNote := 60;  // Middle C
   FVelocity := 1.0;
   FGate := False;
@@ -393,6 +397,7 @@ begin
   FWTGenerator.Free;    // nil-safe
   FAdditive.Free;       // nil-safe
   FSamplePlayer.Free;   // nil-safe (does not own the sample buffer)
+  FKarplus.Free;        // nil-safe
   FModMatrix.Free;
 
   inherited Destroy;
@@ -422,6 +427,7 @@ begin
   if Assigned(FWTGenerator) then FWTGenerator.Reset;
   if Assigned(FAdditive) then FAdditive.Kill;   // resets envelope + phases
   if Assigned(FSamplePlayer) then FSamplePlayer.Stop;
+  if Assigned(FKarplus) then FKarplus.Reset;
   FModMatrix.Reset;          // clears source/dest state, keeps the routings
   for I := 0 to High(FLFOValue) do
     FLFOValue[I] := 0.0;
@@ -590,6 +596,10 @@ begin
     FSamplePlayer.Play;
   end;
 
+  // Karplus-Strong: pluck the string at the current frequency.
+  if (FSourceType = vstKarplus) and Assigned(FKarplus) then
+    FKarplus.NoteOn(FCurrentFrequency, AVelocity);
+
   FState := vsAttack;
 end;
 
@@ -608,6 +618,9 @@ begin
 
   if (FSourceType = vstAdditive) and Assigned(FAdditive) then
     FAdditive.NoteOff;
+
+  if (FSourceType = vstKarplus) and Assigned(FKarplus) then
+    FKarplus.NoteOff;
 
   if FState <> vsIdle then
     FState := vsReleasing;
@@ -703,6 +716,17 @@ begin
       FSamplePlayer.SetSampleRate(FSampleRate);
   end;
   Result := FSamplePlayer;
+end;
+
+function TSedaiVoice.GetKarplusGenerator: TSedaiKarplusGenerator;
+begin
+  if not Assigned(FKarplus) then
+  begin
+    FKarplus := TSedaiKarplusGenerator.Create;
+    if FSampleRate > 0 then
+      FKarplus.SetSampleRate(FSampleRate);
+  end;
+  Result := FKarplus;
 end;
 
 function TSedaiVoice.AddModulation(ASource: TModSourceType; ADest: TModDestType;
@@ -863,6 +887,17 @@ begin
           SourceOut := 0.0;
         Finished := (not Assigned(FSamplePlayer)) or
                     (not FSamplePlayer.Playing) or FEnvelopes[0].IsFinished;
+      end;
+    vstKarplus:
+      begin
+        // Plucked string: self-decaying. Shaped by the shared amp envelope; the
+        // voice ends when the string rings out OR the envelope finishes.
+        if Assigned(FKarplus) then
+          SourceOut := FKarplus.GenerateSample
+        else
+          SourceOut := 0.0;
+        Finished := (not Assigned(FKarplus)) or
+                    (not FKarplus.IsRinging) or FEnvelopes[0].IsFinished;
       end;
   else
     // vstOscillators: 3-oscillator source (mix / ring-mod / sync)

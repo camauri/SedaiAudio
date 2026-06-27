@@ -21,13 +21,13 @@ interface
 uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer,
   SedaiOscillator, SedaiFilter, SedaiFMOperator, SedaiWavetableGenerator,
-  SedaiAdditiveGenerator, SedaiSamplePlayer,
+  SedaiAdditiveGenerator, SedaiSamplePlayer, SedaiKarplusGenerator,
   SedaiVoice, SedaiVoiceManager, SedaiModulationMatrix;
 
 type
   // Which generator the part's voices use. Mirrors TVoiceSourceType but is the
   // public, instrument-level selector exposed by the Part.
-  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample);
+  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample, psKarplus);
 
   // Stored per-Part modulation. Re-applied to every voice of the pool in
   // ApplyToVoice, so the whole instrument shares the same modulation and it
@@ -157,6 +157,7 @@ procedure ConfigureClassicVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureFMVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureWavetableVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureAdditiveVoice(AVoice: TSedaiVoice; const APreset: string);
+procedure ConfigureKarplusVoice(AVoice: TSedaiVoice; const APreset: string);
 
 // Build a generator-side wavetable (frames + mipmaps) from loaded data.
 // Returns nil if the data is not loaded. Caller owns the result.
@@ -442,6 +443,46 @@ begin
   AVoice.OutputLevel := Trim;
 end;
 
+procedure ConfigureKarplusVoice(AVoice: TSedaiVoice; const APreset: string);
+var
+  KS: TSedaiKarplusGenerator;
+  P: string;
+  Damping, Blend, Trim: Single;
+begin
+  AVoice.SetSourceType(vstKarplus);
+  KS := AVoice.GetKarplusGenerator;   // created on demand
+  if KS = nil then Exit;
+
+  P := LowerCase(APreset);
+
+  // Damping = sustain length; Blend = string (0.5) vs percussive (<0.5).
+  Damping := 0.996; Blend := 0.5; Trim := 0.9;   // guitar default
+  if P = 'bass' then
+  begin
+    Damping := 0.998; Blend := 0.5; Trim := 0.95;   // long, round
+  end
+  else if P = 'harp' then
+  begin
+    Damping := 0.9965; Blend := 0.5; Trim := 0.85;  // bright, singing
+  end
+  else if (P = 'mute') or (P = 'staccato') then
+  begin
+    Damping := 0.986; Blend := 0.5; Trim := 0.9;    // short, palm-muted
+  end
+  else if P = 'drum' then
+  begin
+    Damping := 0.96; Blend := 0.42; Trim := 0.9;    // percussive / drum-like
+  end;
+
+  KS.Damping := Damping;
+  KS.Blend := Blend;
+
+  // The string self-decays; the amp envelope just gates (instant attack, full
+  // sustain, short release so note-off fades it).
+  AVoice.SetEnvelopeADSR(0, 0.0, 0.0, 1.0, 0.15);
+  AVoice.OutputLevel := Trim;
+end;
+
 function BuildWavetableFromData(const AData: TWavetable): TSedaiWavetable;
 var
   I, TableSize: Integer;
@@ -515,6 +556,8 @@ begin
       ConfigureFMVoice(AVoice, FPreset);
     psAdditive:
       ConfigureAdditiveVoice(AVoice, FPreset);
+    psKarplus:
+      ConfigureKarplusVoice(AVoice, FPreset);
     psSample:
       if Assigned(FSampleData) then
       begin
