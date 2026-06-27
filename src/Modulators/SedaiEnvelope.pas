@@ -54,18 +54,8 @@ type
     // State
     FState: TEnvelopeState;
     FLevel: Single;               // Current envelope level
-    FTargetLevel: Single;         // Target level for current stage
-    FReleaseLevel: Single;        // Level when release started
-
-    // Internal coefficients (calculated from times)
-    FAttackCoeff: Single;
-    FDecayCoeff: Single;
-    FReleaseCoeff: Single;
-
-    // Curve parameters
-    FAttackTCO: Single;           // Time constant offset for attack curve
-    FDecayTCO: Single;            // Time constant offset for decay curve
-    FReleaseTCO: Single;          // Time constant offset for release curve
+    FStageProgress: Single;       // Progress through the current stage (0..1)
+    FStageStartLevel: Single;     // Level captured at the start of the stage
 
     // Mode options
     FRetrigger: Boolean;          // Reset level on retrigger
@@ -84,9 +74,6 @@ type
     procedure SetAttackCurve(AValue: TEnvelopeCurve);
     procedure SetDecayCurve(AValue: TEnvelopeCurve);
     procedure SetReleaseCurve(AValue: TEnvelopeCurve);
-
-    procedure CalculateCoefficients;
-    function CalculateCoeff(ATimeSeconds: Single; ATargetRatio: Single): Single;
 
     // Apply curve to linear progress
     function ApplyCurve(AProgress: Single; ACurve: TEnvelopeCurve; AIsDecay: Boolean): Single;
@@ -240,8 +227,8 @@ begin
   // State
   FState := esIdle;
   FLevel := 0.0;
-  FTargetLevel := 0.0;
-  FReleaseLevel := 0.0;
+  FStageProgress := 0.0;
+  FStageStartLevel := 0.0;
 
   // Mode
   FRetrigger := True;
@@ -252,13 +239,6 @@ begin
   FSIDRateCounter := 0;
   FSIDExponentialCounter := 0;
   FSIDADSRBits := 0;
-
-  // Time constant offsets for analog-style curves
-  FAttackTCO := 0.99999;
-  FDecayTCO := 0.36788;    // e^-1
-  FReleaseTCO := 0.36788;
-
-  CalculateCoefficients;
 end;
 
 procedure TSedaiEnvelope.Reset;
@@ -268,6 +248,8 @@ begin
   FState := esIdle;
   FLevel := 0.0;
   FOutput := 0.0;
+  FStageProgress := 0.0;
+  FStageStartLevel := 0.0;
   FSIDRateCounter := 0;
   FSIDExponentialCounter := 0;
 end;
@@ -280,7 +262,6 @@ begin
     AValue := 30.0;
 
   FAttackTime := AValue;
-  CalculateCoefficients;
 end;
 
 procedure TSedaiEnvelope.SetDecayTime(AValue: Single);
@@ -291,7 +272,6 @@ begin
     AValue := 30.0;
 
   FDecayTime := AValue;
-  CalculateCoefficients;
 end;
 
 procedure TSedaiEnvelope.SetSustainLevel(AValue: Single);
@@ -312,7 +292,6 @@ begin
     AValue := 30.0;
 
   FReleaseTime := AValue;
-  CalculateCoefficients;
 end;
 
 procedure TSedaiEnvelope.SetAttackCurve(AValue: TEnvelopeCurve);
@@ -328,25 +307,6 @@ end;
 procedure TSedaiEnvelope.SetReleaseCurve(AValue: TEnvelopeCurve);
 begin
   FReleaseCurve := AValue;
-end;
-
-procedure TSedaiEnvelope.CalculateCoefficients;
-begin
-  if FSampleRate > 0 then
-  begin
-    FAttackCoeff := CalculateCoeff(FAttackTime, FAttackTCO);
-    FDecayCoeff := CalculateCoeff(FDecayTime, FDecayTCO);
-    FReleaseCoeff := CalculateCoeff(FReleaseTime, FReleaseTCO);
-  end;
-end;
-
-function TSedaiEnvelope.CalculateCoeff(ATimeSeconds: Single; ATargetRatio: Single): Single;
-begin
-  // Calculate coefficient for exponential decay to reach target ratio in given time
-  if (ATimeSeconds > 0) and (FSampleRate > 0) then
-    Result := Exp(-Ln((1.0 + ATargetRatio) / ATargetRatio) / (ATimeSeconds * FSampleRate))
-  else
-    Result := 0.0;
 end;
 
 function TSedaiEnvelope.ApplyCurve(AProgress: Single; ACurve: TEnvelopeCurve;
@@ -476,9 +436,9 @@ end;
 
 function TSedaiEnvelope.Process: Single;
 var
-  Delta: Single;
+  Step, Curved: Single;
 begin
-  // SID mode uses different processing
+  // SID mode uses the cycle-accurate SID envelope (left untouched).
   if FSIDMode then
   begin
     FOutput := ProcessSIDEnvelope;
@@ -486,50 +446,72 @@ begin
     Exit;
   end;
 
-  // Standard envelope processing
+  // Progress-based ADSR: each stage advances a 0..1 phase over its own time and
+  // shapes it with the per-stage curve, so attack/decay/release take their real
+  // durations (the previous one-pole coefficient form collapsed to a near-step).
   case FState of
     esIdle:
       FLevel := 0.0;
 
     esAttack:
       begin
-        // Attack: rise from current level to 1.0
-        FLevel := FLevel + FAttackCoeff * (1.0 + FAttackTCO - FLevel);
-
-        if FLevel >= 1.0 then
+        if (FAttackTime > 0.0) and (FSampleRate > 0) then
+          Step := 1.0 / (FAttackTime * FSampleRate)
+        else
+          Step := 1.0;
+        FStageProgress := FStageProgress + Step;
+        if FStageProgress >= 1.0 then
         begin
           FLevel := 1.0;
+          FStageProgress := 0.0;
+          FStageStartLevel := 1.0;
           FState := esDecay;
+        end
+        else
+        begin
+          Curved := ApplyCurve(FStageProgress, FAttackCurve, False);
+          FLevel := FStageStartLevel + (1.0 - FStageStartLevel) * Curved;
         end;
       end;
 
     esDecay:
       begin
-        // Decay: fall from 1.0 to sustain level
-        FLevel := FLevel + FDecayCoeff * (FSustainLevel - FDecayTCO - FLevel);
-
-        if FLevel <= FSustainLevel then
+        if (FDecayTime > 0.0) and (FSampleRate > 0) then
+          Step := 1.0 / (FDecayTime * FSampleRate)
+        else
+          Step := 1.0;
+        FStageProgress := FStageProgress + Step;
+        if FStageProgress >= 1.0 then
         begin
           FLevel := FSustainLevel;
           FState := esSustain;
+        end
+        else
+        begin
+          Curved := ApplyCurve(FStageProgress, FDecayCurve, True);
+          FLevel := 1.0 + (FSustainLevel - 1.0) * Curved;
         end;
       end;
 
     esSustain:
-      begin
-        // Sustain: hold at sustain level
-        FLevel := FSustainLevel;
-      end;
+      FLevel := FSustainLevel;
 
     esRelease:
       begin
-        // Release: fall from release level to 0
-        FLevel := FLevel + FReleaseCoeff * (-FReleaseTCO - FLevel);
-
-        if FLevel <= 0.001 then
+        if (FReleaseTime > 0.0) and (FSampleRate > 0) then
+          Step := 1.0 / (FReleaseTime * FSampleRate)
+        else
+          Step := 1.0;
+        FStageProgress := FStageProgress + Step;
+        if FStageProgress >= 1.0 then
         begin
           FLevel := 0.0;
           FState := esIdle;
+        end
+        else
+        begin
+          Curved := ApplyCurve(FStageProgress, FReleaseCurve, True);
+          FLevel := FStageStartLevel * (1.0 - Curved);
         end;
       end;
   end;
@@ -548,12 +530,16 @@ procedure TSedaiEnvelope.Trigger;
 begin
   if FRetrigger or (FState = esIdle) then
   begin
-    // Start from zero or current level based on legato
-    if FLegato and (FLevel > 0) then
-      // Continue from current level
+    // Legato continues from the current level; otherwise restart from zero.
+    if FLegato and (FLevel > 0.0) then
+      FStageStartLevel := FLevel
     else
+    begin
       FLevel := 0.0;
+      FStageStartLevel := 0.0;
+    end;
 
+    FStageProgress := 0.0;
     FState := esAttack;
     FSIDRateCounter := 0;
     FSIDExponentialCounter := 0;
@@ -564,7 +550,8 @@ procedure TSedaiEnvelope.Release;
 begin
   if FState <> esIdle then
   begin
-    FReleaseLevel := FLevel;
+    FStageStartLevel := FLevel;   // release from wherever the level currently is
+    FStageProgress := 0.0;
     FState := esRelease;
     FSIDRateCounter := 0;
     FSIDExponentialCounter := 0;
@@ -574,7 +561,6 @@ end;
 procedure TSedaiEnvelope.ForceRelease(AReleaseTime: Single);
 begin
   FReleaseTime := AReleaseTime;
-  CalculateCoefficients;
   Release;
 end;
 
