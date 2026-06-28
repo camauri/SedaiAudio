@@ -50,5 +50,21 @@ released under the GPL:
 - **Julius O. Smith III** — band-limited resampling theory and `filterkit` (the
   Kaiser-windowed sinc FIR and the Bessel I0 function), on which the resampler is based.
 
-See the headers of `src/SID/SedaiSIDEvo.pas` and `src/Players/SedaiGoatTracker.pas` for the
-detailed per-component attribution.
+We likewise stand on the work of those who designed the **open audio formats** we decode.
+These decoders are implemented **clean-room from the public format specifications** (no
+upstream code vendored), so they are part of the dual-licensed code in section 1 — not
+derivative works — but the formats themselves are very much someone else's labour, and that
+deserves recognition:
+
+- **Josh Coalson** and the **Xiph.Org Foundation** — author and maintainers of **FLAC**
+  (Free Lossless Audio Codec) and its format specification, from which `SedaiFLACDecoder` is
+  implemented. Thank you for an open, meticulously documented lossless format — the clarity of
+  the spec is the reason a from-scratch decoder was even feasible.
+
+As OGG Vorbis and MP3 decoding are added, this recognition will extend to the Xiph.Org Vorbis
+authors and to the format / reference-decoder authors actually drawn upon (e.g. if a
+public-domain reference decoder such as stb_vorbis or minimp3 is ported rather than written
+from the spec, its author is credited here and in the unit header).
+
+See the headers of `src/SID/SedaiSIDEvo.pas`, `src/Players/SedaiGoatTracker.pas` and
+`src/FileIO/SedaiFLACDecoder.pas` for the detailed per-component attribution.

@@ -13,10 +13,13 @@
  * the original PCM; we then scale to float by 1/2^(bits-1) to match the
  * WAV/AIFF reader paths. Output is interleaved at the native channel count.
  *
- * Reference: FLAC format specification (xiph.org). No third-party code is
- * vendored; the algorithm is a clean-room implementation from the spec.
+ * Reference: the FLAC format specification (xiph.org), designed by Josh Coalson
+ * and maintained by the Xiph.Org Foundation. No third-party code is vendored;
+ * this is a clean-room implementation from the spec. Our thanks to the FLAC
+ * authors for an open, well-documented lossless format. See LICENSING.md.
  *
- * (c) 2024 Artiforge - Licensed under GPL-3.0
+ * (c) 2024 Artiforge - Licensed under GPL-3.0 OR Commercial (clean-room; not a
+ * derivative of any GPL'd decoder)
  *}
 unit SedaiFLACDecoder;
 
