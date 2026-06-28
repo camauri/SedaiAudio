@@ -26,7 +26,7 @@ Sedai Audio Foundation provides a comprehensive audio synthesis framework follow
 
 ### Key Features
 
-- **Synthesis Engines**: Classic/Subtractive, FM (DX7-style) and Wavetable are exposed through the high-level facade (`TSAFSynthType`); Additive (`SedaiAdditiveGenerator`) and SID Evo (`SedaiSIDEvo`) are available as standalone units
+- **Synthesis Engines**: a single *universal voice* (`TSedaiVoice`) can be any of six source types — Classic/Subtractive, FM (DX7-style), Wavetable, Additive, Sample (sampler) and Karplus-Strong (physical-modelling pluck) — all exposed through the high-level facade (`Play*` API) and the Part/Instrument engine; SID Evo (`SedaiSIDEvo`) is a standalone unit
 - **Professional Mixer**: Channels, aux buses, group buses, master bus with metering
 - **Audio Effects**: Delay, Reverb, Chorus, Flanger, Phaser, Distortion, Compressor, Limiter, EQ
 - **Advanced Filters**: 6 filter types, multi-pole cascading (12/24/48 dB/oct)
@@ -85,7 +85,9 @@ SDL2 is now used **only for audio hardware output**. All timing and threading is
 | **Classic/Subtractive** | Analog-style synthesis with oscillators, filters, LFO |
 | **FM (Frequency Modulation)** | DX7-style 6-operator FM synthesis |
 | **Wavetable** | Modern wavetable synthesis with morphing |
-| **Additive** | Harmonic spectrum synthesis |
+| **Additive** | Harmonic spectrum synthesis (up to 64 partials) |
+| **Sample** | Sampler playback (one-shot/looped, repitch, interpolation) |
+| **Karplus-Strong** | Physical-modelling plucked-string / percussion |
 | **SID Evo** | C64 SID-inspired with 12 waveforms (4 classic + 8 extended) |
 
 ### Tracker Formats
@@ -205,12 +207,15 @@ TSAFEngine
 ```
 
 - **`TSedaiVoice`** is a *universal* voice: a single voice can be an oscillator stack,
-  an FM synth, or a wavetable generator (`TVoiceSourceType`), with a shared envelope /
-  filter / amp / pan chain and a per-voice **modulation matrix** (`TSedaiModulationMatrix`)
-  routing envelopes / LFOs / velocity / key-track to pitch, cutoff and amplitude.
+  an FM synth, a wavetable generator, an additive generator, a sampler, or a
+  Karplus-Strong string (`TVoiceSourceType` — six source types), with a shared
+  envelope / filter / amp / pan chain and a per-voice **modulation matrix**
+  (`TSedaiModulationMatrix`) routing envelopes / LFOs (unlimited) / velocity / key-track
+  to pitch, cutoff and amplitude. Oscillators can be combined (mix / ring-mod / sync)
+  plus a sub-oscillator.
 - **`TSAFPart`** (`src/Engine/SedaiPart.pas`) is a monotimbral instrument: a
-  `TSedaiVoiceManager` pool configured from a preset (classic / FM / wavetable, or a
-  loaded wavetable table), rendered to a stereo buffer.
+  `TSedaiVoiceManager` pool configured from a preset (classic / FM / wavetable / additive /
+  karplus, a loaded wavetable table, or a loaded sample), rendered to a stereo buffer.
 - **`TSAFEngine`** (`src/Engine/SedaiEngine.pas`) hosts many Parts, one per mixer channel,
   summed through the `TSedaiMixer` master bus. The facade drives a global `TSAFEngine`;
   the audio backend runs in callback mode and pulls the engine render.
@@ -271,6 +276,7 @@ TSAFEngine
 | **SedaiSamplePlayer** | Sample playback (loop modes, pitch, interpolation) |
 | **SedaiFMOperator** | FM synthesis (6-operator DX7-style, algorithms) |
 | **SedaiAdditiveGenerator** | Additive synthesis (up to 64 harmonics, 10 presets) |
+| **SedaiKarplusGenerator** | Karplus-Strong physical modelling (plucked string / percussion) |
 
 #### Modulators
 
@@ -353,13 +359,13 @@ TSAFEngine
 
 ### Classic (Subtractive) Synthesis
 
-- Up to 3 oscillators per voice
-- 5 waveform types: Sine, Square, Sawtooth, Triangle, Noise
-- Subtractive filter with resonance
-- LFO modulation (pitch, filter, amplitude)
-- Per-oscillator ADSR envelopes
+- Up to 3 oscillators per voice (combinable: mix / ring-mod / sync, plus sub-oscillator)
+- 6 waveform types: Sine, Square, Sawtooth, Triangle, Pulse, Noise
+- Subtractive filter with resonance (12/24/48 dB, double-precision biquad, Butterworth cascade)
+- LFO modulation (pitch, filter, amplitude) via the per-voice modulation matrix
+- Shared ADSR envelope (4 real curve types)
 
-**Presets**: sine, square, saw, triangle, lead, bass, pad, strings, brass, organ, pluck, synthkeys, warmbass
+**Presets**: sine, square, saw, triangle, pulse, noise, lead, bass, pad
 
 ### FM Synthesis
 
@@ -454,6 +460,25 @@ begin
   Additive.Free;
 end.
 ```
+
+### Sample Playback
+
+A data-driven sampler source (`SedaiSamplePlayer`, `vstSample`): load a buffer with a
+root note and loop mode, then play it repitched across the keyboard.
+
+- One-shot and looped playback, interpolated repitch
+- Loaded from memory (`RegisterSample`) or a WAV file (`LoadSampleFile`)
+- Facade: `RegisterSample` / `LoadSampleFile` / `PlaySample` / `PlaySampleAdv`
+
+### Karplus-Strong (Physical Modelling)
+
+A plucked-string / percussion physical model (`SedaiKarplusGenerator`, `vstKarplus`):
+an excitation burst fed through a tuned delay line with an averaging low-pass feedback,
+with damping and blend controls and an energy follower for natural note endings.
+
+**Presets**: guitar, bass, harp, mute, drum
+
+- Facade: `PlayKarplus` / `PlayKarplusAdv` / `PlayPluck` (guitar) / `PlayKarplusBass`
 
 ### SID Evo Synthesis
 
@@ -977,6 +1002,7 @@ chmod +x build.sh
 | `sng_dump` | Per-frame SID register dump tool (for diagnostics / reference comparison) |
 | `audiotest` | Audio backend test |
 | `sedaisid_test` | SedaiSIDEvo verification / regression test |
+| `saf_regression` | Headless integrated render-path regression suite (engine→mixer→master, all 6 sources, signal-graph cycle detection) |
 
 ### Building a single target
 
@@ -1030,6 +1056,18 @@ emulator state (accumulators, envelopes, output) against a reference dump.
 
 ```bash
 ./sedaisid_test
+```
+
+### saf_regression
+
+Headless integrated regression suite for the synth/DAW engine — runs offline (no audio
+device, no prompts), rendering through the Part/Instrument engine and asserting invariants
+(engine→mixer→master path, all six voice source types, master-bus bounding, polyphony cap,
+signal-graph cycle detection). Exit code = number of failures (0 = all green), so it can be
+wired into CI alongside `sedaisid_test`.
+
+```bash
+./saf_regression
 ```
 
 ### sng_player
@@ -1318,9 +1356,9 @@ not global functions:
 | Metric | Value |
 |--------|-------|
 | **Total Lines** | ~30,000+ lines of Pascal code |
-| **Source Units** | 43+ units (.pas files) |
+| **Source Units** | 50+ units (.pas files) |
 | **Demo Programs** | 10+ programs (.lpr files) |
-| **Synthesis Engines** | 5 (Classic, FM, Wavetable, Additive, SID Evo) |
+| **Synthesis Engines** | 7 (Classic, FM, Wavetable, Additive, Sample, Karplus-Strong, SID Evo) |
 | **Audio Effects** | 9 (Delay, Reverb, Chorus, Flanger, Phaser, Distortion, Compressor, Limiter, EQ) |
 | **Filter Types** | 6 (LP, HP, BP, Notch, Allpass, Peaking) |
 | **Filter Slopes** | 3 (12dB, 24dB, 48dB per octave) |
@@ -1365,7 +1403,7 @@ The following synthesis techniques are planned for future versions:
 |-----------|-------------|------------|--------|
 | **IFFT Synthesis** | Inverse Fast Fourier Transform for spectral manipulation and resynthesis | Medium-High | Planned |
 | **Granular Synthesis** | Time-stretching and pitch-shifting through micro-sound grains | Medium | Planned |
-| **Physical Modeling** | Realistic instrument simulation using mathematical models of physical systems | High | Planned |
+| **Physical Modeling** | Realistic instrument simulation using mathematical models of physical systems | High | Karplus-Strong done; waveguides/excitation models planned |
 
 #### IFFT Synthesis - Implementation Details
 
@@ -1429,8 +1467,12 @@ Mathematical simulation of physical instrument behavior for realistic sounds.
 | **AIFF Support** | Pure-Pascal AIFF reader/writer | Medium |
 
 *Done since this list was written:* sample playback engine (`vstSample`, one-shot/looped with
-pitch), voice stealing (oldest/quietest/priority, drops a note when none is stealable), and extended
-anti-aliasing (PolyBLEP on saw/square/pulse/supersaw/PWM, PolyBLAMP on triangle).
+pitch), Karplus-Strong physical-modelling source (`vstKarplus`), voice stealing (oldest/quietest/
+priority, drops a note when none is stealable), extended anti-aliasing (PolyBLEP on saw/square/pulse/
+supersaw/PWM, PolyBLAMP on triangle), an ADSR envelope redesign (real per-stage curves), a
+double-precision biquad filter with Butterworth-cascade 24/48 dB slopes, unlimited LFOs + oscillator
+combine (mix/ring/sync) in the universal voice, per-preset gain staging, and a headless integrated
+regression suite (`saf_regression`).
 
 ### Medium-Term Features
 
