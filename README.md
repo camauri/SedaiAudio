@@ -804,9 +804,9 @@ The library includes professional audio file reading and writing capabilities.
 | **WAV PCM 32-bit** | ✓ | ✓ | Maximum PCM resolution |
 | **WAV Float 32-bit** | ✓ | ✓ | IEEE 754 floating point |
 | **WAV Float 64-bit** | ✓ | - | High-precision source files |
+| **AIFF / AIFC** | ✓ | Planned | Big-endian PCM 8/16/24/32-bit + AIFC `sowt` (LE) / `fl32` / `fl64` |
 | **OGG Vorbis** | Planned | Planned | - |
 | **FLAC** | Planned | Planned | - |
-| **AIFF** | Planned | - | - |
 | **MP3** | Planned | - | Decode only |
 
 ### Dithering Options
@@ -1464,15 +1464,16 @@ Mathematical simulation of physical instrument behavior for realistic sounds.
 | Feature | Description | Priority |
 |---------|-------------|----------|
 | **OGG/FLAC Decoding** | Add OGG Vorbis and FLAC decoders to file reader | Medium |
-| **AIFF Support** | Pure-Pascal AIFF reader/writer | Medium |
+| **AIFF Writing** | Pure-Pascal AIFF writer (reading already done) | Low |
 
 *Done since this list was written:* sample playback engine (`vstSample`, one-shot/looped with
 pitch), Karplus-Strong physical-modelling source (`vstKarplus`), voice stealing (oldest/quietest/
 priority, drops a note when none is stealable), extended anti-aliasing (PolyBLEP on saw/square/pulse/
 supersaw/PWM, PolyBLAMP on triangle), an ADSR envelope redesign (real per-stage curves), a
 double-precision biquad filter with Butterworth-cascade 24/48 dB slopes, unlimited LFOs + oscillator
-combine (mix/ring/sync) in the universal voice, per-preset gain staging, and a headless integrated
-regression suite (`saf_regression`).
+combine (mix/ring/sync) in the universal voice, per-preset gain staging, a headless integrated
+regression suite (`saf_regression`), and a pure-Pascal AIFF/AIFC **reader** (big-endian PCM 8/16/24/32
++ `sowt`/`fl32`/`fl64`).
 
 ### Medium-Term Features
 
@@ -1487,7 +1488,7 @@ regression suite (`saf_regression`).
 
 | Issue | Description | Workaround |
 |-------|-------------|------------|
-| **Limited Audio File Support** | Only WAV files supported currently | OGG/FLAC coming soon |
+| **Limited Audio File Support** | WAV (read/write) and AIFF/AIFC (read) supported; compressed formats pending | OGG/FLAC coming soon |
 | **Windows Focus** | Linux support may have minor issues | Report bugs |
 | **API Stability** | API may change in minor versions | Pin version for production |
 | **Documentation** | API documentation is embedded in source | Read unit interfaces |

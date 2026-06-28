@@ -18,10 +18,10 @@ program saf_regression;
 {$mode objfpc}{$H+}
 
 uses
-  SysUtils, Math,
+  SysUtils, Math, Classes,
   SedaiAudioTypes, SedaiAudioBuffer,
   SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine,
-  SedaiMixerChannel, SedaiSignalNode;
+  SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader;
 
 const
   SR    = 44100;
@@ -243,6 +243,81 @@ begin
   a.Free; b.Free; c.Free;
 end;
 
+procedure TestAIFFReader;
+const
+  // 80-bit IEEE-754 extended for 44100.0 (exp 0x400E, mantissa 0xAC44<<48).
+  RATE80: array[0..9] of Byte = ($40, $0E, $AC, $44, 0, 0, 0, 0, 0, 0);
+  FRAMES = 1024;
+
+  procedure WID(S: TStream; const ID: string);
+  var A: array[0..3] of AnsiChar;
+  begin A[0]:=ID[1]; A[1]:=ID[2]; A[2]:=ID[3]; A[3]:=ID[4]; S.WriteBuffer(A, 4); end;
+  procedure WBE32(S: TStream; V: LongWord); begin V := NtoBE(V); S.WriteBuffer(V, 4); end;
+  procedure WBE16(S: TStream; V: Word); begin V := NtoBE(V); S.WriteBuffer(V, 2); end;
+
+var
+  path: string;
+  fs: TFileStream;
+  rd: TSedaiAudioFileReader;
+  buf: TSedaiAudioBuffer;
+  i, dataBytes: Integer;
+  s, maxErr, expect: Single;
+  v16: SmallInt;
+  b: Byte;
+begin
+  // Write a real 16-bit big-endian AIFF to a temp file and read it back: the
+  // versioned guard for the pure-Pascal AIFF decoder (C2).
+  WriteLn('== AIFF reader round-trip (C2) ==');
+  path := GetTempDir(False) + 'saf_regr_test.aiff';
+  dataBytes := FRAMES * 2;
+  fs := TFileStream.Create(path, fmCreate);
+  try
+    WID(fs, 'FORM'); WBE32(fs, 4 + (8+18) + (8 + 8 + dataBytes)); WID(fs, 'AIFF');
+    WID(fs, 'COMM'); WBE32(fs, 18);
+    WBE16(fs, 1); WBE32(fs, FRAMES); WBE16(fs, 16); fs.WriteBuffer(RATE80, 10);
+    WID(fs, 'SSND'); WBE32(fs, 8 + dataBytes); WBE32(fs, 0); WBE32(fs, 0);
+    for i := 0 to FRAMES-1 do
+    begin
+      s := 0.6 * Sin(2*Pi*220.0*i/SR);
+      v16 := Round(s * 32767);
+      b := (v16 shr 8) and $FF; fs.WriteBuffer(b, 1);   // big-endian MSB first
+      b := v16 and $FF;         fs.WriteBuffer(b, 1);
+    end;
+  finally
+    fs.Free;
+  end;
+
+  rd := TSedaiAudioFileReader.Create;
+  try
+    Ok('detect AIFF', TSedaiAudioFileReader.DetectFileFormat(path) = affAIFF, '');
+    if rd.OpenFile(path) then
+    begin
+      Ok('header', (rd.Info.SampleRate = SR) and (rd.Info.Channels = 1) and
+                   (rd.Info.SampleCount = FRAMES),
+         Format('sr=%d ch=%d n=%d', [rd.Info.SampleRate, rd.Info.Channels, rd.Info.SampleCount]));
+      if rd.ReadAll(buf) then
+      begin
+        maxErr := 0;
+        for i := 0 to FRAMES-1 do
+        begin
+          expect := 0.6 * Sin(2*Pi*220.0*i/SR);
+          if Abs(buf.GetSample(0, i) - expect) > maxErr then
+            maxErr := Abs(buf.GetSample(0, i) - expect);
+        end;
+        Ok('sample fidelity', maxErr <= 1.0/16384.0, Format('maxErr=%.6f', [maxErr]));
+        buf.Free;
+      end
+      else
+        Ok('read all', False, rd.LastError);
+    end
+    else
+      Ok('open', False, rd.LastError);
+  finally
+    rd.Free;
+  end;
+  DeleteFile(path);
+end;
+
 // ---------------------------------------------------------------------------
 
 begin
@@ -255,6 +330,7 @@ begin
   TestMasterBounded;
   TestPolyphonyCap;
   TestSignalGraphCycles;
+  TestAIFFReader;
 
   WriteLn;
   if Failures = 0 then

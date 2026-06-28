@@ -1,8 +1,9 @@
 {*
  * Sedai Audio Foundation - Audio File Reader
  *
- * TSedaiAudioFileReader provides unified interface for reading
- * WAV, OGG Vorbis, and FLAC audio files.
+ * TSedaiAudioFileReader provides a unified interface for reading audio
+ * files. WAV (PCM/float) and AIFF/AIFC (big-endian PCM + sowt/fl32/fl64)
+ * are implemented; OGG Vorbis, FLAC and MP3 are planned.
  *
  * (c) 2024 Artiforge - Licensed under GPL-3.0
  *}
@@ -73,6 +74,12 @@ type
     FWAVBlockAlign: Word;
     FWAVBytesPerSample: Integer;
 
+    // AIFF specific
+    FAIFFDataOffset: Int64;          // byte offset of first sample frame
+    FAIFFBytesPerSample: Integer;
+    FAIFFLittleEndian: Boolean;      // AIFC 'sowt' stores PCM little-endian
+    FAIFFIsFloat: Boolean;           // AIFC 'fl32'/'fl64'
+
     // Internal buffers
     FDecodeBuffer: array of Byte;
     FConvertBuffer: array of Single;
@@ -80,9 +87,12 @@ type
     function DetectFormat(AStream: TStream): TAudioFileFormat;
     function OpenWAV: Boolean;
     function ReadWAVSamples(ABuffer: PSingle; AFrameCount: Integer): Integer;
+    function OpenAIFF: Boolean;
+    function ReadAIFFSamples(ABuffer: PSingle; AFrameCount: Integer): Integer;
 
     // Sample conversion
     procedure ConvertPCM8ToFloat(ASrc: PByte; ADst: PSingle; ACount: Integer);
+    procedure ConvertPCM8SignedToFloat(ASrc: PByte; ADst: PSingle; ACount: Integer);
     procedure ConvertPCM16ToFloat(ASrc: PSmallInt; ADst: PSingle; ACount: Integer);
     procedure ConvertPCM24ToFloat(ASrc: PByte; ADst: PSingle; ACount: Integer);
     procedure ConvertPCM32ToFloat(ASrc: PLongInt; ADst: PSingle; ACount: Integer);
@@ -136,6 +146,21 @@ type
     function ReadDWord: LongWord;
     function ReadWord: Word;
     function SkipBytes(ACount: Integer): Boolean;
+    function FindChunk(const AID: string; out ASize: LongWord): Boolean;
+  end;
+
+  { TSedaiAIFFChunkReader }
+  // Helper for reading AIFF/AIFC chunks (big-endian)
+  TSedaiAIFFChunkReader = class
+  private
+    FStream: TStream;
+  public
+    constructor Create(AStream: TStream);
+
+    function ReadChunkID: string;
+    function ReadDWord: LongWord;          // big-endian
+    function ReadWord: Word;               // big-endian
+    function ReadExtended: Double;         // 80-bit IEEE 754 extended (sample rate)
     function FindChunk(const AID: string; out ASize: LongWord): Boolean;
   end;
 
@@ -194,6 +219,89 @@ begin
     end;
 
     // Skip to next chunk (pad to even boundary)
+    if ChunkSize mod 2 = 1 then
+      Inc(ChunkSize);
+    FStream.Seek(ChunkSize, soCurrent);
+  end;
+end;
+
+{ TSedaiAIFFChunkReader }
+
+constructor TSedaiAIFFChunkReader.Create(AStream: TStream);
+begin
+  FStream := AStream;
+end;
+
+function TSedaiAIFFChunkReader.ReadChunkID: string;
+var
+  ID: array[0..3] of AnsiChar;
+begin
+  FStream.ReadBuffer(ID, 4);
+  Result := string(ID);
+end;
+
+function TSedaiAIFFChunkReader.ReadDWord: LongWord;
+begin
+  FStream.ReadBuffer(Result, 4);
+  // AIFF/AIFC is big-endian
+  Result := BEtoN(Result);
+end;
+
+function TSedaiAIFFChunkReader.ReadWord: Word;
+begin
+  FStream.ReadBuffer(Result, 2);
+  Result := BEtoN(Result);
+end;
+
+function TSedaiAIFFChunkReader.ReadExtended: Double;
+var
+  B: array[0..9] of Byte;
+  Sign, Exponent: Integer;
+  Mantissa: QWord;
+  I: Integer;
+begin
+  // 80-bit IEEE 754 extended precision, big-endian, with an explicit
+  // integer bit (bit 63 of the mantissa). Used by AIFF for the sample rate.
+  FStream.ReadBuffer(B, 10);
+  Sign := (B[0] and $80) shr 7;
+  Exponent := ((B[0] and $7F) shl 8) or B[1];
+  Mantissa := 0;
+  for I := 2 to 9 do
+    Mantissa := (Mantissa shl 8) or B[I];
+
+  if (Exponent = 0) and (Mantissa = 0) then
+    Result := 0.0
+  else if Exponent = $7FFF then
+    Result := 0.0   // Inf/NaN — not meaningful as a sample rate
+  else
+  begin
+    // value = mantissa * 2^(exponent - 16383 - 63)
+    Result := Ldexp(Mantissa, Exponent - 16383 - 63);
+    if Sign = 1 then
+      Result := -Result;
+  end;
+end;
+
+function TSedaiAIFFChunkReader.FindChunk(const AID: string; out ASize: LongWord): Boolean;
+var
+  ChunkID: string;
+  ChunkSize: LongWord;
+begin
+  Result := False;
+
+  while FStream.Position < FStream.Size - 8 do
+  begin
+    ChunkID := ReadChunkID;
+    ChunkSize := ReadDWord;
+
+    if ChunkID = AID then
+    begin
+      ASize := ChunkSize;
+      Result := True;
+      Exit;
+    end;
+
+    // Skip to next chunk (chunks are padded to an even byte boundary)
     if ChunkSize mod 2 = 1 then
       Inc(ChunkSize);
     FStream.Seek(ChunkSize, soCurrent);
@@ -425,6 +533,16 @@ begin
   end;
 end;
 
+procedure TSedaiAudioFileReader.ConvertPCM8SignedToFloat(ASrc: PByte; ADst: PSingle;
+  ACount: Integer);
+var
+  I: Integer;
+begin
+  for I := 0 to ACount - 1 do
+    // 8-bit AIFF PCM is signed two's-complement, 0 = silence
+    ADst[I] := ShortInt(ASrc[I]) / 128.0;
+end;
+
 procedure TSedaiAudioFileReader.ConvertPCM16ToFloat(ASrc: PSmallInt; ADst: PSingle;
   ACount: Integer);
 var
@@ -473,6 +591,177 @@ var
 begin
   for I := 0 to ACount - 1 do
     ADst[I] := ASrc[I];
+end;
+
+function TSedaiAudioFileReader.OpenAIFF: Boolean;
+var
+  Reader: TSedaiAIFFChunkReader;
+  FormType, CompType: string;
+  CommSize, SsndSize, SsndOffset, SsndBlockSize: LongWord;
+  SampleSize: Word;
+  NumFrames: LongWord;
+  SampleRate: Double;
+  IsAIFC: Boolean;
+begin
+  Result := False;
+  Reader := TSedaiAIFFChunkReader.Create(FStream);
+
+  try
+    // FORM header already validated; read the form type at offset 8.
+    FStream.Position := 8;
+    FormType := Reader.ReadChunkID;     // 'AIFF' or 'AIFC'
+    IsAIFC := (FormType = 'AIFC');
+    if (FormType <> 'AIFF') and (not IsAIFC) then
+    begin
+      FLastError := 'AIFF: unexpected FORM type ' + FormType;
+      Exit;
+    end;
+
+    // COMM chunk: channels, frame count, bit depth, sample rate (+ AIFC codec).
+    FStream.Position := 12;
+    if not Reader.FindChunk('COMM', CommSize) then
+    begin
+      FLastError := 'AIFF: COMM chunk not found';
+      Exit;
+    end;
+
+    FInfo.Channels := Reader.ReadWord;
+    NumFrames := Reader.ReadDWord;
+    SampleSize := Reader.ReadWord;
+    SampleRate := Reader.ReadExtended;
+    FInfo.SampleRate := Round(SampleRate);
+    FInfo.BitsPerSample := SampleSize;
+
+    FAIFFLittleEndian := False;
+    FAIFFIsFloat := False;
+
+    if IsAIFC then
+    begin
+      // compressionType follows the 18-byte standard COMM body.
+      CompType := Reader.ReadChunkID;
+      if (CompType = 'NONE') or (CompType = 'twos') then
+        // big-endian signed PCM (default)
+      else if CompType = 'sowt' then
+        FAIFFLittleEndian := True              // little-endian signed PCM
+      else if (CompType = 'fl32') or (CompType = 'FL32') then
+      begin
+        FAIFFIsFloat := True; FInfo.BitsPerSample := 32;
+      end
+      else if (CompType = 'fl64') or (CompType = 'FL64') then
+      begin
+        FAIFFIsFloat := True; FInfo.BitsPerSample := 64;
+      end
+      else
+      begin
+        FLastError := 'AIFF: unsupported compression "' + CompType + '"';
+        Exit;
+      end;
+    end;
+
+    FAIFFBytesPerSample := FInfo.BitsPerSample div 8;
+    if FAIFFBytesPerSample <= 0 then
+    begin
+      FLastError := 'AIFF: invalid sample size';
+      Exit;
+    end;
+    if (not FAIFFIsFloat) and (not (FInfo.BitsPerSample in [8, 16, 24, 32])) then
+    begin
+      FLastError := Format('AIFF: unsupported bit depth %d', [FInfo.BitsPerSample]);
+      Exit;
+    end;
+
+    // SSND chunk: sound data, preceded by offset + blockSize.
+    FStream.Position := 12;
+    if not Reader.FindChunk('SSND', SsndSize) then
+    begin
+      FLastError := 'AIFF: SSND chunk not found';
+      Exit;
+    end;
+    SsndOffset := Reader.ReadDWord;
+    SsndBlockSize := Reader.ReadDWord;
+    if SsndBlockSize = 0 then ;   // unused; silences hint, block-aligned data not supported
+    FAIFFDataOffset := FStream.Position + SsndOffset;
+
+    FInfo.SampleCount := NumFrames;
+    if FInfo.SampleRate > 0 then
+      FInfo.Duration := FInfo.SampleCount / FInfo.SampleRate
+    else
+      FInfo.Duration := 0;
+    FInfo.Format := affAIFF;
+    FInfo.Bitrate := FInfo.SampleRate * FInfo.Channels * FInfo.BitsPerSample;
+    FInfo.IsVBR := False;
+
+    FStream.Position := FAIFFDataOffset;
+    SetLength(FDecodeBuffer, 65536);
+    SetLength(FConvertBuffer, 32768);
+
+    Result := True;
+
+  finally
+    Reader.Free;
+  end;
+end;
+
+function TSedaiAudioFileReader.ReadAIFFSamples(ABuffer: PSingle;
+  AFrameCount: Integer): Integer;
+var
+  BytesToRead, BytesRead, SamplesToConvert, bps: Integer;
+  FramesRemaining: Int64;
+  I, J, Base: Integer;
+  Tmp: Byte;
+begin
+  Result := 0;
+
+  FramesRemaining := FInfo.SampleCount - FPosition;
+  if AFrameCount > FramesRemaining then
+    AFrameCount := FramesRemaining;
+  if AFrameCount <= 0 then
+    Exit;
+
+  bps := FAIFFBytesPerSample;
+  BytesToRead := AFrameCount * FInfo.Channels * bps;
+  if Length(FDecodeBuffer) < BytesToRead then
+    SetLength(FDecodeBuffer, BytesToRead);
+
+  BytesRead := FStream.Read(FDecodeBuffer[0], BytesToRead);
+  if BytesRead <= 0 then
+    Exit;
+
+  SamplesToConvert := BytesRead div bps;
+  Result := SamplesToConvert div FInfo.Channels;
+
+  // Byte-swap big-endian multi-byte samples to native little-endian so the
+  // existing native-endian converters can be reused. 'sowt' is already LE.
+  if (not FAIFFLittleEndian) and (bps > 1) then
+    for I := 0 to SamplesToConvert - 1 do
+    begin
+      Base := I * bps;
+      for J := 0 to (bps div 2) - 1 do
+      begin
+        Tmp := FDecodeBuffer[Base + J];
+        FDecodeBuffer[Base + J] := FDecodeBuffer[Base + bps - 1 - J];
+        FDecodeBuffer[Base + bps - 1 - J] := Tmp;
+      end;
+    end;
+
+  if FAIFFIsFloat then
+  begin
+    if bps = 4 then
+      ConvertFloat32ToFloat(@FDecodeBuffer[0], ABuffer, SamplesToConvert)
+    else if bps = 8 then
+      ConvertFloat64ToFloat(@FDecodeBuffer[0], ABuffer, SamplesToConvert);
+  end
+  else
+  begin
+    case FInfo.BitsPerSample of
+      8:  ConvertPCM8SignedToFloat(@FDecodeBuffer[0], ABuffer, SamplesToConvert);
+      16: ConvertPCM16ToFloat(@FDecodeBuffer[0], ABuffer, SamplesToConvert);
+      24: ConvertPCM24ToFloat(@FDecodeBuffer[0], ABuffer, SamplesToConvert);
+      32: ConvertPCM32ToFloat(@FDecodeBuffer[0], ABuffer, SamplesToConvert);
+    end;
+  end;
+
+  Inc(FPosition, Result);
 end;
 
 function TSedaiAudioFileReader.OpenFile(const AFileName: string): Boolean;
@@ -527,11 +816,7 @@ begin
         Result := False;
       end;
     affAIFF:
-      begin
-        // TODO: Implement AIFF decoding
-        FLastError := 'AIFF format not yet implemented';
-        Result := False;
-      end;
+      Result := OpenAIFF;
     affMP3:
       begin
         // TODO: Implement MP3 decoding
@@ -581,7 +866,8 @@ begin
   end;
 
   case FInfo.Format of
-    affWAV: Result := ReadWAVSamples(ABuffer, AFrameCount);
+    affWAV:  Result := ReadWAVSamples(ABuffer, AFrameCount);
+    affAIFF: Result := ReadAIFFSamples(ABuffer, AFrameCount);
   end;
 end;
 
@@ -649,6 +935,13 @@ begin
     affWAV:
       begin
         ByteOffset := FWAVDataOffset + ASamplePosition * FInfo.Channels * FWAVBytesPerSample;
+        FStream.Position := ByteOffset;
+        FPosition := ASamplePosition;
+        Result := True;
+      end;
+    affAIFF:
+      begin
+        ByteOffset := FAIFFDataOffset + ASamplePosition * FInfo.Channels * FAIFFBytesPerSample;
         FStream.Position := ByteOffset;
         FPosition := ASamplePosition;
         Result := True;
