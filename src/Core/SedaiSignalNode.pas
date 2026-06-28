@@ -328,53 +328,51 @@ begin
 end;
 
 function TSedaiSignalNode.ValidateConnections: Boolean;
+var
+  Visiting, Visited: TList;  // recursion stack (gray) / fully explored (black)
 
-  // Depth-first search for cycle detection
-  function HasCycle(ANode: TSedaiSignalNode; var Visiting, Visited: array of Boolean;
-                    NodeIndex: Integer): Boolean;
+  // Depth-first cycle detection over the real output graph, keyed by object
+  // identity. No global node registry is needed: every node holds its own
+  // FOutputs, so the sub-graph reachable from Self is fully traversable here.
+  // Returns True if a cycle is reachable from ANode via FOutputs.
+  function HasCycle(ANode: TSedaiSignalNode): Boolean;
   var
-    I, TargetIndex: Integer;
+    I: Integer;
   begin
     Result := False;
 
-    // Mark as currently visiting
-    Visiting[NodeIndex] := True;
-
-    // Check all outputs
-    for I := 0 to High(ANode.FOutputs) do
+    // A back edge into a node still on the recursion stack = cycle.
+    if Visiting.IndexOf(ANode) >= 0 then
     begin
-      // Get index of target node (simplified - assumes linear node list)
-      // In real implementation, would need a node registry
-      TargetIndex := I;  // Placeholder
-
-      if Visiting[TargetIndex] then
-      begin
-        // Found a back edge - cycle detected
-        Result := True;
-        Exit;
-      end;
-
-      if not Visited[TargetIndex] then
-      begin
-        if HasCycle(ANode.FOutputs[I], Visiting, Visited, TargetIndex) then
-        begin
-          Result := True;
-          Exit;
-        end;
-      end;
+      Result := True;
+      Exit;
     end;
 
-    // Mark as visited
-    Visiting[NodeIndex] := False;
-    Visited[NodeIndex] := True;
+    // Already fully explored from a previous branch — no cycle through here.
+    if Visited.IndexOf(ANode) >= 0 then
+      Exit;
+
+    Visiting.Add(ANode);
+    for I := 0 to High(ANode.FOutputs) do
+      if HasCycle(ANode.FOutputs[I]) then
+      begin
+        Result := True;
+        Break;
+      end;
+    Visiting.Remove(ANode);
+    Visited.Add(ANode);
   end;
 
 begin
-  // Simplified validation - just check we're not connected to ourselves
-  Result := not IsConnectedTo(Self);
-
-  // Full cycle detection would require a graph registry
-  // For now, trust that connections are made correctly
+  Visiting := TList.Create;
+  Visited := TList.Create;
+  try
+    // The graph is valid when no cycle is reachable from this node.
+    Result := not HasCycle(Self);
+  finally
+    Visiting.Free;
+    Visited.Free;
+  end;
 end;
 
 function TSedaiSignalNode.GetLatencyCompensation: Integer;
