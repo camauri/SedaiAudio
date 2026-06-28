@@ -169,6 +169,7 @@ if ($Help) {
     Write-Host "    sng_dump             SNG register dump tool (VICE format)"
     Write-Host "    audiotest            Audio backend test"
     Write-Host "    sedaisid_test        SedaiSIDEvo verification test"
+    Write-Host "    saf_regression       Headless integrated render-path regression suite"
     Write-Host ""
     Write-Host "EXAMPLES:" -ForegroundColor Yellow
     Write-Host "    .\build.ps1                           # Build all"
@@ -695,6 +696,12 @@ $allTargets = @{
         Source = 'sedaisid_test.lpr'
         SourceDir = (Join-Path $ProjectRoot 'test')
         Output = 'sedaisid_test.exe'
+        IsTest = $true
+    }
+    'saf_regression' = @{
+        Source = 'saf_regression.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'test')
+        Output = 'saf_regression.exe'
         IsTest = $true
     }
 }
