@@ -14,7 +14,8 @@ unit SedaiAudioFileReader;
 interface
 
 uses
-  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer;
+  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer,
+  SedaiAudioDecoder, SedaiFLACDecoder;
 
 type
   // Supported audio file formats
@@ -80,6 +81,10 @@ type
     FAIFFLittleEndian: Boolean;      // AIFC 'sowt' stores PCM little-endian
     FAIFFIsFloat: Boolean;           // AIFC 'fl32'/'fl64'
 
+    // Compressed formats (FLAC; MP3/OGG to follow) decode through a pluggable
+    // streaming decoder. nil for the uncompressed PCM paths.
+    FDecoder: TSedaiAudioDecoder;
+
     // Internal buffers
     FDecodeBuffer: array of Byte;
     FConvertBuffer: array of Single;
@@ -89,6 +94,7 @@ type
     function ReadWAVSamples(ABuffer: PSingle; AFrameCount: Integer): Integer;
     function OpenAIFF: Boolean;
     function ReadAIFFSamples(ABuffer: PSingle; AFrameCount: Integer): Integer;
+    function OpenFLAC: Boolean;
 
     // Sample conversion
     procedure ConvertPCM8ToFloat(ASrc: PByte; ADst: PSingle; ACount: Integer);
@@ -317,6 +323,7 @@ begin
   FIsOpen := False;
   FPosition := 0;
   FLastError := '';
+  FDecoder := nil;
 
   FillChar(FInfo, SizeOf(FInfo), 0);
 end;
@@ -764,6 +771,35 @@ begin
   Inc(FPosition, Result);
 end;
 
+function TSedaiAudioFileReader.OpenFLAC: Boolean;
+begin
+  Result := False;
+
+  // The decoder borrows FStream (already positioned/owned by this reader) and
+  // produces interleaved float frames at the native channel count.
+  FDecoder := TSedaiFLACDecoder.Create;
+  if not FDecoder.OpenStream(FStream) then
+  begin
+    FLastError := FDecoder.LastError;
+    FreeAndNil(FDecoder);
+    Exit;
+  end;
+
+  FInfo.SampleRate := FDecoder.SampleRate;
+  FInfo.Channels := FDecoder.Channels;
+  FInfo.BitsPerSample := FDecoder.BitsPerSample;
+  FInfo.SampleCount := FDecoder.TotalFrames;
+  if FInfo.SampleRate > 0 then
+    FInfo.Duration := FInfo.SampleCount / FInfo.SampleRate
+  else
+    FInfo.Duration := 0;
+  FInfo.Format := affFLAC;
+  FInfo.Bitrate := 0;            // VBR; not derived for compressed streams
+  FInfo.IsVBR := True;
+
+  Result := True;
+end;
+
 function TSedaiAudioFileReader.OpenFile(const AFileName: string): Boolean;
 var
   FS: TFileStream;
@@ -810,11 +846,7 @@ begin
         Result := False;
       end;
     affFLAC:
-      begin
-        // TODO: Implement FLAC decoding
-        FLastError := 'FLAC format not yet implemented';
-        Result := False;
-      end;
+      Result := OpenFLAC;
     affAIFF:
       Result := OpenAIFF;
     affMP3:
@@ -840,6 +872,8 @@ end;
 
 procedure TSedaiAudioFileReader.Close;
 begin
+  FreeAndNil(FDecoder);
+
   if Assigned(FStream) and FOwnsStream then
     FStream.Free;
 
@@ -868,6 +902,12 @@ begin
   case FInfo.Format of
     affWAV:  Result := ReadWAVSamples(ABuffer, AFrameCount);
     affAIFF: Result := ReadAIFFSamples(ABuffer, AFrameCount);
+    affFLAC:
+      if Assigned(FDecoder) then
+      begin
+        Result := FDecoder.ReadFrames(ABuffer, AFrameCount);
+        Inc(FPosition, Result);
+      end;
   end;
 end;
 
@@ -945,6 +985,13 @@ begin
         FStream.Position := ByteOffset;
         FPosition := ASamplePosition;
         Result := True;
+      end;
+    affFLAC:
+      if Assigned(FDecoder) then
+      begin
+        Result := FDecoder.Seek(ASamplePosition);
+        if Result then
+          FPosition := ASamplePosition;
       end;
   end;
 end;

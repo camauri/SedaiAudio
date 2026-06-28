@@ -33,7 +33,7 @@ Sedai Audio Foundation provides a comprehensive audio synthesis framework follow
 - **DAW Foundation**: Transport-driven render, audio + MIDI tracks (MIDI tracks play through a per-track instrument), clips, automation, audio recording, working undo/redo, and project save/load (native `.safproj` text format, with a format-dispatch seam for SMF / Dawproject / etc.)
 - **Real-time MIDI Playback**: Standard MIDI file support with 16-channel polyphony
 - **GoatTracker Player**: Native playback of GoatTracker v2 .sng files with full command support
-- **Audio File I/O**: WAV read/write (8/16/24/32-bit PCM, 32/64-bit float) with professional dithering
+- **Audio File I/O**: WAV read/write (8/16/24/32-bit PCM, 32/64-bit float) with professional dithering; AIFF/AIFC and FLAC read (pure-Pascal decoders)
 - **40+ Built-in Presets**: Ready-to-use sounds for all synthesis types
 - **Cross-Platform**: Works on Linux and Windows via SDL2
 
@@ -350,8 +350,9 @@ TSAFEngine
 
 | Module | Description |
 |--------|-------------|
-| **SedaiAudioFileReader** | Audio file loading (WAV PCM/Float) |
+| **SedaiAudioFileReader** | Audio file loading (WAV PCM/Float, AIFF/AIFC, FLAC) |
 | **SedaiAudioFileWriter** | Audio file export with dithering |
+| **SedaiFLACDecoder** | Pure-Pascal FLAC decoder (lossless, streaming) |
 
 ---
 
@@ -805,8 +806,8 @@ The library includes professional audio file reading and writing capabilities.
 | **WAV Float 32-bit** | ✓ | ✓ | IEEE 754 floating point |
 | **WAV Float 64-bit** | ✓ | - | High-precision source files |
 | **AIFF / AIFC** | ✓ | Planned | Big-endian PCM 8/16/24/32-bit + AIFC `sowt` (LE) / `fl32` / `fl64` |
+| **FLAC** | ✓ | Planned | Pure-Pascal decoder: STREAMINFO, FIXED/LPC subframes, partitioned Rice, all channel modes (8/16/24-bit) |
 | **OGG Vorbis** | Planned | Planned | - |
-| **FLAC** | Planned | Planned | - |
 | **MP3** | Planned | - | Decode only |
 
 ### Dithering Options
@@ -1463,7 +1464,7 @@ Mathematical simulation of physical instrument behavior for realistic sounds.
 
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| **OGG/FLAC Decoding** | Add OGG Vorbis and FLAC decoders to file reader | Medium |
+| **OGG/MP3 Decoding** | Add OGG Vorbis and MP3 decoders to file reader (FLAC done) | Medium |
 | **AIFF Writing** | Pure-Pascal AIFF writer (reading already done) | Low |
 
 *Done since this list was written:* sample playback engine (`vstSample`, one-shot/looped with
@@ -1472,8 +1473,9 @@ priority, drops a note when none is stealable), extended anti-aliasing (PolyBLEP
 supersaw/PWM, PolyBLAMP on triangle), an ADSR envelope redesign (real per-stage curves), a
 double-precision biquad filter with Butterworth-cascade 24/48 dB slopes, unlimited LFOs + oscillator
 combine (mix/ring/sync) in the universal voice, per-preset gain staging, a headless integrated
-regression suite (`saf_regression`), and a pure-Pascal AIFF/AIFC **reader** (big-endian PCM 8/16/24/32
-+ `sowt`/`fl32`/`fl64`).
+regression suite (`saf_regression`), a pure-Pascal AIFF/AIFC **reader** (big-endian PCM 8/16/24/32
++ `sowt`/`fl32`/`fl64`), and a pure-Pascal **FLAC decoder** (lossless, bit-exact vs WAV; FIXED/LPC
+subframes, partitioned Rice, all channel modes).
 
 ### Medium-Term Features
 
@@ -1488,7 +1490,7 @@ regression suite (`saf_regression`), and a pure-Pascal AIFF/AIFC **reader** (big
 
 | Issue | Description | Workaround |
 |-------|-------------|------------|
-| **Limited Audio File Support** | WAV (read/write) and AIFF/AIFC (read) supported; compressed formats pending | OGG/FLAC coming soon |
+| **Limited Audio File Support** | WAV (read/write), AIFF/AIFC (read) and FLAC (read) supported; OGG/MP3 pending | OGG/MP3 coming soon |
 | **Windows Focus** | Linux support may have minor issues | Report bugs |
 | **API Stability** | API may change in minor versions | Pin version for production |
 | **Documentation** | API documentation is embedded in source | Read unit interfaces |

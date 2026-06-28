@@ -318,6 +318,101 @@ begin
   DeleteFile(path);
 end;
 
+// Search upward from the executable for a committed 'data/fixtures' directory.
+function FindFixtures: string;
+var
+  dir, cand: string;
+  i: Integer;
+begin
+  Result := '';
+  dir := ExtractFilePath(ParamStr(0));
+  for i := 0 to 6 do
+  begin
+    cand := IncludeTrailingPathDelimiter(dir) + 'data' + PathDelim + 'fixtures';
+    if DirectoryExists(cand) then Exit(IncludeTrailingPathDelimiter(cand));
+    dir := ExtractFileDir(ExcludeTrailingPathDelimiter(dir));
+    if dir = '' then Break;
+  end;
+end;
+
+procedure TestFLACReader;
+const
+  SEEK_AT = 2000;
+var
+  fxDir, flacPath, wavPath: string;
+  rF, rW: TSedaiAudioFileReader;
+  bF, bW: TSedaiAudioBuffer;
+  i, ch, n, diffs: Integer;
+  fbuf: array[0..1] of Single;
+  okSeek: Boolean;
+begin
+  // C2 (compressed): pure-Pascal FLAC decoder must be lossless == its WAV
+  // oracle. 16/24-bit divide by the same power-of-two scale, so the float
+  // output is bit-identical sample-for-sample. Also exercises Seek.
+  WriteLn('== FLAC decoder vs WAV oracle (C2) ==');
+  fxDir := FindFixtures;
+  if fxDir = '' then
+  begin
+    Ok('fixtures present', False, 'data/fixtures not found');
+    Exit;
+  end;
+
+  // Bit-exact decode across mono 16, stereo 16 and stereo 24-bit.
+  bF := nil; bW := nil;
+  rF := TSedaiAudioFileReader.Create;
+  rW := TSedaiAudioFileReader.Create;
+  try
+    flacPath := fxDir + 'tone_s24_stereo.flac';
+    wavPath  := fxDir + 'tone_s24_stereo.wav';
+    Ok('detect FLAC', TSedaiAudioFileReader.DetectFileFormat(flacPath) = affFLAC, '');
+    if rF.OpenFile(flacPath) and rW.OpenFile(wavPath) then
+    begin
+      Ok('header', (rF.Info.SampleRate = rW.Info.SampleRate) and
+                   (rF.Info.Channels = rW.Info.Channels) and
+                   (rF.Info.SampleCount = rW.Info.SampleCount),
+         Format('sr=%d ch=%d n=%d', [rF.Info.SampleRate, rF.Info.Channels, rF.Info.SampleCount]));
+      if rF.ReadAll(bF) and rW.ReadAll(bW) then
+      begin
+        n := bW.SampleCount; diffs := 0;
+        for i := 0 to n - 1 do
+          for ch := 0 to bW.Channels - 1 do
+            if bF.GetSample(ch, i) <> bW.GetSample(ch, i) then Inc(diffs);
+        Ok('24-bit bit-exact', diffs = 0, Format('%d/%d differ', [diffs, n * bW.Channels]));
+      end
+      else
+        Ok('read all', False, rF.LastError + ' / ' + rW.LastError);
+    end
+    else
+      Ok('open', False, rF.LastError + ' / ' + rW.LastError);
+  finally
+    bF.Free; bW.Free; rF.Free; rW.Free;
+  end;
+
+  // Seek: land on an absolute frame and match the WAV at that frame.
+  bW := nil;
+  rF := TSedaiAudioFileReader.Create;
+  rW := TSedaiAudioFileReader.Create;
+  try
+    if rF.OpenFile(fxDir + 'tone_s16_stereo.flac') and
+       rW.OpenFile(fxDir + 'tone_s16_stereo.wav') and rW.ReadAll(bW) then
+    begin
+      okSeek := rF.Seek(SEEK_AT);
+      Ok('seek ok', okSeek, '');
+      if okSeek and (rF.ReadSamples(@fbuf[0], 1) = 1) then
+        Ok('seek lands bit-exact',
+           (fbuf[0] = bW.GetSample(0, SEEK_AT)) and (fbuf[1] = bW.GetSample(1, SEEK_AT)),
+           Format('flac=(%.6f,%.6f) wav=(%.6f,%.6f)',
+             [fbuf[0], fbuf[1], bW.GetSample(0, SEEK_AT), bW.GetSample(1, SEEK_AT)]))
+      else
+        Ok('seek read', False, '');
+    end
+    else
+      Ok('open for seek', False, rF.LastError);
+  finally
+    bW.Free; rF.Free; rW.Free;
+  end;
+end;
+
 // ---------------------------------------------------------------------------
 
 begin
@@ -331,6 +426,7 @@ begin
   TestPolyphonyCap;
   TestSignalGraphCycles;
   TestAIFFReader;
+  TestFLACReader;
 
   WriteLn;
   if Failures = 0 then
