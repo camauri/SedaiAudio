@@ -210,6 +210,8 @@ type
       AVectors: array of PSingle; AHalf: Integer);
     procedure IMDCT(const ACosTab: array of Single; AInput, AOutput: PSingle; AN: Integer);
     function DecodeAudioPacket(const APacket: TVorbisPacket): Boolean;
+    procedure ScanTotalFrames;             // find the last page granulepos (= total frames)
+    procedure RestartAtAudio;              // rewind + skip the 3 headers, reset decode state
   public
     function OpenStream(AStream: TStream): Boolean; override;
     function ReadFrames(ABuffer: PSingle; AFrameCount: Integer): Integer; override;
@@ -1300,7 +1302,8 @@ begin
   FOutHead := 0;
   FOutLen := 0;
   FDecodeEOS := False;
-  FFinalGranule := -1;
+  // The total length is known from the tail scan, so the trim cap is always set.
+  if FTotalFrames > 0 then FFinalGranule := FTotalFrames else FFinalGranule := -1;
   FAudioStarted := True;
 end;
 
@@ -1794,6 +1797,66 @@ begin
   end;
 end;
 
+// Find the total sample-frame count by reading the last Ogg page's granulepos
+// (scan the tail of the stream for the final "OggS" of our serial). Transparent
+// to the packet reader: it saves and restores the stream position.
+procedure TSedaiVorbisDecoder.ScanTotalFrames;
+var
+  savePos, fileEnd, bufStart: Int64;
+  buf: array of Byte;
+  readLen, i: Integer;
+  gran: Int64;
+begin
+  savePos := FStream.Position;
+  fileEnd := FStream.Size;
+  readLen := 65536;
+  if readLen > fileEnd - FStreamStart then readLen := Integer(fileEnd - FStreamStart);
+  if readLen < 27 then Exit;
+  bufStart := fileEnd - readLen;
+  FStream.Position := bufStart;
+  SetLength(buf, readLen);
+  if FStream.Read(buf[0], readLen) <> readLen then
+  begin
+    FStream.Position := savePos;
+    Exit;
+  end;
+  // Scan downward for the last page header of our logical bitstream.
+  gran := -1;
+  for i := readLen - 27 downto 0 do
+    if (buf[i] = Ord('O')) and (buf[i+1] = Ord('g')) and
+       (buf[i+2] = Ord('g')) and (buf[i+3] = Ord('S')) and (buf[i+4] = 0) then
+      if ReadU32LE(buf, i + 14) = FSerial then
+      begin
+        gran := Int64(ReadU32LE(buf, i + 6)) or (Int64(ReadU32LE(buf, i + 10)) shl 32);
+        Break;
+      end;
+  FStream.Position := savePos;
+  if gran >= 0 then FTotalFrames := gran;
+end;
+
+// Rewind to the start of paging and re-consume the three header packets so the
+// page/packet reader is positioned at the first audio packet; reset the decode
+// and overlap-add state. Used by Seek.
+procedure TSedaiVorbisDecoder.RestartAtAudio;
+var
+  pkt: TVorbisPacket;
+begin
+  FStream.Position := FStreamStart;
+  FExhausted := False;
+  FSegCount := 0; FSegIdx := 0; FBodyPos := 0;
+  SetLength(FPageBody, 0);
+  SetLength(FSegTable, 0);
+  ReadPacket(pkt);   // identification
+  ReadPacket(pkt);   // comment
+  ReadPacket(pkt);   // setup
+  FFirstAudio := True;
+  FPrevTailLen := 0;
+  FOutHead := 0;
+  FOutLen := 0;
+  FDecodeEOS := False;
+  FPosition := 0;
+end;
+
 function TSedaiVorbisDecoder.OpenStream(AStream: TStream): Boolean;
 var
   pkt: TVorbisPacket;
@@ -1805,8 +1868,8 @@ begin
   FSegCount := 0; FSegIdx := 0; FBodyPos := 0;
   FStreamStart := AStream.Position;
   FPosition := 0;
-  FSeekable := False;   // seeking arrives with audio decode
-  FTotalFrames := 0;    // unknown until we scan the last page (later)
+  FSeekable := False;
+  FTotalFrames := 0;
 
   // Header packet 1: identification.
   if not ReadPacket(pkt) then begin FLastError := 'Vorbis: no identification packet'; Exit; end;
@@ -1828,9 +1891,13 @@ begin
   if pkt.Len > 0 then
     Move(pkt.Data[0], FSetupPacket[0], pkt.Len);
 
-  // Parse the setup header (codebooks/floors/residues/mappings/modes). Audio
-  // decode (floor/residue/IMDCT/overlap-add) is the next stage.
+  // Parse the setup header (codebooks/floors/residues/mappings/modes).
   if not ParseSetup then Exit;
+
+  // Find the total length from the last page's granulepos (cheap tail scan), so
+  // SampleCount/Duration are known and seeking is enabled.
+  ScanTotalFrames;
+  FSeekable := FTotalFrames > 0;
 
   Result := True;
 end;
@@ -1887,9 +1954,35 @@ begin
 end;
 
 function TSedaiVorbisDecoder.Seek(AFrame: Int64): Boolean;
+var
+  scratch: array of Single;
+  chunk, want, got: Integer;
 begin
+  // Linear decode-discard seek: restart the bitstream at the first audio packet
+  // and decode forward, dropping samples, until the target frame is reached.
+  // (Sample-accurate; a granulepos bisection fast-path is a later optimisation.)
   Result := False;
-  FLastError := 'Vorbis: seek not yet implemented';
+  if AFrame < 0 then AFrame := 0;
+  if (FTotalFrames > 0) and (AFrame > FTotalFrames) then
+  begin
+    FLastError := 'Vorbis: seek past end';
+    Exit;
+  end;
+  if not FAudioStarted then InitAudioDecode;
+
+  RestartAtAudio;
+  if AFrame = 0 then Exit(True);
+
+  chunk := 4096;
+  SetLength(scratch, chunk * FChannels);
+  while FPosition < AFrame do
+  begin
+    want := chunk;
+    if AFrame - FPosition < want then want := Integer(AFrame - FPosition);
+    got := ReadFrames(@scratch[0], want);
+    if got = 0 then Break;   // hit EOF before the target
+  end;
+  Result := FPosition >= AFrame;
 end;
 
 function TSedaiVorbisDecoder.CountRemainingPackets(out ALastGranule: Int64): Integer;

@@ -494,12 +494,15 @@ begin
 end;
 
 procedure TestVorbisReader;
+const
+  SEEK_AT = 3000;
 var
   fxDir, oggPath, wavPath: string;
   rO, rW: TSedaiAudioFileReader;
   bO, bW: TSedaiAudioBuffer;
   i, n: Integer;
   dr, dd, rr, corr: Double;
+  sbuf: array[0..1] of Single;
 begin
   // OGG Vorbis is lossy: compare the pure-Pascal decoder against its WAV oracle
   // with a tolerance (normalized cross-correlation + length within one long
@@ -544,6 +547,28 @@ begin
       Ok('open', False, rO.LastError + ' / ' + rW.LastError);
   finally
     bO.Free; bW.Free; rO.Free; rW.Free;
+  end;
+
+  // Seek: a linear decode-discard seek must reproduce the full-decode samples
+  // exactly (same decode path), so seek-then-read is bit-identical to ReadAll.
+  bO := nil;
+  rO := TSedaiAudioFileReader.Create;
+  rW := TSedaiAudioFileReader.Create;
+  try
+    if rW.OpenFile(oggPath) and rW.ReadAll(bO) and rO.OpenFile(oggPath) then
+    begin
+      if rO.Seek(SEEK_AT) and (rO.ReadSamples(@sbuf[0], 1) = 1) then
+        Ok('seek lands bit-exact',
+           (sbuf[0] = bO.GetSample(0, SEEK_AT)) and (sbuf[1] = bO.GetSample(1, SEEK_AT)),
+           Format('seek=(%.6f,%.6f) full=(%.6f,%.6f)',
+             [sbuf[0], sbuf[1], bO.GetSample(0, SEEK_AT), bO.GetSample(1, SEEK_AT)]))
+      else
+        Ok('seek + read', False, rO.LastError);
+    end
+    else
+      Ok('open for seek', False, rO.LastError + ' / ' + rW.LastError);
+  finally
+    bO.Free; rO.Free; rW.Free;
   end;
 end;
 
