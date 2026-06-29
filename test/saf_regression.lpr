@@ -21,7 +21,7 @@ uses
   SysUtils, Math, Classes,
   SedaiAudioTypes, SedaiAudioBuffer,
   SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine,
-  SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader;
+  SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter;
 
 const
   SR    = 44100;
@@ -318,6 +318,86 @@ begin
   DeleteFile(path);
 end;
 
+procedure TestAIFFWriter;
+const
+  FRAMES = 1500;   // odd*even mix; exercises the SSND even-boundary pad
+var
+  src, bA, bW: TSedaiAudioBuffer;
+  arr: array of Single;
+  aifPath, wavPath: string;
+  i, ch, diffs: Integer;
+
+  function WriteFmt(const APath: string; AFmt: TAudioExportFormat): Boolean;
+  var
+    w: TSedaiAudioFileWriter;
+    st: TAudioExportSettings;
+  begin
+    st := TSedaiAudioFileWriter.GetDefaultSettings(AFmt);
+    st.SampleRate := SR; st.Channels := 2;
+    st.DitherType := dtNone;   // deterministic: identical PCM on both paths
+    w := TSedaiAudioFileWriter.Create;
+    try
+      Result := w.CreateFile(APath, st) and w.WriteBuffer(src);
+      w.Close;
+    finally
+      w.Free;
+    end;
+  end;
+
+  function ReadBack(const APath: string; out ABuf: TSedaiAudioBuffer): Boolean;
+  var rd: TSedaiAudioFileReader;
+  begin
+    ABuf := nil;
+    rd := TSedaiAudioFileReader.Create;
+    try
+      Result := rd.OpenFile(APath) and rd.ReadAll(ABuf) and (ABuf <> nil);
+    finally
+      rd.Free;
+    end;
+  end;
+
+begin
+  // Residual #1: the AIFF *writer* (big-endian PCM) must round-trip through the
+  // proven reader bit-exactly against the WAV path (same PCM converters, only
+  // byte order differs). 24-bit stereo covers the multi-byte swap + pad.
+  WriteLn('== AIFF writer vs WAV oracle (residual #1) ==');
+  SetLength(arr, FRAMES * 2);
+  for i := 0 to FRAMES - 1 do
+  begin
+    arr[i*2]   := 0.55 * Sin(2*Pi*180.0*i/SR) + 0.25 * Sin(2*Pi*901.0*i/SR);
+    arr[i*2+1] := 0.50 * Sin(2*Pi*227.0*i/SR) - 0.20 * Sin(2*Pi*640.0*i/SR);
+  end;
+  src := TSedaiAudioBuffer.Create;
+  src.SetFormat(SR, 2);
+  src.SetSize(FRAMES);
+  src.WriteInterleaved(@arr[0], 0, FRAMES);
+
+  aifPath := GetTempDir(False) + 'saf_regr_w.aiff';
+  wavPath := GetTempDir(False) + 'saf_regr_w.wav';
+
+  bA := nil; bW := nil;
+  try
+    Ok('write AIFF 24', WriteFmt(aifPath, aefAIFF24), '');
+    Ok('write WAV 24',  WriteFmt(wavPath, aefWAV24), '');
+    Ok('detect AIFF', TSedaiAudioFileReader.DetectFileFormat(aifPath) = affAIFF, '');
+    if ReadBack(aifPath, bA) and ReadBack(wavPath, bW) then
+    begin
+      Ok('frame count', (bA.SampleCount = FRAMES) and (bW.SampleCount = FRAMES),
+         Format('aiff=%d wav=%d', [bA.SampleCount, bW.SampleCount]));
+      diffs := 0;
+      for i := 0 to FRAMES - 1 do
+        for ch := 0 to 1 do
+          if bA.GetSample(ch, i) <> bW.GetSample(ch, i) then Inc(diffs);
+      Ok('AIFF == WAV bit-exact', diffs = 0, Format('%d/%d differ', [diffs, FRAMES*2]));
+    end
+    else
+      Ok('read back', False, '');
+  finally
+    bA.Free; bW.Free; src.Free;
+    DeleteFile(aifPath); DeleteFile(wavPath);
+  end;
+end;
+
 // Search upward from the executable for a committed 'data/fixtures' directory.
 function FindFixtures: string;
 var
@@ -426,6 +506,7 @@ begin
   TestPolyphonyCap;
   TestSignalGraphCycles;
   TestAIFFReader;
+  TestAIFFWriter;
   TestFLACReader;
 
   WriteLn;

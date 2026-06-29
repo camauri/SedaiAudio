@@ -2,7 +2,9 @@
  * Sedai Audio Foundation - Audio File Writer
  *
  * TSedaiAudioFileWriter provides unified interface for writing
- * WAV, OGG Vorbis, and FLAC audio files.
+ * WAV and AIFF audio files (OGG Vorbis and FLAC encoding are not yet
+ * implemented). AIFF is written as big-endian PCM (16/24/32-bit) with an
+ * 80-bit IEEE 754 extended sample rate, the exact inverse of the AIFF reader.
  *
  * (c) 2024 Artiforge - Licensed under GPL-3.0
  *}
@@ -23,7 +25,10 @@ type
     aefWAV32,         // WAV 32-bit PCM
     aefWAVFloat,      // WAV 32-bit IEEE Float
     aefOGG,           // OGG Vorbis
-    aefFLAC           // FLAC
+    aefFLAC,          // FLAC
+    aefAIFF16,        // AIFF 16-bit PCM (big-endian)
+    aefAIFF24,        // AIFF 24-bit PCM (big-endian)
+    aefAIFF32         // AIFF 32-bit PCM (big-endian)
   );
 
   // Dithering type
@@ -72,6 +77,10 @@ type
     FWAVDataOffset: Int64;
     FWAVDataSize: Int64;
 
+    // AIFF specific (stream offsets of placeholder fields, patched on close)
+    FAIFFCommFramesOffset: Int64;    // numSampleFrames in the COMM chunk
+    FAIFFSsndSizeOffset: Int64;      // chunk-size field of the SSND chunk
+
     // Dithering state
     FDitherState: array[0..1] of Single;
     FNoiseShapeBuffer: array[0..1] of Single;
@@ -87,6 +96,14 @@ type
     procedure WriteWAVHeader;
     procedure FinalizeWAV;
     function WriteWAVSamples(ABuffer: PSingle; AFrameCount: Integer): Boolean;
+
+    // AIFF writing (big-endian)
+    procedure WriteBEWord(AValue: Word);
+    procedure WriteBEDWord(AValue: LongWord);
+    procedure WriteAIFFExtended(AValue: Double);
+    procedure WriteAIFFHeader;
+    procedure FinalizeAIFF;
+    function WriteAIFFSamples(ABuffer: PSingle; AFrameCount: Integer): Boolean;
 
     // Sample conversion with dithering
     procedure ConvertFloatToPCM8(ASrc: PSingle; ADst: PByte; ACount: Integer);
@@ -124,6 +141,10 @@ type
 
     class function ExportToWAVFloat(ABuffer: TSedaiAudioBuffer;
                                     const AFileName: string): Boolean;
+
+    class function ExportToAIFF(ABuffer: TSedaiAudioBuffer;
+                                const AFileName: string;
+                                ABitDepth: Integer = 16): Boolean;
 
     // Normalize buffer
     class procedure NormalizeBuffer(ABuffer: TSedaiAudioBuffer;
@@ -342,6 +363,197 @@ begin
   Result := True;
 end;
 
+procedure TSedaiAudioFileWriter.WriteBEWord(AValue: Word);
+var
+  V: Word;
+begin
+  V := NtoBE(AValue);
+  FStream.WriteBuffer(V, 2);
+end;
+
+procedure TSedaiAudioFileWriter.WriteBEDWord(AValue: LongWord);
+var
+  V: LongWord;
+begin
+  V := NtoBE(AValue);
+  FStream.WriteBuffer(V, 4);
+end;
+
+procedure TSedaiAudioFileWriter.WriteAIFFExtended(AValue: Double);
+var
+  B: array[0..9] of Byte;
+  Sign, Expon: Integer;
+  HiMant, LoMant: LongWord;
+  FMant, M: Double;
+  E: Integer;
+begin
+  // 80-bit IEEE 754 extended precision, big-endian, with an explicit integer
+  // bit (Apple's ConvertToIeeeExtended). Exact inverse of the reader's
+  // ReadExtended: value = mantissa * 2^(exponent - 16383 - 63).
+  FillChar(B, SizeOf(B), 0);
+  if AValue < 0 then
+  begin
+    Sign := $80;
+    AValue := -AValue;
+  end
+  else
+    Sign := 0;
+
+  if AValue = 0 then
+  begin
+    Expon := 0;
+    HiMant := 0;
+    LoMant := 0;
+  end
+  else
+  begin
+    Frexp(AValue, M, E);   // AValue = M * 2^E, 0.5 <= M < 1
+    if E > 16384 then
+    begin
+      Expon := $7FFF;      // out of range -> Inf
+      HiMant := 0;
+      LoMant := 0;
+    end
+    else
+    begin
+      Expon := E + 16382;  // bias for the explicit integer bit
+      // M is non-negative, so Trunc == Floor; Trunc returns Int64 (Floor would
+      // overflow its 32-bit Integer result on the ~2^31..2^32 mantissa).
+      FMant := Ldexp(M, 32);
+      HiMant := LongWord(Trunc(FMant));
+      FMant := Ldexp(FMant - HiMant, 32);
+      LoMant := LongWord(Trunc(FMant));
+    end;
+  end;
+
+  B[0] := ((Expon shr 8) and $7F) or Sign;
+  B[1] := Expon and $FF;
+  B[2] := (HiMant shr 24) and $FF;
+  B[3] := (HiMant shr 16) and $FF;
+  B[4] := (HiMant shr 8) and $FF;
+  B[5] := HiMant and $FF;
+  B[6] := (LoMant shr 24) and $FF;
+  B[7] := (LoMant shr 16) and $FF;
+  B[8] := (LoMant shr 8) and $FF;
+  B[9] := LoMant and $FF;
+  FStream.WriteBuffer(B, 10);
+end;
+
+procedure TSedaiAudioFileWriter.WriteAIFFHeader;
+var
+  SampleSize: Word;
+begin
+  case FSettings.Format of
+    aefAIFF16: SampleSize := 16;
+    aefAIFF24: SampleSize := 24;
+    aefAIFF32: SampleSize := 32;
+  else
+    Exit;  // Unsupported format
+  end;
+
+  // FORM container (size patched in FinalizeAIFF)
+  FStream.WriteBuffer('FORM', 4);
+  WriteBEDWord(0);
+  FStream.WriteBuffer('AIFF', 4);
+
+  // COMM chunk (18-byte body)
+  FStream.WriteBuffer('COMM', 4);
+  WriteBEDWord(18);
+  WriteBEWord(Word(FSettings.Channels));
+  FAIFFCommFramesOffset := FStream.Position;
+  WriteBEDWord(0);                          // numSampleFrames (patched on close)
+  WriteBEWord(SampleSize);
+  WriteAIFFExtended(FSettings.SampleRate);
+
+  // SSND chunk (size patched on close)
+  FStream.WriteBuffer('SSND', 4);
+  FAIFFSsndSizeOffset := FStream.Position;
+  WriteBEDWord(0);                          // chunk size (patched on close)
+  WriteBEDWord(0);                          // offset
+  WriteBEDWord(0);                          // blockSize
+  // sample frames follow
+end;
+
+procedure TSedaiAudioFileWriter.FinalizeAIFF;
+var
+  DataEnd, FileSize: Int64;
+  SsndChunkSize: LongWord;
+  PadByte: Byte;
+begin
+  // SSND chunk size counts offset + blockSize + sample data (everything after
+  // the size field), measured before any even-boundary pad byte.
+  DataEnd := FStream.Size;
+  SsndChunkSize := LongWord(DataEnd - (FAIFFSsndSizeOffset + 4));
+
+  // AIFF chunks are padded to an even byte boundary.
+  if Odd(DataEnd) then
+  begin
+    FStream.Position := DataEnd;
+    PadByte := 0;
+    FStream.WriteBuffer(PadByte, 1);
+  end;
+  FileSize := FStream.Size;
+
+  // FORM size = file size - 8
+  FStream.Position := 4;
+  WriteBEDWord(LongWord(FileSize - 8));
+
+  // COMM numSampleFrames
+  FStream.Position := FAIFFCommFramesOffset;
+  WriteBEDWord(LongWord(FSamplesWritten));
+
+  // SSND chunk size
+  FStream.Position := FAIFFSsndSizeOffset;
+  WriteBEDWord(SsndChunkSize);
+
+  FStream.Position := FileSize;
+end;
+
+function TSedaiAudioFileWriter.WriteAIFFSamples(ABuffer: PSingle;
+  AFrameCount: Integer): Boolean;
+var
+  BytesPerSample, BytesToWrite, SampleCount, I, J, Base: Integer;
+  Tmp: Byte;
+begin
+  Result := False;
+  SampleCount := AFrameCount * FSettings.Channels;
+
+  case FSettings.Format of
+    aefAIFF16: BytesPerSample := 2;
+    aefAIFF24: BytesPerSample := 3;
+    aefAIFF32: BytesPerSample := 4;
+  else
+    Exit;
+  end;
+
+  BytesToWrite := SampleCount * BytesPerSample;
+  if Length(FEncodeBuffer) < BytesToWrite then
+    SetLength(FEncodeBuffer, BytesToWrite);
+
+  // Reuse the native-endian (little-endian on x86) PCM converters, including
+  // their dithering, then byte-swap each sample to big-endian for AIFF.
+  case FSettings.Format of
+    aefAIFF16: ConvertFloatToPCM16(ABuffer, PSmallInt(@FEncodeBuffer[0]), SampleCount);
+    aefAIFF24: ConvertFloatToPCM24(ABuffer, @FEncodeBuffer[0], SampleCount);
+    aefAIFF32: ConvertFloatToPCM32(ABuffer, PLongInt(@FEncodeBuffer[0]), SampleCount);
+  end;
+
+  for I := 0 to SampleCount - 1 do
+  begin
+    Base := I * BytesPerSample;
+    for J := 0 to (BytesPerSample div 2) - 1 do
+    begin
+      Tmp := FEncodeBuffer[Base + J];
+      FEncodeBuffer[Base + J] := FEncodeBuffer[Base + BytesPerSample - 1 - J];
+      FEncodeBuffer[Base + BytesPerSample - 1 - J] := Tmp;
+    end;
+  end;
+
+  FStream.WriteBuffer(FEncodeBuffer[0], BytesToWrite);
+  Inc(FSamplesWritten, AFrameCount);
+  Result := True;
+end;
+
 procedure TSedaiAudioFileWriter.ConvertFloatToPCM8(ASrc: PSingle; ADst: PByte;
   ACount: Integer);
 var
@@ -480,6 +692,12 @@ begin
         FIsOpen := True;
         Result := True;
       end;
+    aefAIFF16, aefAIFF24, aefAIFF32:
+      begin
+        WriteAIFFHeader;
+        FIsOpen := True;
+        Result := True;
+      end;
     aefOGG:
       begin
         // TODO: Implement OGG Vorbis encoding
@@ -509,6 +727,8 @@ begin
     case FSettings.Format of
       aefWAV16, aefWAV24, aefWAV32, aefWAVFloat:
         FinalizeWAV;
+      aefAIFF16, aefAIFF24, aefAIFF32:
+        FinalizeAIFF;
     end;
   end;
 
@@ -536,6 +756,8 @@ begin
   case FSettings.Format of
     aefWAV16, aefWAV24, aefWAV32, aefWAVFloat:
       Result := WriteWAVSamples(ABuffer, AFrameCount);
+    aefAIFF16, aefAIFF24, aefAIFF32:
+      Result := WriteAIFFSamples(ABuffer, AFrameCount);
   end;
 end;
 
@@ -639,6 +861,37 @@ begin
     Exit;
 
   ExportSettings := GetDefaultSettings(aefWAVFloat);
+  ExportSettings.SampleRate := ABuffer.SampleRate;
+  ExportSettings.Channels := ABuffer.Channels;
+
+  Writer := TSedaiAudioFileWriter.Create;
+  try
+    if Writer.CreateFile(AFileName, ExportSettings) then
+      Result := Writer.WriteBuffer(ABuffer);
+  finally
+    Writer.Free;
+  end;
+end;
+
+class function TSedaiAudioFileWriter.ExportToAIFF(ABuffer: TSedaiAudioBuffer;
+  const AFileName: string; ABitDepth: Integer): Boolean;
+var
+  Writer: TSedaiAudioFileWriter;
+  ExportSettings: TAudioExportSettings;
+begin
+  Result := False;
+
+  if ABuffer = nil then
+    Exit;
+
+  case ABitDepth of
+    16: ExportSettings := GetDefaultSettings(aefAIFF16);
+    24: ExportSettings := GetDefaultSettings(aefAIFF24);
+    32: ExportSettings := GetDefaultSettings(aefAIFF32);
+  else
+    ExportSettings := GetDefaultSettings(aefAIFF16);
+  end;
+
   ExportSettings.SampleRate := ABuffer.SampleRate;
   ExportSettings.Channels := ABuffer.Channels;
 
