@@ -807,7 +807,7 @@ The library includes professional audio file reading and writing capabilities.
 | **WAV Float 64-bit** | ✓ | - | High-precision source files |
 | **AIFF / AIFC** | ✓ | ✓ | Read: big-endian PCM 8/16/24/32 + AIFC `sowt` (LE) / `fl32` / `fl64`. Write: big-endian PCM 16/24/32 |
 | **FLAC** | ✓ | Planned | Pure-Pascal decoder: STREAMINFO, FIXED/LPC subframes, partitioned Rice, all channel modes (8/16/24-bit) |
-| **OGG Vorbis** | Planned | Planned | - |
+| **OGG Vorbis** | ✓ | Planned | Pure-Pascal decoder: Ogg container (CRC32/paging), codebooks (Huffman + VQ), floor 0/1, residue 0/1/2, channel coupling, IMDCT + overlap-add |
 | **MP3** | Planned | - | Decode only |
 
 ### Dithering Options
@@ -1464,7 +1464,8 @@ Mathematical simulation of physical instrument behavior for realistic sounds.
 
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| **OGG/MP3 Decoding** | Add OGG Vorbis and MP3 decoders to file reader (FLAC done) | Medium |
+| **MP3 Decoding** | Add an MP3 decoder to the file reader (FLAC + OGG Vorbis done) | Medium |
+| **OGG Vorbis Seek** | Bisection seek on granulepos (decode + read done) | Low |
 
 *Done since this list was written:* sample playback engine (`vstSample`, one-shot/looped with
 pitch), Karplus-Strong physical-modelling source (`vstKarplus`), voice stealing (oldest/quietest/
@@ -1490,7 +1491,7 @@ subframes, partitioned Rice, all channel modes), and a pure-Pascal **AIFF writer
 
 | Issue | Description | Workaround |
 |-------|-------------|------------|
-| **Limited Audio File Support** | WAV (read/write), AIFF/AIFC (read/write) and FLAC (read) supported; OGG/MP3 pending | OGG/MP3 coming soon |
+| **Limited Audio File Support** | WAV (read/write), AIFF/AIFC (read/write), FLAC (read) and OGG Vorbis (read) supported; MP3 pending | MP3 coming soon |
 | **Windows Focus** | Linux support may have minor issues | Report bugs |
 | **API Stability** | API may change in minor versions | Pin version for production |
 | **Documentation** | API documentation is embedded in source | Read unit interfaces |

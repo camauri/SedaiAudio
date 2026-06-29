@@ -15,7 +15,7 @@ interface
 
 uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer,
-  SedaiAudioDecoder, SedaiFLACDecoder;
+  SedaiAudioDecoder, SedaiFLACDecoder, SedaiVorbisDecoder;
 
 type
   // Supported audio file formats
@@ -95,6 +95,7 @@ type
     function OpenAIFF: Boolean;
     function ReadAIFFSamples(ABuffer: PSingle; AFrameCount: Integer): Integer;
     function OpenFLAC: Boolean;
+    function OpenVorbis: Boolean;
 
     // Sample conversion
     procedure ConvertPCM8ToFloat(ASrc: PByte; ADst: PSingle; ACount: Integer);
@@ -800,6 +801,35 @@ begin
   Result := True;
 end;
 
+function TSedaiAudioFileReader.OpenVorbis: Boolean;
+begin
+  Result := False;
+
+  // Same seam as FLAC: the Vorbis decoder borrows FStream and yields interleaved
+  // float frames at the native channel count.
+  FDecoder := TSedaiVorbisDecoder.Create;
+  if not FDecoder.OpenStream(FStream) then
+  begin
+    FLastError := FDecoder.LastError;
+    FreeAndNil(FDecoder);
+    Exit;
+  end;
+
+  FInfo.SampleRate := FDecoder.SampleRate;
+  FInfo.Channels := FDecoder.Channels;
+  FInfo.BitsPerSample := FDecoder.BitsPerSample;
+  FInfo.SampleCount := FDecoder.TotalFrames;   // 0 = unknown until EOS
+  if FInfo.SampleRate > 0 then
+    FInfo.Duration := FInfo.SampleCount / FInfo.SampleRate
+  else
+    FInfo.Duration := 0;
+  FInfo.Format := affOGG;
+  FInfo.Bitrate := 0;
+  FInfo.IsVBR := True;
+
+  Result := True;
+end;
+
 function TSedaiAudioFileReader.OpenFile(const AFileName: string): Boolean;
 var
   FS: TFileStream;
@@ -840,11 +870,7 @@ begin
     affWAV:
       Result := OpenWAV;
     affOGG:
-      begin
-        // TODO: Implement OGG Vorbis decoding
-        FLastError := 'OGG format not yet implemented';
-        Result := False;
-      end;
+      Result := OpenVorbis;
     affFLAC:
       Result := OpenFLAC;
     affAIFF:
@@ -902,7 +928,7 @@ begin
   case FInfo.Format of
     affWAV:  Result := ReadWAVSamples(ABuffer, AFrameCount);
     affAIFF: Result := ReadAIFFSamples(ABuffer, AFrameCount);
-    affFLAC:
+    affFLAC, affOGG:
       if Assigned(FDecoder) then
       begin
         Result := FDecoder.ReadFrames(ABuffer, AFrameCount);
@@ -913,8 +939,8 @@ end;
 
 function TSedaiAudioFileReader.ReadAll(out ABuffer: TSedaiAudioBuffer): Boolean;
 var
-  TempBuffer: array of Single;
-  FramesRead: Integer;
+  TempBuffer, ScratchBuf: array of Single;
+  FramesRead, GrowChunk, TotalFrames: Integer;
 begin
   Result := False;
   ABuffer := nil;
@@ -928,27 +954,50 @@ begin
   // Seek to beginning
   Seek(0);
 
-  // Allocate buffer
   ABuffer := TSedaiAudioBuffer.Create;
   ABuffer.SetFormat(FInfo.SampleRate, FInfo.Channels);
-  ABuffer.SetSize(FInfo.SampleCount);
 
-  // Allocate temp buffer
-  SetLength(TempBuffer, FInfo.SampleCount * FInfo.Channels);
-
-  // Read all samples
-  FramesRead := ReadSamples(@TempBuffer[0], FInfo.SampleCount);
-
-  if FramesRead <> FInfo.SampleCount then
+  if FInfo.SampleCount > 0 then
   begin
-    ABuffer.Free;
-    ABuffer := nil;
-    FLastError := 'Failed to read all samples';
-    Exit;
+    // Known length (WAV/AIFF/FLAC): one pre-sized read.
+    ABuffer.SetSize(FInfo.SampleCount);
+    SetLength(TempBuffer, FInfo.SampleCount * FInfo.Channels);
+    FramesRead := ReadSamples(@TempBuffer[0], FInfo.SampleCount);
+    if FramesRead <> FInfo.SampleCount then
+    begin
+      ABuffer.Free; ABuffer := nil;
+      FLastError := 'Failed to read all samples';
+      Exit;
+    end;
+    ABuffer.WriteInterleaved(@TempBuffer[0], 0, FramesRead);
+  end
+  else
+  begin
+    // Unknown length (streamed OGG Vorbis): read fixed chunks and append until
+    // the decoder is drained, growing the accumulation buffer as we go.
+    GrowChunk := 16384;
+    TotalFrames := 0;
+    SetLength(TempBuffer, 0);
+    SetLength(ScratchBuf, GrowChunk * FInfo.Channels);
+    repeat
+      FramesRead := ReadSamples(@ScratchBuf[0], GrowChunk);
+      if FramesRead > 0 then
+      begin
+        SetLength(TempBuffer, (TotalFrames + FramesRead) * FInfo.Channels);
+        Move(ScratchBuf[0], TempBuffer[TotalFrames * FInfo.Channels],
+          FramesRead * FInfo.Channels * SizeOf(Single));
+        Inc(TotalFrames, FramesRead);
+      end;
+    until FramesRead <= 0;
+    if TotalFrames = 0 then
+    begin
+      ABuffer.Free; ABuffer := nil;
+      FLastError := 'Failed to read all samples';
+      Exit;
+    end;
+    ABuffer.SetSize(TotalFrames);
+    ABuffer.WriteInterleaved(@TempBuffer[0], 0, TotalFrames);
   end;
-
-  // Copy to buffer (deinterleave if needed)
-  ABuffer.WriteInterleaved(@TempBuffer[0], 0, FramesRead);
 
   Result := True;
 end;
@@ -986,10 +1035,10 @@ begin
         FPosition := ASamplePosition;
         Result := True;
       end;
-    affFLAC:
+    affFLAC, affOGG:
       if Assigned(FDecoder) then
       begin
-        Result := FDecoder.Seek(ASamplePosition);
+        Result := FDecoder.Seek(ASamplePosition);   // OGG seek arrives in a later session
         if Result then
           FPosition := ASamplePosition;
       end;

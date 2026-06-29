@@ -61,10 +61,16 @@ deserves recognition:
   implemented. Thank you for an open, meticulously documented lossless format — the clarity of
   the spec is the reason a from-scratch decoder was even feasible.
 
-As OGG Vorbis and MP3 decoding are added, this recognition will extend to the Xiph.Org Vorbis
-authors and to the format / reference-decoder authors actually drawn upon (e.g. if a
-public-domain reference decoder such as stb_vorbis or minimp3 is ported rather than written
-from the spec, its author is credited here and in the unit header).
+- The **Xiph.Org Foundation** and the **Vorbis** authors — for the **Ogg** container and
+  **Vorbis I** specifications, from which `SedaiVorbisDecoder` is implemented clean-room
+  (container paging/CRC, codebooks, floor, residue, channel coupling, IMDCT). The
+  `floor1_inverse_dB` lookup table is the constant table given in the Vorbis I specification.
+  No upstream decoder source (e.g. `stb_vorbis`, `libvorbis`) was vendored.
 
-See the headers of `src/SID/SedaiSIDEvo.pas`, `src/Players/SedaiGoatTracker.pas` and
-`src/FileIO/SedaiFLACDecoder.pas` for the detailed per-component attribution.
+As MP3 decoding is added, this recognition will extend to the format / reference-decoder
+authors actually drawn upon (e.g. if a public-domain reference decoder such as minimp3 is
+ported rather than written from the spec, its author is credited here and in the unit header).
+
+See the headers of `src/SID/SedaiSIDEvo.pas`, `src/Players/SedaiGoatTracker.pas`,
+`src/FileIO/SedaiFLACDecoder.pas` and `src/FileIO/SedaiVorbisDecoder.pas` for the detailed
+per-component attribution.

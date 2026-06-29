@@ -3,23 +3,26 @@
  *
  * TSedaiVorbisDecoder decodes OGG Vorbis to interleaved float, behind the
  * common TSedaiAudioDecoder interface (like the FLAC decoder). It is a
- * clean-room implementation from the Ogg and Vorbis I specifications.
+ * clean-room implementation from the Ogg and Vorbis I specifications (no
+ * upstream decoder source vendored).
  *
- * SESSION 1 SCOPE (this file, so far):
- *   - Ogg container layer: page parsing, CRC32 validation, packet reassembly
- *     across pages and continued packets.
+ * Pipeline:
+ *   - Ogg container: page parsing, CRC32 validation, packet reassembly across
+ *     pages and continued packets, granulepos tracking.
  *   - Vorbis LSB-first bit reader (Vorbis packs bits little-endian within a
  *     byte, the opposite of FLAC's MSB-first reader).
- *   - The three Vorbis setup packets: identification header (sample rate /
- *     channels / block sizes), comment header (vendor string, skipped),
- *     and the setup header bytes are captured for the next stage.
- *   - ReadFrames / Seek are NOT yet implemented (audio decode = next session):
- *     the codebooks / floors / residues / mapping / modes parse and the
- *     per-packet floor+residue+IMDCT+overlap-add come next.
+ *   - Setup-header parse: codebooks (canonical Huffman codewords + VQ lookup
+ *     type 1/2), floor type 0/1, residue 0/1/2, channel mapping, modes.
+ *   - Per-packet audio decode: mode/window selection -> floor1 curve decode ->
+ *     residue (VQ) decode -> inverse channel coupling -> floor multiply ->
+ *     IMDCT -> windowed overlap-add -> interleaved float PCM. Output is
+ *     trimmed to the final-page granulepos. Seek is not yet implemented.
  *
- * Reference: Xiph.Org "Ogg" + "Vorbis I specification" (public documents).
- * Acknowledgement for the eventual VQ/codebook approach: Sean Barrett's
- * public-domain stb_vorbis (to be credited in LICENSING.md once ported).
+ * The MDCT pair uses modulus M = N/2 (bin k -> (k+0.5)/N cycles/sample); the
+ * decoder applies no 1/N scaling (libvorbis folds it into the forward MDCT).
+ *
+ * References: Xiph.Org "Ogg bitstream" and "Vorbis I specification" (public
+ * documents); the floor1_inverse_dB table is the constant given in the spec.
  *
  * (c) 2024 Artiforge - Licensed under GPL-3.0
  *}
@@ -54,6 +57,10 @@ type
     SequenceP: Boolean;
     HasLookup: Boolean;
     ValueVectors: array of Single; // dequantized VQ table, Entries*Dimensions (lookup 1/2)
+    // Decode acceleration: sorted (length,codeword) -> entry, for the bit reader.
+    DecodeKeys: array of QWord;    // sorted keys = (QWord(len) shl 32) or codeword_low_bits
+    DecodeVals: array of Integer;  // parallel entry index
+    MaxLen: Integer;               // longest codeword length
   end;
 
   // Floor curve description. Type 1 (piecewise linear over X positions) is by far
@@ -159,6 +166,19 @@ type
     FPageEOS: Boolean;
     FExhausted: Boolean;      // no more pages
 
+    // --- Audio decode state (per-packet pipeline + overlap-add) ---
+    FPrevTail: array of array of Single;  // [ch] windowed right tail of the previous block
+    FPrevTailLen: Integer;                // length of each FPrevTail[ch]
+    FFirstAudio: Boolean;                 // first audio packet primes the overlap (no output)
+    FCosTab0, FCosTab1: array of Single;  // IMDCT cosine tables for bs0 / bs1
+    FAudioStarted: Boolean;               // decode tables/buffers initialized
+    // Output FIFO (interleaved float), filled a packet at a time, drained by ReadFrames.
+    FOutBuf: array of Single;
+    FOutHead: Integer;                    // index of next sample to emit (in samples, not frames)
+    FOutLen: Integer;                     // valid samples in FOutBuf
+    FDecodeEOS: Boolean;                  // saw the end-of-stream packet
+    FFinalGranule: Int64;                 // total sample frames (last page granulepos), -1 = unknown
+
     function GetSetupPacketSize: Integer;
     function LoadNextPage: Boolean;
     function ReadPacket(out APacket: TVorbisPacket): Boolean;
@@ -177,6 +197,19 @@ type
     function GetResidueCount: Integer;
     function GetMappingCount: Integer;
     function GetModeCount: Integer;
+
+    // Audio decode pipeline.
+    procedure InitAudioDecode;
+    function DecodeScalar(ABR: TVorbisBitReader; const ACB: TVorbisCodebook): Integer;
+    procedure DecodeFloor1Packet(ABR: TVorbisBitReader; const AFloor: TVorbisFloor;
+      var AY: array of Integer; out AUnused: Boolean);
+    procedure RenderFloor1(const AFloor: TVorbisFloor; const AY: array of Integer;
+      ACurve: PSingle; AHalf: Integer);
+    procedure DecodeResiduePacket(ABR: TVorbisBitReader; const ARes: TVorbisResidue;
+      ACh: Integer; const ADoNotDecode: array of Boolean;
+      AVectors: array of PSingle; AHalf: Integer);
+    procedure IMDCT(const ACosTab: array of Single; AInput, AOutput: PSingle; AN: Integer);
+    function DecodeAudioPacket(const APacket: TVorbisPacket): Boolean;
   public
     function OpenStream(AStream: TStream): Boolean; override;
     function ReadFrames(ABuffer: PSingle; AFrameCount: Integer): Integer; override;
@@ -349,6 +382,204 @@ begin
         available[y] := res + (LongWord(1) shl (32 - y));
   end;
   Result := True;
+end;
+
+// Build the sorted (length,codeword)->entry decode table for a codebook so the
+// bit reader can resolve a symbol in O(maxlen * log entries).
+procedure BuildCodebookDecode(var ACB: TVorbisCodebook);
+var
+  i, used: Integer;
+  // simple in-place quicksort over the parallel (keys, vals) arrays
+  procedure QSort(lo, hi: Integer);
+  var
+    a, b: Integer;
+    pivot, tk: QWord;
+    tv: Integer;
+  begin
+    a := lo; b := hi;
+    pivot := ACB.DecodeKeys[(lo + hi) div 2];
+    while a <= b do
+    begin
+      while ACB.DecodeKeys[a] < pivot do Inc(a);
+      while ACB.DecodeKeys[b] > pivot do Dec(b);
+      if a <= b then
+      begin
+        tk := ACB.DecodeKeys[a]; ACB.DecodeKeys[a] := ACB.DecodeKeys[b]; ACB.DecodeKeys[b] := tk;
+        tv := ACB.DecodeVals[a]; ACB.DecodeVals[a] := ACB.DecodeVals[b]; ACB.DecodeVals[b] := tv;
+        Inc(a); Dec(b);
+      end;
+    end;
+    if lo < b then QSort(lo, b);
+    if a < hi then QSort(a, hi);
+  end;
+begin
+  used := 0;
+  ACB.MaxLen := 0;
+  for i := 0 to ACB.Entries - 1 do
+    if ACB.Lengths[i] > 0 then
+    begin
+      Inc(used);
+      if ACB.Lengths[i] > ACB.MaxLen then ACB.MaxLen := ACB.Lengths[i];
+    end;
+  SetLength(ACB.DecodeKeys, used);
+  SetLength(ACB.DecodeVals, used);
+  used := 0;
+  for i := 0 to ACB.Entries - 1 do
+    if ACB.Lengths[i] > 0 then
+    begin
+      ACB.DecodeKeys[used] := (QWord(ACB.Lengths[i]) shl 32) or
+        (QWord(ACB.Codewords[i]) and ((QWord(1) shl ACB.Lengths[i]) - 1));
+      ACB.DecodeVals[used] := i;
+      Inc(used);
+    end;
+  if used > 1 then QSort(0, used - 1);
+end;
+
+// floor1 amplitude -> linear value lookup (Vorbis spec inverse-dB table, 256 entries).
+const
+  FLOOR1_INVERSE_DB: array[0..255] of Single = (
+    1.0649863e-07, 1.1341951e-07, 1.2079015e-07, 1.2863978e-07,
+    1.3699951e-07, 1.4590251e-07, 1.5538408e-07, 1.6548181e-07,
+    1.7623575e-07, 1.8768855e-07, 1.9988561e-07, 2.1287530e-07,
+    2.2670913e-07, 2.4144197e-07, 2.5713223e-07, 2.7384213e-07,
+    2.9163793e-07, 3.1059021e-07, 3.3077411e-07, 3.5226968e-07,
+    3.7516214e-07, 3.9954229e-07, 4.2550680e-07, 4.5315863e-07,
+    4.8260743e-07, 5.1396998e-07, 5.4737065e-07, 5.8294187e-07,
+    6.2082472e-07, 6.6116941e-07, 7.0413592e-07, 7.4989464e-07,
+    7.9862701e-07, 8.5052630e-07, 9.0579828e-07, 9.6466216e-07,
+    1.0273513e-06, 1.0941144e-06, 1.1652161e-06, 1.2409384e-06,
+    1.3215816e-06, 1.4074654e-06, 1.4989305e-06, 1.5963394e-06,
+    1.7000785e-06, 1.8105592e-06, 1.9282195e-06, 2.0535261e-06,
+    2.1869758e-06, 2.3290978e-06, 2.4804557e-06, 2.6416497e-06,
+    2.8133190e-06, 2.9961443e-06, 3.1908506e-06, 3.3982101e-06,
+    3.6190449e-06, 3.8542308e-06, 4.1047004e-06, 4.3714470e-06,
+    4.6555282e-06, 4.9580707e-06, 5.2802740e-06, 5.6234160e-06,
+    5.9888572e-06, 6.3780469e-06, 6.7925283e-06, 7.2339451e-06,
+    7.7040476e-06, 8.2047000e-06, 8.7378876e-06, 9.3057248e-06,
+    9.9104632e-06, 1.0554501e-05, 1.1240392e-05, 1.1970856e-05,
+    1.2748789e-05, 1.3577278e-05, 1.4459606e-05, 1.5399272e-05,
+    1.6400004e-05, 1.7465768e-05, 1.8600792e-05, 1.9809576e-05,
+    2.1096914e-05, 2.2467911e-05, 2.3928002e-05, 2.5482978e-05,
+    2.7139006e-05, 2.8902651e-05, 3.0780908e-05, 3.2781225e-05,
+    3.4911534e-05, 3.7180282e-05, 3.9596466e-05, 4.2169667e-05,
+    4.4910090e-05, 4.7828601e-05, 5.0936773e-05, 5.4246931e-05,
+    5.7772202e-05, 6.1526565e-05, 6.5524908e-05, 6.9783085e-05,
+    7.4317983e-05, 7.9147585e-05, 8.4291040e-05, 8.9768747e-05,
+    9.5602426e-05, 0.00010181521, 0.00010843174, 0.00011547824,
+    0.00012298267, 0.00013097477, 0.00013948625, 0.00014855085,
+    0.00015820453, 0.00016848555, 0.00017943469, 0.00019109536,
+    0.00020351382, 0.00021673929, 0.00023082423, 0.00024582449,
+    0.00026179955, 0.00027881276, 0.00029693158, 0.00031622787,
+    0.00033677814, 0.00035866388, 0.00038197188, 0.00040679456,
+    0.00043323036, 0.00046138411, 0.00049136745, 0.00052329927,
+    0.00055730621, 0.00059352311, 0.00063209358, 0.00067317058,
+    0.00071691700, 0.00076350630, 0.00081312324, 0.00086596457,
+    0.00092223983, 0.00098217216, 0.0010459992,  0.0011139742,
+    0.0011863665,  0.0012634633,  0.0013455702,  0.0014330129,
+    0.0015261382,  0.0016253153,  0.0017309374,  0.0018434235,
+    0.0019632195,  0.0020908006,  0.0022266726,  0.0023713743,
+    0.0025254795,  0.0026895994,  0.0028643847,  0.0030505286,
+    0.0032487691,  0.0034598925,  0.0036847358,  0.0039241906,
+    0.0041792066,  0.0044507950,  0.0047400328,  0.0050480668,
+    0.0053761186,  0.0057254891,  0.0060975636,  0.0064938176,
+    0.0069158225,  0.0073652516,  0.0078438871,  0.0083536271,
+    0.0088964928,  0.0094746183,  0.010090352,   0.010746080,
+    0.011444421,   0.012188144,   0.012980198,   0.013823725,
+    0.014722068,   0.015678791,   0.016697687,   0.017782797,
+    0.018938423,   0.020169149,   0.021479854,   0.022875735,
+    0.024362330,   0.025945531,   0.027631618,   0.029427276,
+    0.031339626,   0.033376252,   0.035545228,   0.037855157,
+    0.040315199,   0.042935108,   0.045725273,   0.048696758,
+    0.051861348,   0.055231591,   0.058820850,   0.062643361,
+    0.066714279,   0.071049749,   0.075666962,   0.080584227,
+    0.085821044,   0.091398179,   0.097337747,   0.10366330,
+    0.11039993,    0.11757434,    0.12521498,    0.13335215,
+    0.14201813,    0.15124727,    0.16107617,    0.17154380,
+    0.18269168,    0.19456402,    0.20720788,    0.22067342,
+    0.23501402,    0.25028656,    0.26655159,    0.28387361,
+    0.30232132,    0.32196786,    0.34289114,    0.36517414,
+    0.38890521,    0.41417847,    0.44109412,    0.46975890,
+    0.50028648,    0.53279791,    0.56742212,    0.60429640,
+    0.64356699,    0.68538959,    0.72993007,    0.77736504,
+    0.82788260,    0.88168307,    0.93847990,    1.00000000
+  );
+
+// floor1 low/high neighbor search over X[0..AIdx-1] (spec 7.2.1).
+function LowNeighbor(const AX: array of Integer; AIdx: Integer): Integer;
+var i, best: Integer;
+begin
+  Result := 0; best := -1;
+  for i := 0 to AIdx - 1 do
+    if (AX[i] < AX[AIdx]) and (AX[i] > best) then
+    begin best := AX[i]; Result := i; end;
+end;
+
+function HighNeighbor(const AX: array of Integer; AIdx: Integer): Integer;
+var i, best: Integer;
+begin
+  Result := 0; best := MaxInt;
+  for i := 0 to AIdx - 1 do
+    if (AX[i] > AX[AIdx]) and (AX[i] < best) then
+    begin best := AX[i]; Result := i; end;
+end;
+
+// floor1 integer line-point interpolation (spec 7.2.1).
+function RenderPoint(x0, y0, x1, y1, x: Integer): Integer;
+var dy, adx, ady, err, off: Integer;
+begin
+  dy := y1 - y0; adx := x1 - x0; ady := Abs(dy);
+  err := ady * (x - x0);
+  off := err div adx;
+  if dy < 0 then Result := y0 - off else Result := y0 + off;
+end;
+
+// floor1 line render: write the inverse-dB curve value for each x in [x0,x1)
+// into ACurve (spec 7.2.1 render_line). y indexes FLOOR1_INVERSE_DB (clamped).
+procedure RenderLine(x0, y0, x1, y1: Integer; ACurve: PSingle; AN: Integer);
+var dy, adx, ady, base, sy, x, y, err, yi: Integer;
+begin
+  dy := y1 - y0; adx := x1 - x0;
+  ady := Abs(dy); base := dy div adx;
+  if dy < 0 then sy := base - 1 else sy := base + 1;
+  ady := ady - Abs(base) * adx;
+  y := y0; err := 0;
+  if x1 > AN then x1 := AN;
+  if x0 < AN then
+  begin
+    yi := y0; if yi < 0 then yi := 0 else if yi > 255 then yi := 255;
+    ACurve[x0] := FLOOR1_INVERSE_DB[yi];
+  end;
+  x := x0 + 1;
+  while x < x1 do
+  begin
+    err := err + ady;
+    if err >= adx then begin err := err - adx; y := y + sy; end
+    else y := y + base;
+    yi := y; if yi < 0 then yi := 0 else if yi > 255 then yi := 255;
+    ACurve[x] := FLOOR1_INVERSE_DB[yi];
+    Inc(x);
+  end;
+end;
+
+// Build the Vorbis synthesis window over [0,n) with the given slope boundaries
+// (spec 1.3.2). Rising slope on [ls,le), flat 1 on [le,rs), falling on [rs,re).
+procedure BuildVorbisWindow(AWin: PSingle; ANs, ALS, ALE, ARS, ARE: Integer);
+var i, lsz, rsz: Integer; s: Double;
+begin
+  lsz := ALE - ALS; rsz := ARE - ARS;
+  for i := 0 to ALS - 1 do AWin[i] := 0;
+  for i := ALS to ALE - 1 do
+  begin
+    s := Sin((i - ALS + 0.5) / lsz * (PI / 2));
+    AWin[i] := Sin((PI / 2) * s * s);
+  end;
+  for i := ALE to ARS - 1 do AWin[i] := 1;
+  for i := ARS to ARE - 1 do
+  begin
+    s := Sin((i - ARS + 0.5) / rsz * (PI / 2) + (PI / 2));
+    AWin[i] := Sin((PI / 2) * s * s);
+  end;
+  for i := ARE to ANs - 1 do AWin[i] := 0;
 end;
 
 { TVorbisBitReader }
@@ -765,6 +996,7 @@ begin
   else
     Exit;   // reserved lookup type
 
+  BuildCodebookDecode(ACB);
   Result := True;
 end;
 
@@ -1047,6 +1279,521 @@ begin
   end;
 end;
 
+// Build the IMDCT cosine tables and the overlap-add state. Called lazily on the
+// first ReadFrames after the headers are parsed.
+procedure TSedaiVorbisDecoder.InitAudioDecode;
+var
+  j, ch: Integer;
+begin
+  if FAudioStarted then Exit;
+  // Table length = 8*M = 4*blocksize, entry j = cos(pi*j/(4M)) = cos(pi*j/(2*blocksize)).
+  SetLength(FCosTab0, 4 * FBlocksize0);
+  for j := 0 to 4 * FBlocksize0 - 1 do
+    FCosTab0[j] := Cos(PI * j / (2 * FBlocksize0));
+  SetLength(FCosTab1, 4 * FBlocksize1);
+  for j := 0 to 4 * FBlocksize1 - 1 do
+    FCosTab1[j] := Cos(PI * j / (2 * FBlocksize1));
+  SetLength(FPrevTail, FChannels);
+  for ch := 0 to FChannels - 1 do SetLength(FPrevTail[ch], 0);
+  FPrevTailLen := 0;
+  FFirstAudio := True;
+  FOutHead := 0;
+  FOutLen := 0;
+  FDecodeEOS := False;
+  FFinalGranule := -1;
+  FAudioStarted := True;
+end;
+
+// Resolve one Huffman symbol from the bitstream against a codebook's sorted
+// (length,codeword) decode table. Returns the entry index, or -1 on error.
+function TSedaiVorbisDecoder.DecodeScalar(ABR: TVorbisBitReader;
+  const ACB: TVorbisCodebook): Integer;
+var
+  code: LongWord;
+  len, lo, hi, mid: Integer;
+  key: QWord;
+begin
+  Result := -1;
+  code := 0;
+  for len := 1 to ACB.MaxLen do
+  begin
+    code := code or (ABR.ReadBit shl (len - 1));
+    if ABR.Overrun then Exit(-1);
+    key := (QWord(len) shl 32) or code;
+    lo := 0; hi := High(ACB.DecodeKeys);
+    while lo <= hi do
+    begin
+      mid := (lo + hi) div 2;
+      if ACB.DecodeKeys[mid] = key then Exit(ACB.DecodeVals[mid])
+      else if ACB.DecodeKeys[mid] < key then lo := mid + 1
+      else hi := mid - 1;
+    end;
+  end;
+end;
+
+// Decode a floor type-1 packet into the per-post Y values; AUnused is True if
+// this floor (hence channel) carries no audio in this packet.
+procedure TSedaiVorbisDecoder.DecodeFloor1Packet(ABR: TVorbisBitReader;
+  const AFloor: TVorbisFloor; var AY: array of Integer; out AUnused: Boolean);
+const
+  RANGE_TBL: array[1..4] of Integer = (256, 128, 86, 64);
+var
+  range, ilogRange, i, j, cls, cdim, cbits, csub, cval, book, offset: Integer;
+begin
+  AUnused := False;
+  if ABR.ReadBit = 0 then begin AUnused := True; Exit; end;
+  range := RANGE_TBL[AFloor.Multiplier];
+  ilogRange := ILog(range - 1);
+  AY[0] := Integer(ABR.ReadBits(ilogRange));
+  AY[1] := Integer(ABR.ReadBits(ilogRange));
+  offset := 2;
+  for i := 0 to AFloor.Partitions - 1 do
+  begin
+    cls := AFloor.PartitionClassList[i];
+    cdim := AFloor.ClassDimensions[cls];
+    cbits := AFloor.ClassSubclasses[cls];
+    csub := (1 shl cbits) - 1;
+    cval := 0;
+    if cbits > 0 then
+      cval := DecodeScalar(ABR, FCodebooks[AFloor.ClassMasterbooks[cls]]);
+    for j := 0 to cdim - 1 do
+    begin
+      book := AFloor.SubclassBooks[cls][cval and csub];
+      cval := cval shr cbits;
+      if book >= 0 then
+        AY[offset + j] := DecodeScalar(ABR, FCodebooks[book])
+      else
+        AY[offset + j] := 0;
+    end;
+    offset := offset + cdim;
+  end;
+end;
+
+// Synthesize the floor type-1 curve (linear in the inverse-dB domain) into
+// ACurve[0..AHalf-1] from the decoded Y values (spec 7.2.4).
+procedure TSedaiVorbisDecoder.RenderFloor1(const AFloor: TVorbisFloor;
+  const AY: array of Integer; ACurve: PSingle; AHalf: Integer);
+const
+  RANGE_TBL: array[1..4] of Integer = (256, 128, 86, 64);
+var
+  values, i, j, range, mult, lowOff, highOff, pred, val, highroom, lowroom, room: Integer;
+  hx, hy, lx, ly, tmp, yi: Integer;
+  finalY: array of Integer;
+  step2: array of Boolean;
+  order: array of Integer;
+begin
+  values := AFloor.Values;
+  range := RANGE_TBL[AFloor.Multiplier];
+  mult := AFloor.Multiplier;
+  SetLength(finalY, values);
+  SetLength(step2, values);
+
+  // Step 1: amplitude value computation with low/high-neighbor prediction.
+  step2[0] := True; step2[1] := True;
+  finalY[0] := AY[0]; finalY[1] := AY[1];
+  for i := 2 to values - 1 do
+  begin
+    lowOff := LowNeighbor(AFloor.XList, i);
+    highOff := HighNeighbor(AFloor.XList, i);
+    pred := RenderPoint(AFloor.XList[lowOff], finalY[lowOff],
+                        AFloor.XList[highOff], finalY[highOff], AFloor.XList[i]);
+    val := AY[i];
+    highroom := range - pred;
+    lowroom := pred;
+    if highroom < lowroom then room := highroom * 2 else room := lowroom * 2;
+    if val <> 0 then
+    begin
+      step2[lowOff] := True; step2[highOff] := True; step2[i] := True;
+      if val >= room then
+      begin
+        if highroom > lowroom then finalY[i] := val - lowroom + pred
+        else finalY[i] := pred - val + highroom - 1;
+      end
+      else
+      begin
+        if (val and 1) = 1 then finalY[i] := pred - ((val + 1) div 2)
+        else finalY[i] := pred + (val div 2);
+      end;
+    end
+    else
+    begin
+      step2[i] := False;
+      finalY[i] := pred;
+    end;
+  end;
+
+  // Clamp amplitudes into the valid range.
+  for i := 0 to values - 1 do
+  begin
+    if finalY[i] < 0 then finalY[i] := 0
+    else if finalY[i] > range - 1 then finalY[i] := range - 1;
+  end;
+
+  // Sort posts by X (insertion sort; values is small).
+  SetLength(order, values);
+  for i := 0 to values - 1 do order[i] := i;
+  for i := 1 to values - 1 do
+  begin
+    tmp := order[i]; j := i - 1;
+    while (j >= 0) and (AFloor.XList[order[j]] > AFloor.XList[tmp]) do
+    begin order[j + 1] := order[j]; Dec(j); end;
+    order[j + 1] := tmp;
+  end;
+
+  // Step 2: render the curve as connected line segments through the step2 posts.
+  hx := 0; hy := 0;
+  lx := 0; ly := finalY[order[0]] * mult;
+  for i := 1 to values - 1 do
+  begin
+    j := order[i];
+    if step2[j] then
+    begin
+      hy := finalY[j] * mult;
+      hx := AFloor.XList[j];
+      RenderLine(lx, ly, hx, hy, ACurve, AHalf);
+      lx := hx; ly := hy;
+    end;
+  end;
+  // Fill any remaining samples past the last post with the last value.
+  if hx < AHalf then
+  begin
+    yi := ly; if yi < 0 then yi := 0 else if yi > 255 then yi := 255;
+    for i := hx to AHalf - 1 do ACurve[i] := FLOOR1_INVERSE_DB[yi];
+  end;
+end;
+
+// Decode a residue packet (types 0/1/2) for ACh channels, adding the decoded
+// residue into AVectors[ch][0..AHalf-1] (do-not-decode channels are skipped).
+procedure TSedaiVorbisDecoder.DecodeResiduePacket(ABR: TVorbisBitReader;
+  const ARes: TVorbisResidue; ACh: Integer; const ADoNotDecode: array of Boolean;
+  AVectors: array of PSingle; AHalf: Integer);
+
+  // Decode one partition's VQ vectors into AVec at offset AOff.
+  procedure DecodePartition(const ABook: TVorbisCodebook; ALayout0: Boolean;
+    APartSize: Integer; AVec: PSingle; AOff: Integer);
+  var
+    dim, step, i, j, entry: Integer;
+  begin
+    dim := ABook.Dimensions;
+    if dim <= 0 then Exit;
+    if ALayout0 then
+    begin
+      step := APartSize div dim;
+      for i := 0 to step - 1 do
+      begin
+        entry := DecodeScalar(ABR, ABook);
+        if entry < 0 then Exit;
+        for j := 0 to dim - 1 do
+          AVec[AOff + i + j * step] := AVec[AOff + i + j * step] +
+            ABook.ValueVectors[entry * dim + j];
+      end;
+    end
+    else
+    begin
+      i := 0;
+      while i < APartSize do
+      begin
+        entry := DecodeScalar(ABR, ABook);
+        if entry < 0 then Exit;
+        for j := 0 to dim - 1 do
+        begin
+          AVec[AOff + i] := AVec[AOff + i] + ABook.ValueVectors[entry * dim + j];
+          Inc(i);
+          if i >= APartSize then Break;
+        end;
+      end;
+    end;
+  end;
+
+  // Core residue 0/1 decode over nch vectors of length vlen.
+  procedure DoResidue01(rtype, nch, vlen: Integer; vecs: array of PSingle;
+    dnd: array of Boolean);
+  var
+    classwords, nToRead, partitionsToRead, partSize, rbegin, rend: Integer;
+    pass, pc, i, ch, temp, vqbook: Integer;
+    classifications: array of array of Integer;
+    layout0: Boolean;
+  begin
+    partSize := ARes.PartitionSize;
+    rbegin := ARes.ResBegin; rend := ARes.ResEnd;
+    if rend > vlen then rend := vlen;
+    if rbegin > rend then rbegin := rend;
+    nToRead := rend - rbegin;
+    if nToRead <= 0 then Exit;
+    classwords := FCodebooks[ARes.Classbook].Dimensions;
+    if classwords <= 0 then Exit;
+    partitionsToRead := nToRead div partSize;
+    layout0 := (rtype = 0);
+    SetLength(classifications, nch);
+    for ch := 0 to nch - 1 do
+      SetLength(classifications[ch], partitionsToRead + classwords);
+    for pass := 0 to 7 do
+    begin
+      pc := 0;
+      while pc < partitionsToRead do
+      begin
+        if pass = 0 then
+          for ch := 0 to nch - 1 do
+            if not dnd[ch] then
+            begin
+              temp := DecodeScalar(ABR, FCodebooks[ARes.Classbook]);
+              if temp < 0 then Exit;
+              for i := classwords - 1 downto 0 do
+              begin
+                classifications[ch][pc + i] := temp mod ARes.Classifications;
+                temp := temp div ARes.Classifications;
+              end;
+            end;
+        i := 0;
+        while (i < classwords) and (pc < partitionsToRead) do
+        begin
+          for ch := 0 to nch - 1 do
+            if not dnd[ch] then
+            begin
+              vqbook := ARes.Books[classifications[ch][pc]][pass];
+              if vqbook >= 0 then
+                DecodePartition(FCodebooks[vqbook], layout0, partSize,
+                  vecs[ch], rbegin + pc * partSize);
+            end;
+          Inc(pc); Inc(i);
+        end;
+      end;
+    end;
+  end;
+
+var
+  i, ch: Integer;
+  allDND: Boolean;
+  combined: array of Single;
+  cvec: array of PSingle;
+  cdnd: array of Boolean;
+begin
+  if ARes.ResidueType = 2 then
+  begin
+    allDND := True;
+    for ch := 0 to ACh - 1 do if not ADoNotDecode[ch] then allDND := False;
+    if allDND then Exit;
+    SetLength(combined, ACh * AHalf);
+    for i := 0 to ACh * AHalf - 1 do combined[i] := 0;
+    SetLength(cvec, 1); cvec[0] := @combined[0];
+    SetLength(cdnd, 1); cdnd[0] := False;
+    DoResidue01(1, 1, ACh * AHalf, cvec, cdnd);   // type 2 uses the type-1 layout
+    // De-interleave the combined vector back into the per-channel vectors.
+    for i := 0 to AHalf - 1 do
+      for ch := 0 to ACh - 1 do
+        AVectors[ch][i] := combined[i * ACh + ch];
+  end
+  else
+    DoResidue01(ARes.ResidueType, ACh, AHalf, AVectors, ADoNotDecode);
+end;
+
+// Inverse MDCT: M = AN/2 spectral coefficients -> AN time samples, the standard
+// MDCT pair x[n] = (2/N) sum_k X[k] cos[(pi/M)(n+1/2+M/2)(k+1/2)] with M = N/2
+// (the modulus is the bin count, so bin k maps to (k+0.5)/N cycles/sample).
+// Direct cosine form via a precomputed cos table; ACosTab[j] = cos(pi*j/(4M)).
+// No 1/N scaling here: libvorbis folds the normalization into the forward MDCT,
+// so the decoder's cosine sum (windowed + overlap-added) already yields PCM.
+procedure TSedaiVorbisDecoder.IMDCT(const ACosTab: array of Single;
+  AInput, AOutput: PSingle; AN: Integer);
+var
+  M, P, n, k, idx, stepN, baseI: Integer;
+  acc: Double;
+begin
+  M := AN div 2;
+  P := 8 * M;
+  for n := 0 to AN - 1 do
+  begin
+    baseI := 2 * n + 1 + M;
+    idx := baseI mod P;
+    stepN := (2 * baseI) mod P;
+    acc := 0;
+    for k := 0 to M - 1 do
+    begin
+      acc := acc + AInput[k] * ACosTab[idx];
+      idx := idx + stepN;
+      if idx >= P then idx := idx - P;
+    end;
+    AOutput[n] := acc;
+  end;
+end;
+
+// Decode a single audio packet: mode/window, floor decode, residue decode,
+// inverse coupling, floor multiply, IMDCT, window + overlap-add, emit PCM.
+function TSedaiVorbisDecoder.DecodeAudioPacket(const APacket: TVorbisPacket): Boolean;
+var
+  br: TVorbisBitReader;
+  modeNum, n, half, i, k, ch, submap, cnt, outFrames, base: Integer;
+  blockflag, prevFlag, nextFlag: Boolean;
+  leftStart, leftEnd, rightStart, rightEnd: Integer;
+  mapping: TVorbisMapping;
+  zeroCh, floorUnused: array of Boolean;
+  floorY: array of array of Integer;
+  residue, timeBuf: array of array of Single;
+  curve, win: array of Single;
+  submapCh: array of Integer;
+  submapPtrs: array of PSingle;
+  submapDND: array of Boolean;
+  m, a: Single;
+  mag, ang: Integer;
+begin
+  Result := False;
+  if APacket.Len < 1 then Exit;
+
+  br := TVorbisBitReader.Create(@APacket.Data[0], APacket.Len);
+  try
+    if br.ReadBit <> 0 then Exit;   // not an audio packet
+    modeNum := Integer(br.ReadBits(ILog(Length(FModes) - 1)));
+    if modeNum >= Length(FModes) then Exit;
+    blockflag := FModes[modeNum].BlockFlag;
+    if blockflag then n := FBlocksize1 else n := FBlocksize0;
+    if blockflag then
+    begin
+      prevFlag := br.ReadBit = 1;
+      nextFlag := br.ReadBit = 1;
+    end
+    else begin prevFlag := False; nextFlag := False; end;
+    half := n div 2;
+
+    if blockflag and (not prevFlag) then
+    begin leftStart := (n - FBlocksize0) div 4; leftEnd := (n + FBlocksize0) div 4; end
+    else begin leftStart := 0; leftEnd := half; end;
+    if blockflag and (not nextFlag) then
+    begin rightStart := (n * 3 - FBlocksize0) div 4; rightEnd := (n * 3 + FBlocksize0) div 4; end
+    else begin rightStart := half; rightEnd := n; end;
+
+    mapping := FMappings[FModes[modeNum].Mapping];
+
+    SetLength(zeroCh, FChannels);
+    SetLength(floorUnused, FChannels);
+    SetLength(floorY, FChannels);
+    SetLength(residue, FChannels);
+    SetLength(timeBuf, FChannels);
+    SetLength(curve, half);
+    for ch := 0 to FChannels - 1 do
+    begin
+      SetLength(residue[ch], half);
+      SetLength(timeBuf[ch], n);
+      for i := 0 to half - 1 do residue[ch][i] := 0;
+    end;
+
+    // 1) Floor decode per channel.
+    for ch := 0 to FChannels - 1 do
+    begin
+      submap := mapping.Mux[ch];
+      SetLength(floorY[ch], FFloors[mapping.SubmapFloor[submap]].Values);
+      DecodeFloor1Packet(br, FFloors[mapping.SubmapFloor[submap]], floorY[ch], floorUnused[ch]);
+      zeroCh[ch] := floorUnused[ch];
+    end;
+
+    // 2) Propagate non-zero across coupling pairs.
+    for i := 0 to mapping.CouplingSteps - 1 do
+      if (not zeroCh[mapping.Magnitude[i]]) or (not zeroCh[mapping.Angle[i]]) then
+      begin
+        zeroCh[mapping.Magnitude[i]] := False;
+        zeroCh[mapping.Angle[i]] := False;
+      end;
+
+    // 3) Residue decode per submap.
+    for submap := 0 to mapping.Submaps - 1 do
+    begin
+      cnt := 0;
+      SetLength(submapCh, FChannels);
+      for ch := 0 to FChannels - 1 do
+        if mapping.Mux[ch] = submap then begin submapCh[cnt] := ch; Inc(cnt); end;
+      if cnt = 0 then Continue;
+      SetLength(submapPtrs, cnt);
+      SetLength(submapDND, cnt);
+      for i := 0 to cnt - 1 do
+      begin
+        submapPtrs[i] := @residue[submapCh[i]][0];
+        submapDND[i] := zeroCh[submapCh[i]];
+      end;
+      DecodeResiduePacket(br, FResidues[mapping.SubmapResidue[submap]],
+        cnt, submapDND, submapPtrs, half);
+    end;
+
+    // 4) Inverse coupling (reverse order, square-polar).
+    for i := mapping.CouplingSteps - 1 downto 0 do
+    begin
+      mag := mapping.Magnitude[i];
+      ang := mapping.Angle[i];
+      for k := 0 to half - 1 do
+      begin
+        m := residue[mag][k];
+        a := residue[ang][k];
+        if m > 0 then
+        begin
+          if a > 0 then begin residue[mag][k] := m; residue[ang][k] := m - a; end
+          else begin residue[ang][k] := m; residue[mag][k] := m + a; end;
+        end
+        else
+        begin
+          if a > 0 then begin residue[mag][k] := m; residue[ang][k] := m + a; end
+          else begin residue[ang][k] := m; residue[mag][k] := m - a; end;
+        end;
+      end;
+    end;
+
+    // 5) Floor multiply (channels whose floor was unused stay silent).
+    for ch := 0 to FChannels - 1 do
+    begin
+      if floorUnused[ch] then
+      begin
+        for i := 0 to half - 1 do residue[ch][i] := 0;
+      end
+      else
+      begin
+        submap := mapping.Mux[ch];
+        RenderFloor1(FFloors[mapping.SubmapFloor[submap]], floorY[ch], @curve[0], half);
+        for i := 0 to half - 1 do residue[ch][i] := residue[ch][i] * curve[i];
+      end;
+    end;
+
+    // 6) IMDCT per channel.
+    for ch := 0 to FChannels - 1 do
+      if blockflag then IMDCT(FCosTab1, @residue[ch][0], @timeBuf[ch][0], n)
+      else IMDCT(FCosTab0, @residue[ch][0], @timeBuf[ch][0], n);
+
+    // 7) Window + overlap-add.
+    SetLength(win, n);
+    BuildVorbisWindow(@win[0], n, leftStart, leftEnd, rightStart, rightEnd);
+    for ch := 0 to FChannels - 1 do
+      for i := 0 to n - 1 do timeBuf[ch][i] := timeBuf[ch][i] * win[i];
+
+    if not FFirstAudio then
+      for ch := 0 to FChannels - 1 do
+        for i := 0 to FPrevTailLen - 1 do
+          if leftStart + i < n then
+            timeBuf[ch][leftStart + i] := timeBuf[ch][leftStart + i] + FPrevTail[ch][i];
+
+    // Emit the finalized region [leftStart, rightStart) (nothing on the first packet).
+    if FFirstAudio then outFrames := 0
+    else outFrames := rightStart - leftStart;
+    if outFrames > 0 then
+    begin
+      base := FOutLen;
+      SetLength(FOutBuf, FOutLen + outFrames * FChannels);
+      for i := 0 to outFrames - 1 do
+        for ch := 0 to FChannels - 1 do
+          FOutBuf[base + i * FChannels + ch] := timeBuf[ch][leftStart + i];
+      FOutLen := FOutLen + outFrames * FChannels;
+    end;
+
+    // Save the new right tail for the next packet's overlap.
+    FPrevTailLen := n - rightStart;
+    for ch := 0 to FChannels - 1 do
+    begin
+      SetLength(FPrevTail[ch], FPrevTailLen);
+      for i := 0 to FPrevTailLen - 1 do
+        FPrevTail[ch][i] := timeBuf[ch][rightStart + i];
+    end;
+    FFirstAudio := False;
+    Result := True;
+  finally
+    br.Free;
+  end;
+end;
+
 function TSedaiVorbisDecoder.OpenStream(AStream: TStream): Boolean;
 var
   pkt: TVorbisPacket;
@@ -1089,11 +1836,54 @@ begin
 end;
 
 function TSedaiVorbisDecoder.ReadFrames(ABuffer: PSingle; AFrameCount: Integer): Integer;
+var
+  produced, avail, take: Integer;
+  pkt: TVorbisPacket;
 begin
-  // Audio decode (setup-header parse + floor/residue/IMDCT/overlap-add) is the
-  // next session's work. Headers parse and validate today.
-  Result := 0;
-  FLastError := 'Vorbis: audio decode not yet implemented';
+  if not FAudioStarted then InitAudioDecode;
+  produced := 0;
+  while produced < AFrameCount do
+  begin
+    // Stop once we have emitted the stream's full sample count (granulepos trim).
+    if (FFinalGranule >= 0) and (FPosition + produced >= FFinalGranule) then Break;
+
+    // Drain whatever is already decoded in the interleaved FIFO.
+    if FOutHead < FOutLen then
+    begin
+      avail := (FOutLen - FOutHead) div FChannels;
+      take := AFrameCount - produced;
+      if take > avail then take := avail;
+      // Clamp to the final granule so trailing overlap padding is not emitted.
+      if (FFinalGranule >= 0) and (FPosition + produced + take > FFinalGranule) then
+        take := FFinalGranule - (FPosition + produced);
+      if take > 0 then
+      begin
+        Move(FOutBuf[FOutHead], ABuffer[produced * FChannels],
+          take * FChannels * SizeOf(Single));
+        FOutHead := FOutHead + take * FChannels;
+        produced := produced + take;
+      end;
+      if FOutHead >= FOutLen then begin FOutHead := 0; FOutLen := 0; end;
+      Continue;
+    end;
+
+    // FIFO empty: decode the next audio packet.
+    if FDecodeEOS then Break;
+    if not ReadPacket(pkt) then begin FDecodeEOS := True; Break; end;
+    if pkt.EndOfStream then
+    begin
+      FDecodeEOS := True;                 // decode this last packet, then stop
+      if pkt.GranulePos >= 0 then FFinalGranule := pkt.GranulePos;
+    end;
+    FOutHead := 0; FOutLen := 0;
+    if not DecodeAudioPacket(pkt) then
+    begin
+      if FDecodeEOS then Break;
+      Continue;   // skip an undecodable packet
+    end;
+  end;
+  FPosition := FPosition + produced;
+  Result := produced;
 end;
 
 function TSedaiVorbisDecoder.Seek(AFrame: Int64): Boolean;

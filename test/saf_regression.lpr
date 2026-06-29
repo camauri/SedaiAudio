@@ -493,6 +493,60 @@ begin
   end;
 end;
 
+procedure TestVorbisReader;
+var
+  fxDir, oggPath, wavPath: string;
+  rO, rW: TSedaiAudioFileReader;
+  bO, bW: TSedaiAudioBuffer;
+  i, n: Integer;
+  dr, dd, rr, corr: Double;
+begin
+  // OGG Vorbis is lossy: compare the pure-Pascal decoder against its WAV oracle
+  // with a tolerance (normalized cross-correlation + length within one long
+  // block). The granulepos trim makes the length match the source exactly.
+  WriteLn('== OGG Vorbis decoder vs WAV oracle (tolerance) ==');
+  fxDir := FindFixtures;
+  if fxDir = '' then begin Ok('fixtures present', False, 'data/fixtures not found'); Exit; end;
+
+  oggPath := fxDir + 'tone_s16_stereo.ogg';
+  wavPath := fxDir + 'tone_s16_stereo.wav';
+  Ok('detect OGG', TSedaiAudioFileReader.DetectFileFormat(oggPath) = affOGG, '');
+
+  bO := nil; bW := nil;
+  rO := TSedaiAudioFileReader.Create;
+  rW := TSedaiAudioFileReader.Create;
+  try
+    if rO.OpenFile(oggPath) and rW.OpenFile(wavPath) then
+    begin
+      Ok('header', (rO.Info.SampleRate = rW.Info.SampleRate) and
+                   (rO.Info.Channels = rW.Info.Channels),
+         Format('sr=%d ch=%d', [rO.Info.SampleRate, rO.Info.Channels]));
+      if rO.ReadAll(bO) and rW.ReadAll(bW) then
+      begin
+        Ok('length within a block', Abs(bO.SampleCount - bW.SampleCount) <= 2048,
+           Format('ogg=%d wav=%d', [bO.SampleCount, bW.SampleCount]));
+        // Normalized cross-correlation on channel 0 at zero lag.
+        n := bO.SampleCount; if bW.SampleCount < n then n := bW.SampleCount;
+        dr := 0; dd := 0; rr := 0;
+        for i := 0 to n - 1 do
+        begin
+          dr := dr + bO.GetSample(0, i) * bW.GetSample(0, i);
+          dd := dd + Sqr(bO.GetSample(0, i));
+          rr := rr + Sqr(bW.GetSample(0, i));
+        end;
+        if (dd > 0) and (rr > 0) then corr := dr / Sqrt(dd * rr) else corr := 0;
+        Ok('decode correlation > 0.9', corr > 0.9, Format('corr=%.4f', [corr]));
+      end
+      else
+        Ok('read all', False, rO.LastError + ' / ' + rW.LastError);
+    end
+    else
+      Ok('open', False, rO.LastError + ' / ' + rW.LastError);
+  finally
+    bO.Free; bW.Free; rO.Free; rW.Free;
+  end;
+end;
+
 procedure TestExactPitch;
 const
   NREND = 16384;          // ~2.7 Hz Goertzel bin
@@ -570,6 +624,7 @@ begin
   TestAIFFReader;
   TestAIFFWriter;
   TestFLACReader;
+  TestVorbisReader;
   TestExactPitch;
 
   WriteLn;
