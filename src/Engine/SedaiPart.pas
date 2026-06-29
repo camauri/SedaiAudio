@@ -302,15 +302,19 @@ begin
   end
   else if P = 'bell' then
   begin
+    // Gong-style bell: the 1.0:3.5 carrier:modulator ratio gives the metallic
+    // inharmonic strike, but the carrier now rings long (slow decay) while the
+    // modulator decays faster, so the bright clang settles into a sustained
+    // bell tone instead of the old short ping. (Ear-confirmed over Chowning 1.4.)
     Trim := 0.47;
     FM.Algorithm := 1;
     FM.FeedbackLevel := 0.0;
     Op := FM.GetOperator(0);
     Op.Ratio := 1.0; Op.Level := 0.8;
-    Op.AttackRate := 99; Op.Decay1Rate := 40; Op.SustainLevel := 0.0; Op.ReleaseRate := 30;
+    Op.AttackRate := 99; Op.Decay1Rate := 26; Op.SustainLevel := 0.0; Op.ReleaseRate := 26;
     Op := FM.GetOperator(1);
     Op.Ratio := 3.5; Op.Level := 0.9;
-    Op.AttackRate := 99; Op.Decay1Rate := 50; Op.SustainLevel := 0.0; Op.ReleaseRate := 40;
+    Op.AttackRate := 99; Op.Decay1Rate := 44; Op.SustainLevel := 0.0; Op.ReleaseRate := 44;
   end
   else if P = 'organ' then
   begin
