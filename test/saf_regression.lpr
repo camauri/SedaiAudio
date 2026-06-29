@@ -572,6 +572,67 @@ begin
   end;
 end;
 
+procedure TestMP3Reader;
+var
+  fxDir, mp3Path, wavPath: string;
+  rM, rW: TSedaiAudioFileReader;
+  bM, bW: TSedaiAudioBuffer;
+  i, lag, bestLag, nm, nw: Integer;
+  dr, dd, rr, c, bestCorr: Double;
+begin
+  // MP3 is lossy and carries encoder/decoder delay (no gapless trim), so the
+  // decoded stream is longer and shifted vs the source. Validate via the best
+  // integer-lag normalized cross-correlation on channel 0.
+  WriteLn('== MP3 decoder vs WAV oracle (tolerance) ==');
+  fxDir := FindFixtures;
+  if fxDir = '' then begin Ok('fixtures present', False, 'data/fixtures not found'); Exit; end;
+
+  mp3Path := fxDir + 'tone_s16_stereo.mp3';
+  wavPath := fxDir + 'tone_s16_stereo.wav';
+  Ok('detect MP3', TSedaiAudioFileReader.DetectFileFormat(mp3Path) = affMP3, '');
+
+  bM := nil; bW := nil;
+  rM := TSedaiAudioFileReader.Create;
+  rW := TSedaiAudioFileReader.Create;
+  try
+    if rM.OpenFile(mp3Path) and rW.OpenFile(wavPath) then
+    begin
+      Ok('header', (rM.Info.SampleRate = rW.Info.SampleRate) and
+                   (rM.Info.Channels = rW.Info.Channels),
+         Format('sr=%d ch=%d', [rM.Info.SampleRate, rM.Info.Channels]));
+      if rM.ReadAll(bM) and rW.ReadAll(bW) then
+      begin
+        nm := bM.SampleCount; nw := bW.SampleCount;
+        bestCorr := -2; bestLag := 0;
+        for lag := -3000 to 3000 do
+        begin
+          dr := 0; dd := 0; rr := 0;
+          i := 0;
+          while i < nw do
+          begin
+            if (i + lag >= 0) and (i + lag < nm) then
+            begin
+              dr := dr + bM.GetSample(0, i + lag) * bW.GetSample(0, i);
+              dd := dd + Sqr(bM.GetSample(0, i + lag));
+              rr := rr + Sqr(bW.GetSample(0, i));
+            end;
+            Inc(i, 3);
+          end;
+          if (dd > 0) and (rr > 0) then
+          begin c := dr / Sqrt(dd * rr); if c > bestCorr then begin bestCorr := c; bestLag := lag; end; end;
+        end;
+        Ok('decode correlation > 0.98', bestCorr > 0.98, Format('corr=%.4f lag=%d', [bestCorr, bestLag]));
+      end
+      else
+        Ok('read all', False, rM.LastError + ' / ' + rW.LastError);
+    end
+    else
+      Ok('open', False, rM.LastError + ' / ' + rW.LastError);
+  finally
+    bM.Free; bW.Free; rM.Free; rW.Free;
+  end;
+end;
+
 procedure TestExactPitch;
 const
   NREND = 16384;          // ~2.7 Hz Goertzel bin
@@ -650,6 +711,7 @@ begin
   TestAIFFWriter;
   TestFLACReader;
   TestVorbisReader;
+  TestMP3Reader;
   TestExactPitch;
 
   WriteLn;

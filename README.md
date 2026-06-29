@@ -808,7 +808,7 @@ The library includes professional audio file reading and writing capabilities.
 | **AIFF / AIFC** | ✓ | ✓ | Read: big-endian PCM 8/16/24/32 + AIFC `sowt` (LE) / `fl32` / `fl64`. Write: big-endian PCM 16/24/32 |
 | **FLAC** | ✓ | Planned | Pure-Pascal decoder: STREAMINFO, FIXED/LPC subframes, partitioned Rice, all channel modes (8/16/24-bit) |
 | **OGG Vorbis** | ✓ | Planned | Pure-Pascal decoder: Ogg container (CRC32/paging), codebooks (Huffman + VQ), floor 0/1, residue 0/1/2, channel coupling, IMDCT + overlap-add; seek supported |
-| **MP3** | Planned | - | Decode only |
+| **MP3** | ✓ | - | Pure-Pascal MPEG-1/2/2.5 Layer III decoder (minimp3 port): Huffman, requant, stereo (M/S + intensity), IMDCT, polyphase synthesis filterbank |
 
 ### Dithering Options
 
@@ -1464,8 +1464,8 @@ Mathematical simulation of physical instrument behavior for realistic sounds.
 
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| **MP3 Decoding** | Add an MP3 decoder to the file reader (FLAC + OGG Vorbis read/seek done) | Medium |
 | **OGG Vorbis seek fast-path** | Optional granulepos bisection (linear decode-discard seek already works) | Low |
+| **MP3 gapless trim** | Skip the Xing/LAME encoder delay + padding (decode is exact; raw stream keeps the priming) | Low |
 
 *Done since this list was written:* sample playback engine (`vstSample`, one-shot/looped with
 pitch), Karplus-Strong physical-modelling source (`vstKarplus`), voice stealing (oldest/quietest/
@@ -1491,7 +1491,7 @@ subframes, partitioned Rice, all channel modes), and a pure-Pascal **AIFF writer
 
 | Issue | Description | Workaround |
 |-------|-------------|------------|
-| **Limited Audio File Support** | WAV (read/write), AIFF/AIFC (read/write), FLAC (read) and OGG Vorbis (read) supported; MP3 pending | MP3 coming soon |
+| **Audio File Support** | WAV (read/write), AIFF/AIFC (read/write), FLAC / OGG Vorbis / MP3 (read) | Compressed formats are decode-only |
 | **Windows Focus** | Linux support may have minor issues | Report bugs |
 | **API Stability** | API may change in minor versions | Pin version for production |
 | **Documentation** | API documentation is embedded in source | Read unit interfaces |

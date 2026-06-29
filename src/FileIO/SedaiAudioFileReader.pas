@@ -15,7 +15,7 @@ interface
 
 uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer,
-  SedaiAudioDecoder, SedaiFLACDecoder, SedaiVorbisDecoder;
+  SedaiAudioDecoder, SedaiFLACDecoder, SedaiVorbisDecoder, SedaiMP3Decoder;
 
 type
   // Supported audio file formats
@@ -96,6 +96,7 @@ type
     function ReadAIFFSamples(ABuffer: PSingle; AFrameCount: Integer): Integer;
     function OpenFLAC: Boolean;
     function OpenVorbis: Boolean;
+    function OpenMP3: Boolean;
 
     // Sample conversion
     procedure ConvertPCM8ToFloat(ASrc: PByte; ADst: PSingle; ACount: Integer);
@@ -830,6 +831,35 @@ begin
   Result := True;
 end;
 
+function TSedaiAudioFileReader.OpenMP3: Boolean;
+begin
+  Result := False;
+
+  // The MP3 decoder (minimp3 port) decodes the whole stream at open and yields
+  // interleaved float frames at the native channel count.
+  FDecoder := TSedaiMP3Decoder.Create;
+  if not FDecoder.OpenStream(FStream) then
+  begin
+    FLastError := FDecoder.LastError;
+    FreeAndNil(FDecoder);
+    Exit;
+  end;
+
+  FInfo.SampleRate := FDecoder.SampleRate;
+  FInfo.Channels := FDecoder.Channels;
+  FInfo.BitsPerSample := FDecoder.BitsPerSample;
+  FInfo.SampleCount := FDecoder.TotalFrames;
+  if FInfo.SampleRate > 0 then
+    FInfo.Duration := FInfo.SampleCount / FInfo.SampleRate
+  else
+    FInfo.Duration := 0;
+  FInfo.Format := affMP3;
+  FInfo.Bitrate := 0;
+  FInfo.IsVBR := True;
+
+  Result := True;
+end;
+
 function TSedaiAudioFileReader.OpenFile(const AFileName: string): Boolean;
 var
   FS: TFileStream;
@@ -876,11 +906,7 @@ begin
     affAIFF:
       Result := OpenAIFF;
     affMP3:
-      begin
-        // TODO: Implement MP3 decoding
-        FLastError := 'MP3 format not yet implemented';
-        Result := False;
-      end;
+      Result := OpenMP3;
   else
     FLastError := 'Unknown audio format';
     Result := False;
@@ -928,7 +954,7 @@ begin
   case FInfo.Format of
     affWAV:  Result := ReadWAVSamples(ABuffer, AFrameCount);
     affAIFF: Result := ReadAIFFSamples(ABuffer, AFrameCount);
-    affFLAC, affOGG:
+    affFLAC, affOGG, affMP3:
       if Assigned(FDecoder) then
       begin
         Result := FDecoder.ReadFrames(ABuffer, AFrameCount);
@@ -1035,10 +1061,10 @@ begin
         FPosition := ASamplePosition;
         Result := True;
       end;
-    affFLAC, affOGG:
+    affFLAC, affOGG, affMP3:
       if Assigned(FDecoder) then
       begin
-        Result := FDecoder.Seek(ASamplePosition);   // OGG seek arrives in a later session
+        Result := FDecoder.Seek(ASamplePosition);
         if Result then
           FPosition := ASamplePosition;
       end;

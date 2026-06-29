@@ -67,10 +67,13 @@ deserves recognition:
   `floor1_inverse_dB` lookup table is the constant table given in the Vorbis I specification.
   No upstream decoder source (e.g. `stb_vorbis`, `libvorbis`) was vendored.
 
-As MP3 decoding is added, this recognition will extend to the format / reference-decoder
-authors actually drawn upon (e.g. if a public-domain reference decoder such as minimp3 is
-ported rather than written from the spec, its author is credited here and in the unit header).
+- **Lieff** and the **minimp3** contributors — `src/FileIO/SedaiMP3Decoder.pas` is a faithful
+  pure-Pascal **port of minimp3** (https://github.com/lieff/minimp3), the public-domain (CC0)
+  single-file MP3 decoder, Layer III only. The constant tables in `src/FileIO/SedaiMP3Tables.inc`
+  are extracted verbatim from minimp3. minimp3 is released under CC0 (public domain), so the
+  port carries no copyleft obligation; this credit is given on principle. (MP3 decoding is
+  patent-unencumbered worldwide since 2017.)
 
 See the headers of `src/SID/SedaiSIDEvo.pas`, `src/Players/SedaiGoatTracker.pas`,
-`src/FileIO/SedaiFLACDecoder.pas` and `src/FileIO/SedaiVorbisDecoder.pas` for the detailed
-per-component attribution.
+`src/FileIO/SedaiFLACDecoder.pas`, `src/FileIO/SedaiVorbisDecoder.pas` and
+`src/FileIO/SedaiMP3Decoder.pas` for the detailed per-component attribution.
