@@ -34,6 +34,7 @@ type
     FMaxVoices: Integer;
     FActiveVoiceCount: Integer;
     FLastVoiceIndex: Integer;     // pool slot allocated by the most recent NoteOn (-1 if none)
+    FPendingFreq: Single;         // exact Hz primed onto voices for the current NoteOnFreq (0 = none)
 
     // Voice stealing
     FStealPolicy: TVoiceStealPolicy;
@@ -94,6 +95,13 @@ type
 
     // Handle note on
     procedure NoteOn(ANote: Byte; AVelocity: Single);
+
+    // Handle note on at an exact frequency (Hz). Allocates the same way as
+    // NoteOn (using the nearest MIDI note for key-tracking / stealing) but primes
+    // the allocated voice(s) so the generators latch on AFreq exactly. This is
+    // what makes microtonal Karplus plucks land on pitch (the other sources
+    // already track the voice frequency per sample).
+    procedure NoteOnFreq(AFreq, AVelocity: Single);
 
     // Handle note off
     procedure NoteOff(ANote: Byte);
@@ -509,6 +517,7 @@ begin
       else
         FVoices[VoiceIndex].GlideTime := 0;
 
+      if FPendingFreq > 0 then FVoices[VoiceIndex].SetPendingFrequency(FPendingFreq);
       FVoices[VoiceIndex].NoteOn(ANote, AVelocity);
     end;
   end
@@ -542,6 +551,7 @@ begin
         FVoices[VoiceIndex].SetOscillatorDetune(0, Detune);
         FVoices[VoiceIndex].Pan := Pan;
         FVoices[VoiceIndex].StealPriority := I;  // First voice highest priority
+        if FPendingFreq > 0 then FVoices[VoiceIndex].SetPendingFrequency(FPendingFreq);
         FVoices[VoiceIndex].NoteOn(ANote, AVelocity);
         FLastVoiceIndex := VoiceIndex;
       end;
@@ -561,9 +571,30 @@ begin
       else
         FVoices[VoiceIndex].GlideTime := 0;
 
+      if FPendingFreq > 0 then FVoices[VoiceIndex].SetPendingFrequency(FPendingFreq);
       FVoices[VoiceIndex].NoteOn(ANote, AVelocity);
       FLastVoiceIndex := VoiceIndex;
     end;
+  end;
+end;
+
+procedure TSedaiVoiceManager.NoteOnFreq(AFreq, AVelocity: Single);
+var
+  Note: Integer;
+begin
+  if AFreq <= 0.0 then Exit;
+
+  // Nearest MIDI note drives allocation / key-tracking / stealing; the exact
+  // Hz is primed onto the allocated voice(s) via FPendingFreq.
+  Note := Round(69.0 + 12.0 * Log2(AFreq / 440.0));
+  if Note < 0 then Note := 0;
+  if Note > 127 then Note := 127;
+
+  FPendingFreq := AFreq;
+  try
+    NoteOn(Byte(Note), AVelocity);
+  finally
+    FPendingFreq := 0;
   end;
 end;
 

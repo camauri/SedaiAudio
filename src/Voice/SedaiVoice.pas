@@ -64,6 +64,7 @@ type
     FGlideTarget: Single;         // Target frequency for glide
     FCurrentFrequency: Single;    // Current frequency (after glide)
     FGlideCoeff: Single;          // Glide coefficient
+    FExplicitFreq: Single;        // One-shot exact Hz for the next NoteOn (0 = use the MIDI note)
 
     // Generators
     FOscillators: array[0..MAX_OSCILLATORS-1] of TSedaiOscillator;
@@ -214,6 +215,13 @@ type
     // Used for arbitrary / microtonal pitches; jumps immediately (no glide).
     // Affects oscillator and wavetable sources (the FM source is note-driven).
     procedure SetExplicitFrequency(AFreq: Single);
+
+    // Prime the exact frequency (Hz) the NEXT NoteOn should use instead of the
+    // MIDI-note pitch. One-shot: consumed and cleared by NoteOn. Unlike
+    // SetExplicitFrequency (a post-trigger retune), this is applied BEFORE the
+    // generators latch their pitch, so additive/sample/Karplus start at the
+    // exact Hz with no re-pluck. 0 disables.
+    procedure SetPendingFrequency(AFreq: Single);
 
     // Select which generator drives the voice.
     procedure SetSourceType(AType: TVoiceSourceType);
@@ -431,6 +439,7 @@ begin
   FModMatrix.Reset;          // clears source/dest state, keeps the routings
   for I := 0 to High(FLFOValue) do
     FLFOValue[I] := 0.0;
+  FExplicitFreq := 0.0;
 end;
 
 procedure TSedaiVoice.SetNote(AValue: Byte);
@@ -566,6 +575,17 @@ begin
 
   UpdateFrequency;
 
+  // Exact-Hz pitch (microtonal / arbitrary): override the note-derived pitch
+  // AFTER UpdateFrequency (which recomputes from FNote) and BEFORE the
+  // generators below latch, so additive/sample/Karplus start exactly on this
+  // frequency with no re-pluck. One-shot, consumed at the end of NoteOn.
+  if FExplicitFreq > 0.0 then
+  begin
+    FBaseFrequency := FExplicitFreq;
+    FCurrentFrequency := FExplicitFreq;
+    FGlideTarget := FExplicitFreq;
+  end;
+
   // Update oscillator frequencies
   for I := 0 to MAX_OSCILLATORS - 1 do
   begin
@@ -596,10 +616,14 @@ begin
     FSamplePlayer.Play;
   end;
 
-  // Karplus-Strong: pluck the string at the current frequency.
+  // Karplus-Strong: pluck the string at the current frequency. This is the one
+  // source whose pitch is baked in at pluck time (delay-line length) rather than
+  // re-read per sample, so the exact-Hz override above is what makes microtonal
+  // plucks land on pitch.
   if (FSourceType = vstKarplus) and Assigned(FKarplus) then
     FKarplus.NoteOn(FCurrentFrequency, AVelocity);
 
+  FExplicitFreq := 0.0;   // one-shot: consumed by this NoteOn
   FState := vsAttack;
 end;
 
@@ -662,6 +686,13 @@ begin
 
   if Assigned(FWTGenerator) then
     FWTGenerator.Frequency := AFreq;
+end;
+
+procedure TSedaiVoice.SetPendingFrequency(AFreq: Single);
+begin
+  // One-shot: NoteOn applies this before the generators latch, then clears it.
+  if AFreq > 0.0 then
+    FExplicitFreq := AFreq;
 end;
 
 procedure TSedaiVoice.SetSourceType(AType: TVoiceSourceType);

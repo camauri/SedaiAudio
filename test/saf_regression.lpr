@@ -493,6 +493,68 @@ begin
   end;
 end;
 
+procedure TestExactPitch;
+const
+  NREND = 16384;          // ~2.7 Hz Goertzel bin
+  TARGET = 269.0;         // microtonal: nearest note is C4 = 261.63 Hz
+
+  function Goertzel(const arr: array of Single; freq: Single): Double;
+  var w, c, s0, s1, s2: Double; i: Integer;
+  begin
+    w := 2*Pi*freq/SR; c := 2*Cos(w); s1 := 0; s2 := 0;
+    for i := 0 to NREND-1 do begin s0 := arr[i] + c*s1 - s2; s2 := s1; s1 := s0; end;
+    Result := Sqrt(s1*s1 + s2*s2 - c*s1*s2);
+  end;
+
+  // Render a Part's left channel after a microtonal note; assert the energy at
+  // the exact frequency dominates the energy at the nearest-note frequency.
+  procedure Check(const AName: string; APart: TSAFPart);
+  var
+    arr: array of Single;
+    buf: array[0..BLOCK*2-1] of Single;
+    done, n, i, note: Integer;
+    fNote, mExact, mNote: Double;
+  begin
+    SetLength(arr, NREND);
+    APart.NoteOnFreq(TARGET, 1.0);
+    done := 0;
+    while done < NREND do
+    begin
+      n := BLOCK; if done + n > NREND then n := NREND - done;
+      APart.RenderBlock(@buf[0], n);
+      for i := 0 to n-1 do arr[done+i] := buf[i*2];
+      Inc(done, n);
+    end;
+    note := Round(69.0 + 12.0 * Log2(TARGET / 440.0));
+    fNote := 440.0 * Power(2.0, (note - 69) / 12.0);
+    mExact := Goertzel(arr, TARGET);
+    mNote  := Goertzel(arr, fNote);
+    Ok(AName, mExact > mNote * 1.3,
+       Format('exact=%.3g note=%.3g', [mExact, mNote]));
+  end;
+
+var
+  p: TSAFPart;
+begin
+  // Residual #2: exact-Hz pitch. Karplus is the source that was note-quantized
+  // (pitch baked into the delay line at pluck time); the others already tracked
+  // the voice frequency per sample and serve as regression guards.
+  WriteLn('== exact-Hz pitch (residual #2) ==');
+  p := TSAFPart.Create(4);
+  try
+    p.SetSampleRate(SR);
+    p.SetInstrument(psKarplus, 'guitar');
+    Check('karplus on pitch', p);
+  finally p.Free; end;
+
+  p := TSAFPart.Create(4);
+  try
+    p.SetSampleRate(SR);
+    p.SetSample(MakePing(261.63, 1.0), 60, lmForward);  // C4 sine, looped
+    Check('sample on pitch', p);
+  finally p.Free; end;
+end;
+
 // ---------------------------------------------------------------------------
 
 begin
@@ -508,6 +570,7 @@ begin
   TestAIFFReader;
   TestAIFFWriter;
   TestFLACReader;
+  TestExactPitch;
 
   WriteLn;
   if Failures = 0 then

@@ -694,31 +694,16 @@ begin
 end;
 
 function TSAFPart.NoteOnFreq(AFreq, AVelocity: Single): Integer;
-var
-  Note: Integer;
-  Slot: Integer;
-  V: TSedaiVoice;
 begin
   Result := -1;
   if AFreq <= 0.0 then Exit;
 
-  // Nearest MIDI note (drives key-tracking / FM pitch); exact Hz applied below.
-  Note := Round(69.0 + 12.0 * Log2(AFreq / 440.0));
-  if Note < 0 then Note := 0;
-  if Note > 127 then Note := 127;
-
-  FManager.NoteOn(Note, AVelocity);
-  Slot := FManager.LastVoiceIndex;
-  if Slot < 0 then Exit;
-
-  if FSource <> psFM then
-  begin
-    V := FManager.GetVoice(Slot);
-    if V <> nil then
-      V.SetExplicitFrequency(AFreq);
-  end;
-
-  Result := Slot;
+  // The manager allocates by nearest MIDI note (key-tracking / stealing) and
+  // primes the voice with the exact Hz so every source latches on pitch -
+  // including Karplus, whose pitch is baked into the delay line at pluck time.
+  // FM stays note-driven (its synth ignores the voice frequency).
+  FManager.NoteOnFreq(AFreq, AVelocity);
+  Result := FManager.LastVoiceIndex;
 end;
 
 procedure TSAFPart.NoteOff(ANote: Byte);
