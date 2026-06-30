@@ -975,6 +975,152 @@ begin
   end;
 end;
 
+type
+  // Applies a technique's exploded full-parameter block to a part.
+  TConfigureBlockProc = procedure(APart: TSAFPart; const AKey: string);
+
+procedure ApplyClassicBlock(APart: TSAFPart; const AKey: string);
+begin APart.SetClassicParams(ExplodeClassicParams(AKey)); end;
+procedure ApplyWavetableBlock(APart: TSAFPart; const AKey: string);
+begin APart.SetWavetableParams(ExplodeWavetableParams(AKey)); end;
+procedure ApplyAdditiveBlock(APart: TSAFPart; const AKey: string);
+begin APart.SetAdditiveParams(ExplodeAdditiveParams(AKey)); end;
+procedure ApplyKarplusBlock(APart: TSAFPart; const AKey: string);
+begin APart.SetKarplusParams(ExplodeKarplusParams(AKey)); end;
+
+procedure TestTechniqueParams;
+var
+  frames, i: Integer;
+  bufA, bufB: array of Single;
+  maxDiff, diff: Single;
+  reg2, reg3: TSedaiInstrumentRegistry;
+  authored: TInstrumentPreset;
+  ms: TMemoryStream;
+  idx: Integer;
+
+  // Render a part's middle-C note. ASeed forces the RNG so techniques that excite
+  // with noise (Karplus) stay deterministic across two renders.
+  procedure Render(APart: TSAFPart; var ABuf: array of Single; AFrames: Integer; ASeed: LongInt);
+  begin
+    APart.SetSampleRate(SR);
+    RandSeed := ASeed;
+    APart.NoteOn(60, 1.0);
+    FillChar(ABuf[0], AFrames * 2 * SizeOf(Single), 0);
+    APart.RenderBlock(@ABuf[0], AFrames);
+  end;
+
+  // explode a named preset, apply the block to one part and the named key to
+  // another, render both and confirm the block path reproduces it bit-for-bit.
+  procedure CheckBitExact(ASource: TSAFPartSource; const AKey: string;
+    AConfigureBlock: TConfigureBlockProc; ASeed: LongInt);
+  var
+    pa, pb: TSAFPart;
+    j: Integer;
+    md, pk: Single;
+  begin
+    pa := TSAFPart.Create;
+    pb := TSAFPart.Create;
+    try
+      pa.SetSampleRate(SR); pa.SetInstrument(ASource, AKey);
+      pb.SetSampleRate(SR); pb.SetInstrument(ASource, AKey);
+      AConfigureBlock(pb, AKey);    // apply the exploded full-parameter block
+      Render(pa, bufA, frames, ASeed);
+      Render(pb, bufB, frames, ASeed);
+      md := 0; pk := 0;
+      for j := 0 to frames * 2 - 1 do
+      begin
+        diff := Abs(bufA[j] - bufB[j]);
+        if diff > md then md := diff;
+        if Abs(bufA[j]) > pk then pk := Abs(bufA[j]);
+      end;
+      Ok(Format('%s block reproduces preset', [AKey]), (md = 0) and (pk > 0.001),
+         Format('maxDiff=%.3g peak=%.4f', [md, pk]));
+    finally
+      pa.Free; pb.Free;
+    end;
+  end;
+
+begin
+  WriteLn('== Per-technique parameter blocks (author side) ==');
+  frames := 4096;
+  SetLength(bufA, frames * 2);
+  SetLength(bufB, frames * 2);
+
+  // Each technique: the exploded full block reproduces the named preset exactly.
+  CheckBitExact(psClassic,   'lead',     @ApplyClassicBlock,   111);
+  CheckBitExact(psWavetable, 'supersaw', @ApplyWavetableBlock, 222);
+  CheckBitExact(psAdditive,  'organ',    @ApplyAdditiveBlock,  333);
+  CheckBitExact(psKarplus,   'guitar',   @ApplyKarplusBlock,   444);
+
+  // .safinst round-trip of each technique's block (spot-check key fields).
+  authored := Default(TInstrumentPreset);
+  authored.Name := 'RT Classic'; authored.Category := icLead;
+  authored.Technique := psClassic; authored.PresetKey := 'lead';
+  authored.HasClassicParams := True; authored.Classic := ExplodeClassicParams('lead');
+  ms := TMemoryStream.Create;
+  reg2 := TSedaiInstrumentRegistry.CreateEmpty;
+  try
+    reg2.AddPreset(authored);
+    authored := Default(TInstrumentPreset);
+    authored.Name := 'RT Wave'; authored.Category := icLead;
+    authored.Technique := psWavetable; authored.PresetKey := 'supersaw';
+    authored.HasWavetableParams := True; authored.Wavetable := ExplodeWavetableParams('supersaw');
+    reg2.AddPreset(authored);
+    authored := Default(TInstrumentPreset);
+    authored.Name := 'RT Add'; authored.Category := icOrgan;
+    authored.Technique := psAdditive; authored.PresetKey := 'organ';
+    authored.HasAdditiveParams := True; authored.Additive := ExplodeAdditiveParams('organ');
+    reg2.AddPreset(authored);
+    authored := Default(TInstrumentPreset);
+    authored.Name := 'RT KS'; authored.Category := icPlucked;
+    authored.Technique := psKarplus; authored.PresetKey := 'guitar';
+    authored.HasKarplusParams := True; authored.Karplus := ExplodeKarplusParams('guitar');
+    reg2.AddPreset(authored);
+
+    reg2.SaveToStream(ms, 'Technique Blocks');
+    ms.Position := 0;
+    reg3 := TSedaiInstrumentRegistry.CreateEmpty;
+    try
+      reg3.LoadFromStream(ms);
+
+      idx := reg3.FindByName('RT Classic');
+      Ok('.safinst classic block round-trips',
+         (idx >= 0) and reg3.Get(idx).HasClassicParams and
+         (reg3.Get(idx).Classic.OscMode = ExplodeClassicParams('lead').OscMode) and
+         (Abs(reg3.Get(idx).Classic.FilterCutoff - ExplodeClassicParams('lead').FilterCutoff) < 1e-3), '');
+
+      idx := reg3.FindByName('RT Wave');
+      Ok('.safinst wavetable block round-trips',
+         (idx >= 0) and reg3.Get(idx).HasWavetableParams and
+         (reg3.Get(idx).Wavetable.Kind = wtkSuperSaw) and
+         (reg3.Get(idx).Wavetable.UnisonVoices = ExplodeWavetableParams('supersaw').UnisonVoices), '');
+
+      idx := reg3.FindByName('RT Add');
+      maxDiff := 0;
+      if idx >= 0 then
+        for i := 0 to High(reg3.Get(idx).Additive.Levels) do
+        begin
+          diff := Abs(reg3.Get(idx).Additive.Levels[i] - ExplodeAdditiveParams('organ').Levels[i]);
+          if diff > maxDiff then maxDiff := diff;
+        end;
+      Ok('.safinst additive block round-trips',
+         (idx >= 0) and reg3.Get(idx).HasAdditiveParams and
+         (reg3.Get(idx).Additive.HarmonicCount = ExplodeAdditiveParams('organ').HarmonicCount) and
+         (maxDiff < 1e-4), Format('maxDiff=%.3g', [maxDiff]));
+
+      idx := reg3.FindByName('RT KS');
+      Ok('.safinst karplus block round-trips',
+         (idx >= 0) and reg3.Get(idx).HasKarplusParams and
+         (Abs(reg3.Get(idx).Karplus.Damping - ExplodeKarplusParams('guitar').Damping) < 1e-5) and
+         (Abs(reg3.Get(idx).Karplus.Blend - ExplodeKarplusParams('guitar').Blend) < 1e-5), '');
+    finally
+      reg3.Free;
+    end;
+  finally
+    reg2.Free; ms.Free;
+  end;
+end;
+
 procedure TestExactPitch;
 const
   NREND = 16384;          // ~2.7 Hz Goertzel bin
@@ -1057,6 +1203,7 @@ begin
   TestMP3Reader;
   TestInstrumentRegistry;
   TestFMParams;
+  TestTechniqueParams;
   TestExactPitch;
 
   WriteLn;

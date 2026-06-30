@@ -178,6 +178,13 @@ type
     // Set oscillator pulse width
     procedure SetOscillatorPulseWidth(AIndex: Integer; AWidth: Single);
 
+    // Read-back of the per-oscillator mix state (level/enabled/detune are kept
+    // in the voice, not on the oscillator object). Used to capture a configured
+    // voice into an editable parameter block (the preset "author" side).
+    function GetOscillatorLevel(AIndex: Integer): Single;
+    function GetOscillatorEnabled(AIndex: Integer): Boolean;
+    function GetOscillatorDetune(AIndex: Integer): Single;
+
     // How the 3 oscillators combine: mix (sum) / ring-mod / sync.
     property OscMode: TVoiceOscMode read FOscMode write SetOscMode;
 
@@ -1109,6 +1116,30 @@ procedure TSedaiVoice.SetOscillatorPulseWidth(AIndex: Integer; AWidth: Single);
 begin
   if (AIndex >= 0) and (AIndex < MAX_OSCILLATORS) then
     FOscillators[AIndex].PulseWidth := AWidth;
+end;
+
+function TSedaiVoice.GetOscillatorLevel(AIndex: Integer): Single;
+begin
+  if (AIndex >= 0) and (AIndex < MAX_OSCILLATORS) then
+    Result := FOscillatorLevels[AIndex]
+  else
+    Result := 0.0;
+end;
+
+function TSedaiVoice.GetOscillatorEnabled(AIndex: Integer): Boolean;
+begin
+  if (AIndex >= 0) and (AIndex < MAX_OSCILLATORS) then
+    Result := FOscillatorEnabled[AIndex]
+  else
+    Result := False;
+end;
+
+function TSedaiVoice.GetOscillatorDetune(AIndex: Integer): Single;
+begin
+  if (AIndex >= 0) and (AIndex < MAX_OSCILLATORS) then
+    Result := FOscillatorDetune[AIndex]
+  else
+    Result := 0.0;
 end;
 
 procedure TSedaiVoice.SetEnvelopeADSR(AIndex: Integer; AAttack, ADecay, ASustain, ARelease: Single);

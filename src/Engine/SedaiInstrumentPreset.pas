@@ -22,7 +22,8 @@ unit SedaiInstrumentPreset;
 interface
 
 uses
-  Classes, SysUtils, SedaiPart, SedaiFMOperator;
+  Classes, SysUtils, SedaiPart, SedaiFMOperator,
+  SedaiAudioTypes, SedaiVoice, SedaiFilter;   // TWaveformType / TVoiceOscMode / TFilterType for .safinst enum parsing
 
 type
   // Composer-facing role of a sound. The PRIMARY browse axis (with character
@@ -40,8 +41,19 @@ type
     Technique: TSAFPartSource;    // internal: which generator
     PresetKey: string;            // internal: key for ConfigureXxxVoice
     Common: TPartCommonOverride;  // optional envelope/filter/level overrides
-    HasFMParams: Boolean;         // author side: full FM block overrides the key
-    FM: TFMParams;                // every operator editable (when HasFMParams)
+    // Author side: a full per-technique parameter block overrides the named key
+    // for that technique (every parameter editable). Only the block matching the
+    // preset's Technique is consulted.
+    HasFMParams: Boolean;
+    FM: TFMParams;
+    HasClassicParams: Boolean;
+    Classic: TClassicParams;
+    HasWavetableParams: Boolean;
+    Wavetable: TWavetableParams;
+    HasAdditiveParams: Boolean;
+    Additive: TAdditiveParams;
+    HasKarplusParams: Boolean;
+    Karplus: TKarplusParams;
   end;
 
   TIntArray = array of Integer;
@@ -206,11 +218,29 @@ begin
   Result := False;
   if (AIndex < 0) or (AIndex >= FCount) or (APart = nil) then Exit;
   APart.SetInstrument(FPresets[AIndex].Technique, FPresets[AIndex].PresetKey);
-  // Author side: a full FM block (if present) replaces the named-key timbre.
+  // Author side: a full per-technique block (if present for the matching
+  // technique) replaces the named-key timbre. Clear the others so a reused Part
+  // doesn't carry a stale block.
   if (FPresets[AIndex].Technique = psFM) and FPresets[AIndex].HasFMParams then
     APart.SetFMParams(FPresets[AIndex].FM)
   else
     APart.ClearFMParams;
+  if (FPresets[AIndex].Technique = psClassic) and FPresets[AIndex].HasClassicParams then
+    APart.SetClassicParams(FPresets[AIndex].Classic)
+  else
+    APart.ClearClassicParams;
+  if (FPresets[AIndex].Technique = psWavetable) and FPresets[AIndex].HasWavetableParams then
+    APart.SetWavetableParams(FPresets[AIndex].Wavetable)
+  else
+    APart.ClearWavetableParams;
+  if (FPresets[AIndex].Technique = psAdditive) and FPresets[AIndex].HasAdditiveParams then
+    APart.SetAdditiveParams(FPresets[AIndex].Additive)
+  else
+    APart.ClearAdditiveParams;
+  if (FPresets[AIndex].Technique = psKarplus) and FPresets[AIndex].HasKarplusParams then
+    APart.SetKarplusParams(FPresets[AIndex].Karplus)
+  else
+    APart.ClearKarplusParams;
   if HasCommonOverride(FPresets[AIndex].Common) then
     APart.SetCommonOverride(FPresets[AIndex].Common)
   else
@@ -304,6 +334,61 @@ begin
              FloatToStr(p.FM.Ops[op].FixedFreq, fs),
              FloatToStr(p.FM.Ops[op].Detune, fs),
              FloatToStr(p.FM.Ops[op].VelocitySensitivity, fs)]));
+      end;
+      // Author side: full CLASSIC parameter block.
+      if (p.Technique = psClassic) and p.HasClassicParams then
+      begin
+        sl.Add(Format('clsmode=%d', [Ord(p.Classic.OscMode)]));
+        for op := 0 to High(p.Classic.Oscs) do
+          sl.Add(Format('clsosc=%d,%d,%d,%s,%s,%s',
+            [op, Ord(p.Classic.Oscs[op].Enabled), Ord(p.Classic.Oscs[op].Waveform),
+             FloatToStr(p.Classic.Oscs[op].Level, fs),
+             FloatToStr(p.Classic.Oscs[op].DetuneCents, fs),
+             FloatToStr(p.Classic.Oscs[op].PulseWidth, fs)]));
+        sl.Add(Format('clsflt=%d,%d,%s,%s',
+          [Ord(p.Classic.FilterEnabled), Ord(p.Classic.FilterType),
+           FloatToStr(p.Classic.FilterCutoff, fs), FloatToStr(p.Classic.FilterResonance, fs)]));
+        sl.Add(Format('clsenv=%s,%s,%s,%s',
+          [FloatToStr(p.Classic.Attack, fs), FloatToStr(p.Classic.Decay, fs),
+           FloatToStr(p.Classic.Sustain, fs), FloatToStr(p.Classic.Release, fs)]));
+        sl.Add('clstrim=' + FloatToStr(p.Classic.OutputTrim, fs));
+      end;
+      // Author side: full WAVETABLE parameter block.
+      if (p.Technique = psWavetable) and p.HasWavetableParams then
+      begin
+        sl.Add(Format('wtkind=%d', [Ord(p.Wavetable.Kind)]));
+        sl.Add(Format('wtsteps=%d', [p.Wavetable.Steps]));
+        sl.Add(Format('wtuni=%d,%s,%s',
+          [p.Wavetable.UnisonVoices, FloatToStr(p.Wavetable.UnisonDetune, fs),
+           FloatToStr(p.Wavetable.UnisonSpread, fs)]));
+        sl.Add(Format('wtenv=%s,%s,%s,%s',
+          [FloatToStr(p.Wavetable.Attack, fs), FloatToStr(p.Wavetable.Decay, fs),
+           FloatToStr(p.Wavetable.Sustain, fs), FloatToStr(p.Wavetable.Release, fs)]));
+        sl.Add('wttrim=' + FloatToStr(p.Wavetable.OutputTrim, fs));
+      end;
+      // Author side: full ADDITIVE parameter block (only non-zero harmonics).
+      if (p.Technique = psAdditive) and p.HasAdditiveParams then
+      begin
+        sl.Add(Format('addcount=%d', [p.Additive.HarmonicCount]));
+        for op := 0 to High(p.Additive.Levels) do
+          if (p.Additive.Levels[op] <> 0) or (p.Additive.Detunes[op] <> 0) then
+            sl.Add(Format('addh=%d,%s,%s',
+              [op, FloatToStr(p.Additive.Levels[op], fs),
+               FloatToStr(p.Additive.Detunes[op], fs)]));
+        sl.Add(Format('addenv=%s,%s,%s,%s',
+          [FloatToStr(p.Additive.Attack, fs), FloatToStr(p.Additive.Decay, fs),
+           FloatToStr(p.Additive.Sustain, fs), FloatToStr(p.Additive.Release, fs)]));
+        sl.Add('addtrim=' + FloatToStr(p.Additive.OutputTrim, fs));
+      end;
+      // Author side: full KARPLUS parameter block.
+      if (p.Technique = psKarplus) and p.HasKarplusParams then
+      begin
+        sl.Add('ksdamp=' + FloatToStr(p.Karplus.Damping, fs));
+        sl.Add('ksblend=' + FloatToStr(p.Karplus.Blend, fs));
+        sl.Add(Format('ksenv=%s,%s,%s,%s',
+          [FloatToStr(p.Karplus.Attack, fs), FloatToStr(p.Karplus.Decay, fs),
+           FloatToStr(p.Karplus.Sustain, fs), FloatToStr(p.Karplus.Release, fs)]));
+        sl.Add('kstrim=' + FloatToStr(p.Karplus.OutputTrim, fs));
       end;
     end;
     sl.SaveToStream(AStream);
@@ -426,6 +511,138 @@ begin
           cur.FM.Ops[opIdx].Detune := StrToFloatDef(NextTok, 0, fs);
           cur.FM.Ops[opIdx].VelocitySensitivity := StrToFloatDef(NextTok, 0, fs);
         end;
+      end
+      // --- CLASSIC block ---
+      else if k = 'clsmode' then
+      begin
+        cur.HasClassicParams := True;
+        cur.Classic.OscMode := TVoiceOscMode(StrToIntDef(v, 0));
+      end
+      else if k = 'clsosc' then
+      begin
+        cur.HasClassicParams := True;
+        rest := v;
+        opIdx := StrToIntDef(NextTok, 0);
+        if (opIdx >= 0) and (opIdx <= High(cur.Classic.Oscs)) then
+        begin
+          cur.Classic.Oscs[opIdx].Enabled := StrToIntDef(NextTok, 0) <> 0;
+          cur.Classic.Oscs[opIdx].Waveform := TWaveformType(StrToIntDef(NextTok, 0));
+          cur.Classic.Oscs[opIdx].Level := StrToFloatDef(NextTok, 0, fs);
+          cur.Classic.Oscs[opIdx].DetuneCents := StrToFloatDef(NextTok, 0, fs);
+          cur.Classic.Oscs[opIdx].PulseWidth := StrToFloatDef(NextTok, 0.5, fs);
+        end;
+      end
+      else if k = 'clsflt' then
+      begin
+        cur.HasClassicParams := True;
+        rest := v;
+        cur.Classic.FilterEnabled := StrToIntDef(NextTok, 1) <> 0;
+        cur.Classic.FilterType := TFilterType(StrToIntDef(NextTok, 0));
+        cur.Classic.FilterCutoff := StrToFloatDef(NextTok, 2500, fs);
+        cur.Classic.FilterResonance := StrToFloatDef(NextTok, 0.2, fs);
+      end
+      else if k = 'clsenv' then
+      begin
+        cur.HasClassicParams := True;
+        rest := v;
+        cur.Classic.Attack := StrToFloatDef(NextTok, 0, fs);
+        cur.Classic.Decay := StrToFloatDef(NextTok, 0, fs);
+        cur.Classic.Sustain := StrToFloatDef(NextTok, 1, fs);
+        cur.Classic.Release := StrToFloatDef(NextTok, 0, fs);
+      end
+      else if k = 'clstrim' then
+      begin
+        cur.HasClassicParams := True;
+        cur.Classic.OutputTrim := StrToFloatDef(v, 1.0, fs);
+      end
+      // --- WAVETABLE block ---
+      else if k = 'wtkind' then
+      begin
+        cur.HasWavetableParams := True;
+        cur.Wavetable.Kind := TWavetableKind(StrToIntDef(v, 0));
+      end
+      else if k = 'wtsteps' then
+      begin
+        cur.HasWavetableParams := True;
+        cur.Wavetable.Steps := StrToIntDef(v, 0);
+      end
+      else if k = 'wtuni' then
+      begin
+        cur.HasWavetableParams := True;
+        rest := v;
+        cur.Wavetable.UnisonVoices := StrToIntDef(NextTok, 1);
+        cur.Wavetable.UnisonDetune := StrToFloatDef(NextTok, 0, fs);
+        cur.Wavetable.UnisonSpread := StrToFloatDef(NextTok, 0, fs);
+      end
+      else if k = 'wtenv' then
+      begin
+        cur.HasWavetableParams := True;
+        rest := v;
+        cur.Wavetable.Attack := StrToFloatDef(NextTok, 0, fs);
+        cur.Wavetable.Decay := StrToFloatDef(NextTok, 0, fs);
+        cur.Wavetable.Sustain := StrToFloatDef(NextTok, 1, fs);
+        cur.Wavetable.Release := StrToFloatDef(NextTok, 0, fs);
+      end
+      else if k = 'wttrim' then
+      begin
+        cur.HasWavetableParams := True;
+        cur.Wavetable.OutputTrim := StrToFloatDef(v, 1.0, fs);
+      end
+      // --- ADDITIVE block ---
+      else if k = 'addcount' then
+      begin
+        cur.HasAdditiveParams := True;
+        cur.Additive.HarmonicCount := StrToIntDef(v, 1);
+      end
+      else if k = 'addh' then
+      begin
+        cur.HasAdditiveParams := True;
+        rest := v;
+        opIdx := StrToIntDef(NextTok, 0);
+        if (opIdx >= 0) and (opIdx <= High(cur.Additive.Levels)) then
+        begin
+          cur.Additive.Levels[opIdx] := StrToFloatDef(NextTok, 0, fs);
+          cur.Additive.Detunes[opIdx] := StrToFloatDef(NextTok, 0, fs);
+        end;
+      end
+      else if k = 'addenv' then
+      begin
+        cur.HasAdditiveParams := True;
+        rest := v;
+        cur.Additive.Attack := StrToFloatDef(NextTok, 0, fs);
+        cur.Additive.Decay := StrToFloatDef(NextTok, 0, fs);
+        cur.Additive.Sustain := StrToFloatDef(NextTok, 1, fs);
+        cur.Additive.Release := StrToFloatDef(NextTok, 0, fs);
+      end
+      else if k = 'addtrim' then
+      begin
+        cur.HasAdditiveParams := True;
+        cur.Additive.OutputTrim := StrToFloatDef(v, 1.0, fs);
+      end
+      // --- KARPLUS block ---
+      else if k = 'ksdamp' then
+      begin
+        cur.HasKarplusParams := True;
+        cur.Karplus.Damping := StrToFloatDef(v, 0.996, fs);
+      end
+      else if k = 'ksblend' then
+      begin
+        cur.HasKarplusParams := True;
+        cur.Karplus.Blend := StrToFloatDef(v, 0.5, fs);
+      end
+      else if k = 'ksenv' then
+      begin
+        cur.HasKarplusParams := True;
+        rest := v;
+        cur.Karplus.Attack := StrToFloatDef(NextTok, 0, fs);
+        cur.Karplus.Decay := StrToFloatDef(NextTok, 0, fs);
+        cur.Karplus.Sustain := StrToFloatDef(NextTok, 1, fs);
+        cur.Karplus.Release := StrToFloatDef(NextTok, 0, fs);
+      end
+      else if k = 'kstrim' then
+      begin
+        cur.HasKarplusParams := True;
+        cur.Karplus.OutputTrim := StrToFloatDef(v, 1.0, fs);
       end;
     end;
     Flush;

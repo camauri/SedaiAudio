@@ -22,7 +22,7 @@ uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer,
   SedaiOscillator, SedaiFilter, SedaiFMOperator, SedaiWavetableGenerator,
   SedaiAdditiveGenerator, SedaiSamplePlayer, SedaiKarplusGenerator,
-  SedaiVoice, SedaiVoiceManager, SedaiModulationMatrix;
+  SedaiEnvelope, SedaiVoice, SedaiVoiceManager, SedaiModulationMatrix;
 
 type
   // Which generator the part's voices use. Mirrors TVoiceSourceType but is the
@@ -62,6 +62,61 @@ type
     FeedbackLevel: Single;
     OutputTrim: Single;
     Ops: array[0..MAX_FM_OPERATORS-1] of TFMOperatorParams;
+  end;
+
+  // Full CLASSIC (subtractive) parameter block — the author view of an analog
+  // voice: 3 oscillators (combine mode + per-osc enable/waveform/level/detune/
+  // pulse-width), the filter, and the amp envelope.
+  TClassicOscParams = record
+    Enabled: Boolean;
+    Waveform: TWaveformType;
+    Level: Single;
+    DetuneCents: Single;
+    PulseWidth: Single;
+  end;
+  TClassicParams = record
+    OscMode: TVoiceOscMode;
+    Oscs: array[0..MAX_OSCILLATORS-1] of TClassicOscParams;
+    FilterEnabled: Boolean;
+    FilterType: TFilterType;
+    FilterCutoff: Single;
+    FilterResonance: Single;
+    Attack, Decay, Sustain, Release: Single;
+    OutputTrim: Single;
+  end;
+
+  // Full WAVETABLE parameter block. The table itself is procedurally generated
+  // (basic / PWM / SuperSaw), so the block records the kind + step count rather
+  // than the raw samples, plus the unison spread and amp envelope.
+  TWavetableKind = (wtkBasic, wtkPWM, wtkSuperSaw);
+  TWavetableParams = record
+    Kind: TWavetableKind;
+    Steps: Integer;            // PWM/SuperSaw resolution (ignored for basic)
+    UnisonVoices: Integer;
+    UnisonDetune: Single;
+    UnisonSpread: Single;
+    Attack, Decay, Sustain, Release: Single;
+    OutputTrim: Single;
+  end;
+
+  // Full ADDITIVE parameter block — per-harmonic level + detune (the generator
+  // resets phases on note-on, so level+detune fully describe the timbre) plus
+  // the additive generator's own amp envelope.
+  TAdditiveParams = record
+    HarmonicCount: Integer;
+    Levels: array[0..ADDITIVE_MAX_HARMONICS-1] of Single;
+    Detunes: array[0..ADDITIVE_MAX_HARMONICS-1] of Single;   // cents
+    Attack, Decay, Sustain, Release: Single;
+    OutputTrim: Single;
+  end;
+
+  // Full KARPLUS-STRONG parameter block — string damping/blend + the gating
+  // amp envelope.
+  TKarplusParams = record
+    Damping: Single;
+    Blend: Single;
+    Attack, Decay, Sustain, Release: Single;
+    OutputTrim: Single;
   end;
 
   // Stored per-Part modulation. Re-applied to every voice of the pool in
@@ -120,6 +175,18 @@ type
     // the named ConfigureFMVoice preset.
     FHasFMParams: Boolean;
     FFMParams: TFMParams;
+
+    // Full per-technique parameter blocks (author side), one per non-sample
+    // technique. When the matching Has* flag is set and the source matches,
+    // ApplyToVoice configures voices from the block instead of the named key.
+    FHasClassicParams: Boolean;
+    FClassicParams: TClassicParams;
+    FHasWavetableParams: Boolean;
+    FWavetableParams: TWavetableParams;
+    FHasAdditiveParams: Boolean;
+    FAdditiveParams: TAdditiveParams;
+    FHasKarplusParams: Boolean;
+    FKarplusParams: TKarplusParams;
 
     // Voice configuration callback (of object) applied to every voice in the
     // pool by FManager.ConfigureAllVoices. Reads FSource / FPreset / modulation.
@@ -195,6 +262,18 @@ type
     procedure SetFMParams(const AParams: TFMParams);
     procedure ClearFMParams;
 
+    // Full per-technique parameter blocks (author side), one per non-sample
+    // technique. Set stores the block + reconfigures the pool; Clear returns to
+    // the named preset. Each applies only when the source matches its technique.
+    procedure SetClassicParams(const AParams: TClassicParams);
+    procedure ClearClassicParams;
+    procedure SetWavetableParams(const AParams: TWavetableParams);
+    procedure ClearWavetableParams;
+    procedure SetAdditiveParams(const AParams: TAdditiveParams);
+    procedure ClearAdditiveParams;
+    procedure SetKarplusParams(const AParams: TKarplusParams);
+    procedure ClearKarplusParams;
+
     // Render a block of audio into AOutput (stereo, interleaved L/R).
     procedure RenderBlock(AOutput: PSingle; AFrameCount: Integer);
 
@@ -219,6 +298,15 @@ function ExplodeFMParams(const APresetKey: string): TFMParams;
 procedure ConfigureWavetableVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureAdditiveVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureKarplusVoice(AVoice: TSedaiVoice; const APreset: string);
+// Full-parameter-block configurators + explode (author side), one per technique.
+procedure ConfigureClassicVoiceFromParams(AVoice: TSedaiVoice; const AParams: TClassicParams);
+function ExplodeClassicParams(const APresetKey: string): TClassicParams;
+procedure ConfigureWavetableVoiceFromParams(AVoice: TSedaiVoice; const AParams: TWavetableParams);
+function ExplodeWavetableParams(const APresetKey: string): TWavetableParams;
+procedure ConfigureAdditiveVoiceFromParams(AVoice: TSedaiVoice; const AParams: TAdditiveParams);
+function ExplodeAdditiveParams(const APresetKey: string): TAdditiveParams;
+procedure ConfigureKarplusVoiceFromParams(AVoice: TSedaiVoice; const AParams: TKarplusParams);
+function ExplodeKarplusParams(const APresetKey: string): TKarplusParams;
 
 // Build a generator-side wavetable (frames + mipmaps) from loaded data.
 // Returns nil if the data is not loaded. Caller owns the result.
@@ -483,6 +571,233 @@ begin
   end;
 end;
 
+// ---- CLASSIC ----------------------------------------------------------------
+
+procedure ConfigureClassicVoiceFromParams(AVoice: TSedaiVoice; const AParams: TClassicParams);
+var
+  I: Integer;
+begin
+  AVoice.SetSourceType(vstOscillators);
+  AVoice.OscMode := AParams.OscMode;
+  for I := 0 to MAX_OSCILLATORS - 1 do
+  begin
+    AVoice.SetOscillatorEnabled(I, AParams.Oscs[I].Enabled);
+    AVoice.SetOscillatorWaveform(I, AParams.Oscs[I].Waveform);
+    AVoice.SetOscillatorLevel(I, AParams.Oscs[I].Level);
+    AVoice.SetOscillatorDetune(I, AParams.Oscs[I].DetuneCents);
+    AVoice.SetOscillatorPulseWidth(I, AParams.Oscs[I].PulseWidth);
+  end;
+  AVoice.FilterEnabled := AParams.FilterEnabled;
+  AVoice.SetFilterType(AParams.FilterType);
+  AVoice.SetFilterCutoff(AParams.FilterCutoff);
+  AVoice.SetFilterResonance(AParams.FilterResonance);
+  AVoice.SetEnvelopeADSR(0, AParams.Attack, AParams.Decay, AParams.Sustain, AParams.Release);
+  AVoice.OutputLevel := AParams.OutputTrim;
+end;
+
+function ExplodeClassicParams(const APresetKey: string): TClassicParams;
+var
+  V: TSedaiVoice;
+  Osc: TSedaiOscillator;
+  Env: TSedaiEnvelope;
+  I: Integer;
+begin
+  FillChar(Result, SizeOf(Result), 0);   // no managed fields
+  V := TSedaiVoice.Create;
+  try
+    ConfigureClassicVoice(V, APresetKey);
+    Result.OscMode := V.OscMode;
+    for I := 0 to MAX_OSCILLATORS - 1 do
+    begin
+      Osc := V.Oscillators[I];
+      Result.Oscs[I].Enabled := V.GetOscillatorEnabled(I);
+      Result.Oscs[I].Level := V.GetOscillatorLevel(I);
+      Result.Oscs[I].DetuneCents := V.GetOscillatorDetune(I);
+      if Osc <> nil then
+      begin
+        Result.Oscs[I].Waveform := Osc.Waveform;
+        Result.Oscs[I].PulseWidth := Osc.PulseWidth;
+      end;
+    end;
+    Result.FilterEnabled := V.FilterEnabled;
+    Result.FilterType := V.Filter.FilterType;
+    Result.FilterCutoff := V.Filter.Cutoff;     // fresh voice: == base cutoff
+    Result.FilterResonance := V.Filter.Resonance;
+    Env := V.Envelopes[0];
+    if Env <> nil then
+    begin
+      Result.Attack := Env.AttackTime;
+      Result.Decay := Env.DecayTime;
+      Result.Sustain := Env.SustainLevel;
+      Result.Release := Env.ReleaseTime;
+    end;
+    Result.OutputTrim := V.OutputLevel;
+  finally
+    V.Free;
+  end;
+end;
+
+// ---- WAVETABLE --------------------------------------------------------------
+
+procedure ConfigureWavetableVoiceFromParams(AVoice: TSedaiVoice; const AParams: TWavetableParams);
+var
+  WT: TSedaiWavetableGenerator;
+begin
+  AVoice.SetSourceType(vstWavetable);
+  WT := AVoice.GetWavetableGenerator;
+  if WT = nil then Exit;
+  case AParams.Kind of
+    wtkPWM:      WT.CreatePWMWavetable(AParams.Steps);
+    wtkSuperSaw: WT.CreateSuperSawWavetable(AParams.Steps);
+  else
+    WT.CreateBasicWavetable;
+  end;
+  WT.UnisonVoices := AParams.UnisonVoices;
+  WT.UnisonDetune := AParams.UnisonDetune;
+  WT.UnisonSpread := AParams.UnisonSpread;
+  AVoice.SetEnvelopeADSR(0, AParams.Attack, AParams.Decay, AParams.Sustain, AParams.Release);
+  AVoice.OutputLevel := AParams.OutputTrim;
+end;
+
+function ExplodeWavetableParams(const APresetKey: string): TWavetableParams;
+var
+  V: TSedaiVoice;
+  WT: TSedaiWavetableGenerator;
+  Env: TSedaiEnvelope;
+  P: string;
+begin
+  FillChar(Result, SizeOf(Result), 0);
+  // Table kind/step count is procedural and not readable from the generator, so
+  // it is classified from the preset key (matches ConfigureWavetableVoice).
+  P := LowerCase(APresetKey);
+  if P = 'pwm' then begin Result.Kind := wtkPWM; Result.Steps := 64; end
+  else if P = 'supersaw' then begin Result.Kind := wtkSuperSaw; Result.Steps := 32; end
+  else begin Result.Kind := wtkBasic; Result.Steps := 0; end;
+  V := TSedaiVoice.Create;
+  try
+    ConfigureWavetableVoice(V, APresetKey);
+    WT := V.GetWavetableGenerator;
+    if WT <> nil then
+    begin
+      Result.UnisonVoices := WT.UnisonVoices;
+      Result.UnisonDetune := WT.UnisonDetune;
+      Result.UnisonSpread := WT.UnisonSpread;
+    end;
+    Env := V.Envelopes[0];
+    if Env <> nil then
+    begin
+      Result.Attack := Env.AttackTime;
+      Result.Decay := Env.DecayTime;
+      Result.Sustain := Env.SustainLevel;
+      Result.Release := Env.ReleaseTime;
+    end;
+    Result.OutputTrim := V.OutputLevel;
+  finally
+    V.Free;
+  end;
+end;
+
+// ---- ADDITIVE ---------------------------------------------------------------
+
+procedure ConfigureAdditiveVoiceFromParams(AVoice: TSedaiVoice; const AParams: TAdditiveParams);
+var
+  AG: TSedaiAdditiveGenerator;
+  I, Count: Integer;
+begin
+  AVoice.SetSourceType(vstAdditive);
+  AG := AVoice.GetAdditiveGenerator;
+  if AG = nil then Exit;
+  Count := AParams.HarmonicCount;
+  if Count < 1 then Count := 1
+  else if Count > ADDITIVE_MAX_HARMONICS then Count := ADDITIVE_MAX_HARMONICS;
+  AG.HarmonicCount := Count;                 // set first so UpdateActiveHarmonics covers them
+  for I := 0 to ADDITIVE_MAX_HARMONICS - 1 do
+  begin
+    AG.SetHarmonicLevel(I, AParams.Levels[I]);
+    AG.SetHarmonicDetune(I, AParams.Detunes[I]);
+  end;
+  AG.AmpEnvelope.AttackTime := AParams.Attack;
+  AG.AmpEnvelope.DecayTime := AParams.Decay;
+  AG.AmpEnvelope.SustainLevel := AParams.Sustain;
+  AG.AmpEnvelope.ReleaseTime := AParams.Release;
+  AVoice.OutputLevel := AParams.OutputTrim;
+end;
+
+function ExplodeAdditiveParams(const APresetKey: string): TAdditiveParams;
+var
+  V: TSedaiVoice;
+  AG: TSedaiAdditiveGenerator;
+  I: Integer;
+begin
+  FillChar(Result, SizeOf(Result), 0);
+  V := TSedaiVoice.Create;
+  try
+    ConfigureAdditiveVoice(V, APresetKey);
+    AG := V.GetAdditiveGenerator;
+    if AG <> nil then
+    begin
+      Result.HarmonicCount := AG.HarmonicCount;
+      for I := 0 to ADDITIVE_MAX_HARMONICS - 1 do
+      begin
+        Result.Levels[I] := AG.GetHarmonicLevel(I);
+        Result.Detunes[I] := AG.GetHarmonicDetune(I);
+      end;
+      Result.Attack := AG.AmpEnvelope.AttackTime;
+      Result.Decay := AG.AmpEnvelope.DecayTime;
+      Result.Sustain := AG.AmpEnvelope.SustainLevel;
+      Result.Release := AG.AmpEnvelope.ReleaseTime;
+    end;
+    Result.OutputTrim := V.OutputLevel;
+  finally
+    V.Free;
+  end;
+end;
+
+// ---- KARPLUS-STRONG ---------------------------------------------------------
+
+procedure ConfigureKarplusVoiceFromParams(AVoice: TSedaiVoice; const AParams: TKarplusParams);
+var
+  KS: TSedaiKarplusGenerator;
+begin
+  AVoice.SetSourceType(vstKarplus);
+  KS := AVoice.GetKarplusGenerator;
+  if KS = nil then Exit;
+  KS.Damping := AParams.Damping;
+  KS.Blend := AParams.Blend;
+  AVoice.SetEnvelopeADSR(0, AParams.Attack, AParams.Decay, AParams.Sustain, AParams.Release);
+  AVoice.OutputLevel := AParams.OutputTrim;
+end;
+
+function ExplodeKarplusParams(const APresetKey: string): TKarplusParams;
+var
+  V: TSedaiVoice;
+  KS: TSedaiKarplusGenerator;
+  Env: TSedaiEnvelope;
+begin
+  FillChar(Result, SizeOf(Result), 0);
+  V := TSedaiVoice.Create;
+  try
+    ConfigureKarplusVoice(V, APresetKey);
+    KS := V.GetKarplusGenerator;
+    if KS <> nil then
+    begin
+      Result.Damping := KS.Damping;
+      Result.Blend := KS.Blend;
+    end;
+    Env := V.Envelopes[0];
+    if Env <> nil then
+    begin
+      Result.Attack := Env.AttackTime;
+      Result.Decay := Env.DecayTime;
+      Result.Sustain := Env.SustainLevel;
+      Result.Release := Env.ReleaseTime;
+    end;
+    Result.OutputTrim := V.OutputLevel;
+  finally
+    V.Free;
+  end;
+end;
+
 procedure ConfigureWavetableVoice(AVoice: TSedaiVoice; const APreset: string);
 var
   WT: TSedaiWavetableGenerator;
@@ -720,10 +1035,21 @@ begin
         ConfigureFMVoiceFromParams(AVoice, FFMParams)
       else
         ConfigureFMVoice(AVoice, FPreset);
+    psClassic:
+      if FHasClassicParams then
+        ConfigureClassicVoiceFromParams(AVoice, FClassicParams)
+      else
+        ConfigureClassicVoice(AVoice, FPreset);
     psAdditive:
-      ConfigureAdditiveVoice(AVoice, FPreset);
+      if FHasAdditiveParams then
+        ConfigureAdditiveVoiceFromParams(AVoice, FAdditiveParams)
+      else
+        ConfigureAdditiveVoice(AVoice, FPreset);
     psKarplus:
-      ConfigureKarplusVoice(AVoice, FPreset);
+      if FHasKarplusParams then
+        ConfigureKarplusVoiceFromParams(AVoice, FKarplusParams)
+      else
+        ConfigureKarplusVoice(AVoice, FPreset);
     psSample:
       if Assigned(FSampleData) then
       begin
@@ -747,6 +1073,8 @@ begin
         AVoice.SetEnvelopeADSR(0, 0.01, 0.2, 0.7, 0.3);
         AVoice.OutputLevel := 0.7;  // conservative gain stage for arbitrary tables
       end
+      else if FHasWavetableParams then
+        ConfigureWavetableVoiceFromParams(AVoice, FWavetableParams)
       else
         ConfigureWavetableVoice(AVoice, FPreset);
   else
@@ -840,6 +1168,66 @@ begin
   if not FHasFMParams then Exit;   // already on the named preset; no-op
   FHasFMParams := False;
   FillChar(FFMParams, SizeOf(FFMParams), 0);   // no managed fields in TFMParams
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.SetClassicParams(const AParams: TClassicParams);
+begin
+  FClassicParams := AParams;
+  FHasClassicParams := True;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.ClearClassicParams;
+begin
+  if not FHasClassicParams then Exit;
+  FHasClassicParams := False;
+  FillChar(FClassicParams, SizeOf(FClassicParams), 0);   // no managed fields
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.SetWavetableParams(const AParams: TWavetableParams);
+begin
+  FWavetableParams := AParams;
+  FHasWavetableParams := True;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.ClearWavetableParams;
+begin
+  if not FHasWavetableParams then Exit;
+  FHasWavetableParams := False;
+  FillChar(FWavetableParams, SizeOf(FWavetableParams), 0);
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.SetAdditiveParams(const AParams: TAdditiveParams);
+begin
+  FAdditiveParams := AParams;
+  FHasAdditiveParams := True;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.ClearAdditiveParams;
+begin
+  if not FHasAdditiveParams then Exit;
+  FHasAdditiveParams := False;
+  FillChar(FAdditiveParams, SizeOf(FAdditiveParams), 0);
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.SetKarplusParams(const AParams: TKarplusParams);
+begin
+  FKarplusParams := AParams;
+  FHasKarplusParams := True;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.ClearKarplusParams;
+begin
+  if not FHasKarplusParams then Exit;
+  FHasKarplusParams := False;
+  FillChar(FKarplusParams, SizeOf(FKarplusParams), 0);
   FManager.ConfigureAllVoices(@ApplyToVoice);
 end;
 
