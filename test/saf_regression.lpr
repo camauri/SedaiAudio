@@ -1212,56 +1212,56 @@ begin
   end;
 end;
 
-procedure TestVoiceBudget;
+procedure TestPartPolyphony;
 var
   eng: TSAFEngine;
   pa, pb: TSAFPart;
-  i, total: Integer;
+  i: Integer;
   buf: array of Single;
   frames: Integer;
+  peak: Single;
 begin
-  WriteLn('== Global voice budget (shared polyphony) ==');
+  // Each part is sized independently to exactly the voices its instrument needs;
+  // total polyphony is the sum of the parts. Parts of different techniques play
+  // together (mixed synthesis). No global cap / no cross-part stealing.
+  WriteLn('== Per-part polyphony (independent pools, mixed techniques) ==');
   frames := 256;
   SetLength(buf, frames * 2);
   eng := TSAFEngine.Create(SR);
   try
-    eng.SetGlobalPolyphony(8);
-    Ok('global polyphony set', eng.GlobalPolyphony = 8, Format('cap=%d', [eng.GlobalPolyphony]));
-
-    pa := eng.AddPart('A');   // 16-voice pool each, sharing the budget of 8
-    pb := eng.AddPart('B');
+    pa := eng.AddPart('Strings', 5);   // deliberately-sized pools (any count, incl. odd)
+    pb := eng.AddPart('FM Bass', 3);
     pa.SetInstrument(psClassic, 'saw');
-    pb.SetInstrument(psClassic, 'saw');
+    pb.SetInstrument(psFM, 'bass');     // a different technique in the same engine
+    Ok('part A sized', pa.Polyphony = 5, Format('A poly=%d', [pa.Polyphony]));
+    Ok('part B sized', pb.Polyphony = 3, Format('B poly=%d', [pb.Polyphony]));
 
-    // One part alone can claim the whole shared budget (B idle): 12 notes
-    // requested, capped at 8 active.
-    for i := 0 to 11 do pa.NoteOn(48 + i, 1.0);
-    Ok('one part uses whole budget', pa.ActiveVoiceCount = 8,
-       Format('A active=%d (cap 8)', [pa.ActiveVoiceCount]));
-    Ok('budget not exceeded (solo)', eng.TotalActiveVoices = 8,
+    // Overdriving a part caps it at its OWN pool size; the other part is
+    // untouched (no shared budget). 9 + 7 requested -> 5 + 3 active.
+    for i := 0 to 8 do pa.NoteOn(48 + i, 1.0);
+    for i := 0 to 6 do pb.NoteOn(36 + i, 1.0);
+    Ok('part A capped at its pool', pa.ActiveVoiceCount = 5,
+       Format('A active=%d (pool 5)', [pa.ActiveVoiceCount]));
+    Ok('part B capped at its pool', pb.ActiveVoiceCount = 3,
+       Format('B active=%d (pool 3)', [pb.ActiveVoiceCount]));
+    Ok('engine total = sum of parts', eng.TotalActiveVoices = 8,
        Format('total=%d', [eng.TotalActiveVoices]));
-    pa.AllSoundOff; pb.AllSoundOff;
-    Ok('all-sound-off frees the budget', eng.TotalActiveVoices = 0,
-       Format('total=%d', [eng.TotalActiveVoices]));
 
-    // Two parts share the budget: 6 + 6 requested, total capped at 8, both sound.
-    for i := 0 to 5 do pa.NoteOn(48 + i, 1.0);
-    for i := 0 to 5 do pb.NoteOn(60 + i, 1.0);
-    total := eng.TotalActiveVoices;
-    Ok('shared budget respected', total = 8, Format('total=%d (cap 8)', [total]));
-    Ok('both parts sounding', (pa.ActiveVoiceCount > 0) and (pb.ActiveVoiceCount > 0),
-       Format('A=%d B=%d', [pa.ActiveVoiceCount, pb.ActiveVoiceCount]));
-
-    // The mix still renders bounded audio with the cap active.
+    // Both techniques actually produce audio in the same mix.
     FillChar(buf[0], frames * 2 * SizeOf(Single), 0);
     eng.RenderBlock(@buf[0], frames);
+    peak := 0;
+    for i := 0 to frames * 2 - 1 do
+      if Abs(buf[i]) > peak then peak := Abs(buf[i]);
+    Ok('mixed-technique mix is audible', peak > 0.001, Format('peak=%.4f', [peak]));
 
-    // Raising the budget lets more voices sound at once.
-    pa.AllSoundOff; pb.AllSoundOff;
-    eng.SetGlobalPolyphony(20);
-    for i := 0 to 11 do pa.NoteOn(36 + i, 1.0);
-    Ok('raised budget admits more', pa.ActiveVoiceCount = 12,
-       Format('A active=%d (cap 20)', [pa.ActiveVoiceCount]));
+    // Resizing a part's polyphony takes effect (sized up to the instrument need).
+    pa.AllSoundOff;
+    pa.SetPolyphony(9);
+    Ok('part resized', pa.Polyphony = 9, Format('A poly=%d', [pa.Polyphony]));
+    for i := 0 to 8 do pa.NoteOn(48 + i, 1.0);
+    Ok('resized part uses new size', pa.ActiveVoiceCount = 9,
+       Format('A active=%d (pool 9)', [pa.ActiveVoiceCount]));
   finally
     eng.Free;
   end;
@@ -1351,7 +1351,7 @@ begin
   TestFMParams;
   TestTechniqueParams;
   TestMacros;
-  TestVoiceBudget;
+  TestPartPolyphony;
   TestExactPitch;
 
   WriteLn;

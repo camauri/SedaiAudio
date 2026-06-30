@@ -25,8 +25,6 @@ type
   // Procedural type for voice configuration callback
   TVoiceConfigProc = procedure(AVoice: TSedaiVoice) of object;
 
-  TSAFVoiceBudget = class;   // forward: engine-owned global polyphony budget
-
   { TSedaiVoiceManager }
   // Polyphonic voice manager with stealing and unison modes
   TSedaiVoiceManager = class(TSedaiSignalNode)
@@ -37,7 +35,6 @@ type
     FActiveVoiceCount: Integer;
     FLastVoiceIndex: Integer;     // pool slot allocated by the most recent NoteOn (-1 if none)
     FPendingFreq: Single;         // exact Hz primed onto voices for the current NoteOnFreq (0 = none)
-    FBudget: TSAFVoiceBudget;     // optional engine-owned global polyphony budget (nil = standalone)
 
     // Voice stealing
     FStealPolicy: TVoiceStealPolicy;
@@ -82,9 +79,9 @@ type
     procedure SetUnisonDetune(AValue: Single);
     procedure SetGlideTime(AValue: Single);
 
-    // Pick a voice index to (re)use for a new note, honouring the global budget:
-    // a free voice if one exists and the budget allows it (stealing globally to
-    // make room when full), otherwise an own-pool steal. -1 if nothing usable.
+    // Pick a voice index for a new note: a free voice if any, otherwise steal
+    // one from this part's own pool (oldest/quietest per policy). -1 if nothing
+    // is usable (pool full and nothing stealable).
     function AcquireVoice: Integer;
 
   protected
@@ -158,13 +155,11 @@ type
     // PROPERTIES
     // ========================================================================
 
-    // Voice pool
+    // Voice pool. Size it to exactly what the instrument needs (any count;
+    // round numbers are convention, not a requirement). Total polyphony across
+    // an engine = the sum of its parts' pools, bounded only by the hardware.
     property MaxVoices: Integer read FMaxVoices write SetMaxVoices;
     property ActiveVoiceCount: Integer read GetActiveVoiceCount;
-
-    // Optional global polyphony budget (set by the engine; nil = standalone, no
-    // global cap). Shared across all the engine's parts.
-    property Budget: TSAFVoiceBudget read FBudget write FBudget;
 
     // Voice stealing
     property StealPolicy: TVoiceStealPolicy read FStealPolicy write FStealPolicy;
@@ -183,37 +178,6 @@ type
     property GlideEnabled: Boolean read FGlideEnabled write FGlideEnabled;
     property GlideTime: Single read FGlideTime write SetGlideTime;
     property GlideAlways: Boolean read FGlideAlways write FGlideAlways;
-  end;
-
-  { TSAFVoiceBudget }
-  // Engine-owned global polyphony budget shared by all parts' voice managers.
-  // It caps the TOTAL number of simultaneously-active voices across every part
-  // (a CPU/headroom ceiling and the "128 voices" headline) and, when full,
-  // steals the globally quietest stealable voice so a new note in one part can
-  // borrow capacity from another. Each manager's own pool size is its per-part
-  // limit; this governs the sum. Default cap 128, resizable at runtime up to the
-  // hardware's reach (no artificial upper bound beyond a sanity clamp).
-  TSAFVoiceBudget = class
-  private
-    FCap: Integer;
-    FManagers: array of TSedaiVoiceManager;
-    FManagerCount: Integer;
-    procedure SetCap(AValue: Integer);
-  public
-    constructor Create(ACap: Integer = 128);
-    // Register a part's manager so its voices count toward / can be stolen for
-    // the global budget. Idempotent.
-    procedure RegisterManager(AManager: TSedaiVoiceManager);
-    procedure UnregisterManager(AManager: TSedaiVoiceManager);
-    // Total active voices across all registered managers.
-    function TotalActive: Integer;
-    // Whether one more voice can be activated without exceeding the cap.
-    function CanActivate: Boolean;
-    // Free one global slot by killing the quietest stealable voice anywhere.
-    // Returns False if no voice could be stolen (caller should fall back).
-    function MakeRoom: Boolean;
-    // Configured ceiling on simultaneously-active voices (clamped >= 1).
-    property Cap: Integer read FCap write SetCap;
   end;
 
 implementation
@@ -528,17 +492,8 @@ end;
 function TSedaiVoiceManager.AcquireVoice: Integer;
 begin
   Result := FindFreeVoice;
-  if Result >= 0 then
-  begin
-    // A free voice is a NET increase in active count, so it must fit the budget:
-    // either there's room, or we free an active slot somewhere (global steal). If
-    // neither, drop the note rather than overshoot the cap (do NOT fall back to
-    // FindStealVoice here — it would happily "steal" an idle voice and overshoot).
-    if (FBudget <> nil) and (not FBudget.CanActivate) and (not FBudget.MakeRoom) then
-      Result := -1;
-  end
-  else
-    Result := FindStealVoice;       // own pool full -> reuse an active voice (no net increase)
+  if Result < 0 then
+    Result := FindStealVoice;   // pool full -> reuse an active voice per the steal policy
 end;
 
 procedure TSedaiVoiceManager.NoteOn(ANote: Byte; AVelocity: Single);
@@ -787,97 +742,6 @@ var
 begin
   for I := 0 to High(FVoices) do
     AConfigProc(FVoices[I]);
-end;
-
-{ TSAFVoiceBudget }
-
-constructor TSAFVoiceBudget.Create(ACap: Integer);
-begin
-  inherited Create;
-  FManagerCount := 0;
-  SetLength(FManagers, 8);
-  SetCap(ACap);
-end;
-
-procedure TSAFVoiceBudget.SetCap(AValue: Integer);
-begin
-  if AValue < 1 then AValue := 1;
-  FCap := AValue;
-end;
-
-procedure TSAFVoiceBudget.RegisterManager(AManager: TSedaiVoiceManager);
-var
-  I: Integer;
-begin
-  if AManager = nil then Exit;
-  for I := 0 to FManagerCount - 1 do
-    if FManagers[I] = AManager then Exit;   // already registered
-  if FManagerCount >= Length(FManagers) then
-    SetLength(FManagers, Length(FManagers) * 2);
-  FManagers[FManagerCount] := AManager;
-  Inc(FManagerCount);
-  AManager.Budget := Self;
-end;
-
-procedure TSAFVoiceBudget.UnregisterManager(AManager: TSedaiVoiceManager);
-var
-  I, J: Integer;
-begin
-  for I := 0 to FManagerCount - 1 do
-    if FManagers[I] = AManager then
-    begin
-      for J := I to FManagerCount - 2 do
-        FManagers[J] := FManagers[J + 1];
-      Dec(FManagerCount);
-      if AManager.Budget = Self then AManager.Budget := nil;
-      Exit;
-    end;
-end;
-
-function TSAFVoiceBudget.TotalActive: Integer;
-var
-  I: Integer;
-begin
-  Result := 0;
-  for I := 0 to FManagerCount - 1 do
-    Inc(Result, FManagers[I].ActiveVoiceCount);
-end;
-
-function TSAFVoiceBudget.CanActivate: Boolean;
-begin
-  Result := TotalActive < FCap;
-end;
-
-function TSAFVoiceBudget.MakeRoom: Boolean;
-var
-  I, J: Integer;
-  V, Victim: TSedaiVoice;
-  Level, BestLevel: Single;
-begin
-  // Steal the globally QUIETEST stealable voice. Level is comparable across
-  // managers (unlike each manager's local age counter), so it gives a sensible
-  // "don't cut the loudest notes" global policy.
-  Victim := nil;
-  BestLevel := 2.0;   // above any real level
-  for I := 0 to FManagerCount - 1 do
-    for J := 0 to FManagers[I].MaxVoices - 1 do
-    begin
-      V := FManagers[I].GetVoice(J);
-      // Only ACTIVE voices free a slot when killed; CanSteal alone is true for
-      // idle voices too (they're not in attack), which would "free" nothing.
-      if (V <> nil) and V.IsActive and V.CanSteal then
-      begin
-        Level := V.GetCurrentLevel;
-        if (Victim = nil) or (Level < BestLevel) then
-        begin
-          BestLevel := Level;
-          Victim := V;
-        end;
-      end;
-    end;
-  Result := Victim <> nil;
-  if Result then
-    Victim.Kill;   // free the slot; the requesting part then uses its free voice
 end;
 
 end.

@@ -46,7 +46,6 @@ type
     FPartCount: Integer;
     FMixer: TSedaiMixer;
     FSampleRate: Cardinal;
-    FVoiceBudget: TSAFVoiceBudget;   // global polyphony shared across all parts
 
     // Per-part stereo scratch buffers + the pointer array handed to the mixer.
     FPartBuffers: array of array of Single;   // outer length MAX_ENGINE_PARTS
@@ -78,17 +77,13 @@ type
     // Master volume convenience (dB; the master bus is the authority).
     procedure SetMasterVolumeDb(ADb: Single);
 
-    // Global polyphony: the maximum number of simultaneously-active voices
-    // across ALL parts (the shared budget). Default 128; raise it toward the
-    // hardware's reach for dense / grand-orchestra work. TotalActiveVoices is
-    // the live count across the engine.
-    function GetGlobalPolyphony: Integer;
-    procedure SetGlobalPolyphony(AValue: Integer);
+    // Live total of active voices across all parts. Each part is sized
+    // independently (TSAFPart.Polyphony); the engine's total polyphony is just
+    // the sum of the parts' pools, bounded only by the hardware.
     function TotalActiveVoices: Integer;
 
     property SampleRate: Cardinal read FSampleRate;
     property Mixer: TSedaiMixer read FMixer;
-    property GlobalPolyphony: Integer read GetGlobalPolyphony write SetGlobalPolyphony;
   end;
 
 implementation
@@ -101,10 +96,6 @@ begin
   // Set the mixer sample rate up front so channels added later inherit it.
   FMixer.SetSampleRate(ASampleRate);
   FSampleRate := ASampleRate;
-
-  // Shared global polyphony budget (default 128, resizable). Each part's
-  // manager is registered with it in AddPart.
-  FVoiceBudget := TSAFVoiceBudget.Create(128);
 
   // Fixed-capacity tables (no reallocation during playback).
   SetLength(FParts, MAX_ENGINE_PARTS);
@@ -121,7 +112,6 @@ begin
     FParts[I].Free;
   SetLength(FParts, 0);
 
-  FVoiceBudget.Free;   // references the parts' managers but doesn't own them
   FMixer.Free;
   inherited Destroy;
 end;
@@ -149,10 +139,6 @@ begin
   Part.SetSampleRate(FSampleRate);
   if AName <> '' then
     Part.Name := AName;
-
-  // Join the shared polyphony budget: this part's voices now count toward the
-  // global cap and can be stolen for (or steal from) other parts.
-  FVoiceBudget.RegisterManager(Part.VoiceManager);
 
   Idx := FPartCount;
   FParts[Idx] := Part;
@@ -232,19 +218,13 @@ begin
   FMixer.GetMasterBus.Volume := ADb;
 end;
 
-function TSAFEngine.GetGlobalPolyphony: Integer;
-begin
-  Result := FVoiceBudget.Cap;
-end;
-
-procedure TSAFEngine.SetGlobalPolyphony(AValue: Integer);
-begin
-  FVoiceBudget.Cap := AValue;
-end;
-
 function TSAFEngine.TotalActiveVoices: Integer;
+var
+  I: Integer;
 begin
-  Result := FVoiceBudget.TotalActive;
+  Result := 0;
+  for I := 0 to FPartCount - 1 do
+    Inc(Result, FParts[I].ActiveVoiceCount);
 end;
 
 end.

@@ -315,12 +315,20 @@ type
 
     function ActiveVoiceCount: Integer;
 
+    // Polyphony = the size of this part's voice pool. Set it to exactly what the
+    // instrument needs (a mono bass = 1, a pad = a handful, a piano with pedal
+    // and overlapping release tails = more); any count is valid. Resizing is a
+    // setup-time operation (do it before playback, not under the audio thread).
+    function GetPolyphony: Integer;
+    procedure SetPolyphony(AValue: Integer);
+
     // Direct access for advanced setup.
     property VoiceManager: TSedaiVoiceManager read FManager;
     property Source: TSAFPartSource read FSource;
     property Preset: string read FPreset;
     property Name: string read FName write FName;
     property SampleRate: Cardinal read FSampleRate;
+    property Polyphony: Integer read GetPolyphony write SetPolyphony;
   end;
 
 // Stand-alone preset configurators (reused by the facade/engine if needed).
@@ -1504,6 +1512,18 @@ end;
 function TSAFPart.ActiveVoiceCount: Integer;
 begin
   Result := FManager.ActiveVoiceCount;
+end;
+
+function TSAFPart.GetPolyphony: Integer;
+begin
+  Result := FManager.MaxVoices;
+end;
+
+procedure TSAFPart.SetPolyphony(AValue: Integer);
+begin
+  FManager.MaxVoices := AValue;   // resizes the pool; clamps to the manager's range
+  // Newly-created voices must be configured to the current instrument.
+  FManager.ConfigureAllVoices(@ApplyToVoice);
 end;
 
 end.
