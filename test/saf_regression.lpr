@@ -1271,6 +1271,69 @@ begin
   end;
 end;
 
+procedure TestEngineMix;
+var
+  eng: TSAFEngine;
+  reg: TSedaiInstrumentRegistry;
+  i, sounding, totalActive: Integer;
+  pk: Single;
+
+  // Add a part, load a catalogued instrument into it, play some notes.
+  function AddVoiced(const APart, AInstrument: string;
+    const ANotes: array of Byte): TSAFPart;
+  var p: TSAFPart; k: Integer;
+  begin
+    p := eng.AddPart(APart);
+    reg.ApplyToPartByName(AInstrument, p);   // preset also sizes the part
+    for k := 0 to High(ANotes) do
+      p.NoteOn(ANotes[k], 0.9);
+    Result := p;
+  end;
+
+begin
+  // The whole pipeline: several parts of DIFFERENT techniques, each sized by its
+  // preset, played together through engine -> mixer -> master. The full mix must
+  // be audible, stay bounded (master limiter), and every part must contribute.
+  WriteLn('== Engine multi-part mix (end-to-end, mixed techniques) ==');
+  reg := InstrumentRegistry;
+  eng := TSAFEngine.Create(SR);
+  try
+    AddVoiced('Strings',  'Strings',       [60, 64, 67]);   // additive
+    AddVoiced('Brass',    'Brass Section', [55, 59, 62]);   // additive
+    AddVoiced('Keys',     'FM E-Piano',    [48, 52, 55]);   // FM
+    AddVoiced('Lead',     'SID Lead',      [72]);           // SID
+    AddVoiced('Bass',     'Plucked Bass',  [36]);           // karplus
+    AddVoiced('Perc',     'Karplus Drum',  [40]);           // karplus
+
+    Ok('six parts created', eng.PartCount = 6, Format('parts=%d', [eng.PartCount]));
+
+    // Count parts contributing + total voices BEFORE rendering (short sounds may
+    // decay during the render).
+    sounding := 0;
+    for i := 0 to eng.PartCount - 1 do
+      if eng.GetPart(i).ActiveVoiceCount > 0 then Inc(sounding);
+    totalActive := eng.TotalActiveVoices;
+    Ok('every part is sounding', sounding = 6, Format('%d/6 parts active', [sounding]));
+    Ok('engine total = sum of parts', totalActive = 12, Format('total=%d', [totalActive]));
+
+    // The summed mix is audible and the master keeps it bounded (no runaway clip).
+    pk := EnginePeak(eng, 0.3);
+    Ok('full mix audible', pk > 0.05, Format('peak=%.4f', [pk]));
+    Ok('master keeps the mix bounded', pk <= 1.05, Format('peak=%.4f (<=1.05)', [pk]));
+
+    // Per-part channel mute removes one instrument from the mix without killing
+    // the rest (mixer routing is per part).
+    for i := 0 to eng.PartCount - 1 do eng.GetPart(i).AllSoundOff;
+    eng.GetPart(0).NoteOn(60, 0.9);
+    eng.GetChannel(0).Muted := True;
+    Ok('muted channel is silent', EnginePeak(eng, 0.1) < 1e-4, '');
+    eng.GetChannel(0).Muted := False;
+    Ok('unmuted channel returns', EnginePeak(eng, 0.1) > 0.01, '');
+  finally
+    eng.Free;
+  end;
+end;
+
 procedure TestExactPitch;
 const
   NREND = 16384;          // ~2.7 Hz Goertzel bin
@@ -1356,6 +1419,7 @@ begin
   TestTechniqueParams;
   TestMacros;
   TestPartPolyphony;
+  TestEngineMix;
   TestExactPitch;
 
   WriteLn;
