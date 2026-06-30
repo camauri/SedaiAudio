@@ -1212,6 +1212,61 @@ begin
   end;
 end;
 
+procedure TestVoiceBudget;
+var
+  eng: TSAFEngine;
+  pa, pb: TSAFPart;
+  i, total: Integer;
+  buf: array of Single;
+  frames: Integer;
+begin
+  WriteLn('== Global voice budget (shared polyphony) ==');
+  frames := 256;
+  SetLength(buf, frames * 2);
+  eng := TSAFEngine.Create(SR);
+  try
+    eng.SetGlobalPolyphony(8);
+    Ok('global polyphony set', eng.GlobalPolyphony = 8, Format('cap=%d', [eng.GlobalPolyphony]));
+
+    pa := eng.AddPart('A');   // 16-voice pool each, sharing the budget of 8
+    pb := eng.AddPart('B');
+    pa.SetInstrument(psClassic, 'saw');
+    pb.SetInstrument(psClassic, 'saw');
+
+    // One part alone can claim the whole shared budget (B idle): 12 notes
+    // requested, capped at 8 active.
+    for i := 0 to 11 do pa.NoteOn(48 + i, 1.0);
+    Ok('one part uses whole budget', pa.ActiveVoiceCount = 8,
+       Format('A active=%d (cap 8)', [pa.ActiveVoiceCount]));
+    Ok('budget not exceeded (solo)', eng.TotalActiveVoices = 8,
+       Format('total=%d', [eng.TotalActiveVoices]));
+    pa.AllSoundOff; pb.AllSoundOff;
+    Ok('all-sound-off frees the budget', eng.TotalActiveVoices = 0,
+       Format('total=%d', [eng.TotalActiveVoices]));
+
+    // Two parts share the budget: 6 + 6 requested, total capped at 8, both sound.
+    for i := 0 to 5 do pa.NoteOn(48 + i, 1.0);
+    for i := 0 to 5 do pb.NoteOn(60 + i, 1.0);
+    total := eng.TotalActiveVoices;
+    Ok('shared budget respected', total = 8, Format('total=%d (cap 8)', [total]));
+    Ok('both parts sounding', (pa.ActiveVoiceCount > 0) and (pb.ActiveVoiceCount > 0),
+       Format('A=%d B=%d', [pa.ActiveVoiceCount, pb.ActiveVoiceCount]));
+
+    // The mix still renders bounded audio with the cap active.
+    FillChar(buf[0], frames * 2 * SizeOf(Single), 0);
+    eng.RenderBlock(@buf[0], frames);
+
+    // Raising the budget lets more voices sound at once.
+    pa.AllSoundOff; pb.AllSoundOff;
+    eng.SetGlobalPolyphony(20);
+    for i := 0 to 11 do pa.NoteOn(36 + i, 1.0);
+    Ok('raised budget admits more', pa.ActiveVoiceCount = 12,
+       Format('A active=%d (cap 20)', [pa.ActiveVoiceCount]));
+  finally
+    eng.Free;
+  end;
+end;
+
 procedure TestExactPitch;
 const
   NREND = 16384;          // ~2.7 Hz Goertzel bin
@@ -1296,6 +1351,7 @@ begin
   TestFMParams;
   TestTechniqueParams;
   TestMacros;
+  TestVoiceBudget;
   TestExactPitch;
 
   WriteLn;
