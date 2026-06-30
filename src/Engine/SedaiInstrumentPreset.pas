@@ -40,6 +40,7 @@ type
     Description: string;
     Technique: TSAFPartSource;    // internal: which generator
     PresetKey: string;            // internal: key for ConfigureXxxVoice
+    Polyphony: Integer;           // suggested voice count for the part (0 = leave as-is)
     Common: TPartCommonOverride;  // optional envelope/filter/level overrides
     // Author side: a full per-technique parameter block overrides the named key
     // for that technique (every parameter editable). Only the block matching the
@@ -89,6 +90,8 @@ type
 
 // Category display label (for browse UIs / debugging).
 function InstrumentCategoryName(ACategory: TInstrumentCategory): string;
+// A sensible default voice count for a role (overridable per preset / per part).
+function DefaultPolyphony(ACategory: TInstrumentCategory): Integer;
 // Whether a common-layer override carries any active group.
 function HasCommonOverride(const AOverride: TPartCommonOverride): Boolean;
 
@@ -99,6 +102,31 @@ implementation
 
 var
   GRegistry: TSedaiInstrumentRegistry = nil;
+
+// A sensible starting voice count per role: sustained / overlapping-tail
+// instruments need more (pads, keys with pedal, bells, plucks), tight
+// monophonic-ish roles need fewer. Always overridable per preset / per part.
+function DefaultPolyphony(ACategory: TInstrumentCategory): Integer;
+begin
+  case ACategory of
+    icBass:    Result := 6;
+    icLead:    Result := 6;
+    icPad:     Result := 12;
+    icKeys:    Result := 16;   // piano-style release tails overlap a lot
+    icStrings: Result := 12;
+    icBrass:   Result := 8;
+    icWind:    Result := 6;
+    icPlucked: Result := 12;   // plucks ring on while new ones start
+    icBells:   Result := 12;   // long decays overlap
+    icOrgan:   Result := 12;
+    icDrums:   Result := 8;
+    icArp:     Result := 8;
+    icFX:      Result := 6;
+    icSynth:   Result := 8;
+  else
+    Result := 8;
+  end;
+end;
 
 function InstrumentCategoryName(ACategory: TInstrumentCategory): string;
 begin
@@ -163,6 +191,7 @@ begin
   FPresets[FCount].Description := ADescription;
   FPresets[FCount].Technique := ATechnique;
   FPresets[FCount].PresetKey := APresetKey;
+  FPresets[FCount].Polyphony := DefaultPolyphony(ACategory);   // sensible per-role default
   Inc(FCount);
 end;
 
@@ -219,6 +248,10 @@ begin
   Result := False;
   if (AIndex < 0) or (AIndex >= FCount) or (APart = nil) then Exit;
   APart.SetInstrument(FPresets[AIndex].Technique, FPresets[AIndex].PresetKey);
+  // Size the part to the instrument's suggested polyphony before the per-voice
+  // blocks/macros are applied, so any newly-created voices get configured too.
+  if FPresets[AIndex].Polyphony > 0 then
+    APart.Polyphony := FPresets[AIndex].Polyphony;
   // Author side: a full per-technique block (if present for the matching
   // technique) replaces the named-key timbre. Clear the others so a reused Part
   // doesn't carry a stale block.
@@ -308,6 +341,7 @@ begin
       if p.Description <> '' then sl.Add('desc=' + p.Description);
       sl.Add('technique=' + TechniqueName(p.Technique));
       sl.Add('key=' + p.PresetKey);
+      if p.Polyphony > 0 then sl.Add(Format('poly=%d', [p.Polyphony]));
       if p.Common.OverrideEnvelope then
         sl.Add(Format('env=%s,%s,%s,%s',
           [FloatToStr(p.Common.Attack, fs), FloatToStr(p.Common.Decay, fs),
@@ -470,6 +504,7 @@ begin
       else if k = 'desc' then cur.Description := v
       else if k = 'technique' then cur.Technique := TechniqueFromName(v)
       else if k = 'key' then cur.PresetKey := v
+      else if k = 'poly' then cur.Polyphony := StrToIntDef(v, 0)
       else if k = 'env' then
       begin
         rest := v;

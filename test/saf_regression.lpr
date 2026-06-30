@@ -795,6 +795,8 @@ begin
   try
     part.SetSampleRate(SR);
     Ok('apply instrument', reg.ApplyToPartByName('Classic Lead', part), '');
+    // The preset sizes the part to its suggested polyphony (icLead default = 6).
+    Ok('preset sizes the part', part.Polyphony = 6, Format('poly=%d', [part.Polyphony]));
     part.NoteOn(60, 1.0);
     FillChar(buf[0], frames * 2 * SizeOf(Single), 0);
     part.RenderBlock(@buf[0], frames);
@@ -818,7 +820,8 @@ begin
     idx := reg2.FindByName('FM E-Piano');
     Ok('.safinst preset preserved',
        (idx >= 0) and (reg2.Get(idx).Technique = psFM) and
-       (reg2.Get(idx).PresetKey = 'epiano') and (reg2.Get(idx).Category = icKeys), '');
+       (reg2.Get(idx).PresetKey = 'epiano') and (reg2.Get(idx).Category = icKeys) and
+       (reg2.Get(idx).Polyphony = 16), '');   // icKeys default polyphony round-trips
   finally
     reg2.Free; ms.Free;
   end;
