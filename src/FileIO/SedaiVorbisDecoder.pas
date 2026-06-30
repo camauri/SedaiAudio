@@ -170,7 +170,11 @@ type
     FPrevTail: array of array of Single;  // [ch] windowed right tail of the previous block
     FPrevTailLen: Integer;                // length of each FPrevTail[ch]
     FFirstAudio: Boolean;                 // first audio packet primes the overlap (no output)
-    FCosTab0, FCosTab1: array of Single;  // IMDCT cosine tables for bs0 / bs1
+    // FFT-based IMDCT tables, per block size (index 0 = bs0, 1 = bs1).
+    FMdctBitrev: array[0..1] of array of LongInt;          // bit-reversal for the N/4 FFT
+    FMdctTwC, FMdctTwS: array[0..1] of array of Double;    // FFT twiddles (size N/4)
+    FMdctRotC, FMdctRotS: array[0..1] of array of Double;  // pre/post rotation (size N/4)
+    FMdctZRe, FMdctZIm: array[0..1] of array of Double;    // FFT work buffers (size N/4)
     FAudioStarted: Boolean;               // decode tables/buffers initialized
     // Output FIFO (interleaved float), filled a packet at a time, drained by ReadFrames.
     FOutBuf: array of Single;
@@ -208,7 +212,8 @@ type
     procedure DecodeResiduePacket(ABR: TVorbisBitReader; const ARes: TVorbisResidue;
       ACh: Integer; const ADoNotDecode: array of Boolean;
       AVectors: array of PSingle; AHalf: Integer);
-    procedure IMDCT(const ACosTab: array of Single; AInput, AOutput: PSingle; AN: Integer);
+    procedure BuildMDCT(AIdx, AN: Integer);   // build the FFT/rotation tables for a block size
+    procedure IMDCT(AIdx, AN: Integer; AInput, AOutput: PSingle);  // FFT-based inverse MDCT
     function DecodeAudioPacket(const APacket: TVorbisPacket): Boolean;
     procedure ScanTotalFrames;             // find the last page granulepos (= total frames)
     procedure RestartAtAudio;              // rewind + skip the 3 headers, reset decode state
@@ -1289,16 +1294,12 @@ end;
 // first ReadFrames after the headers are parsed.
 procedure TSedaiVorbisDecoder.InitAudioDecode;
 var
-  j, ch: Integer;
+  ch: Integer;
 begin
   if FAudioStarted then Exit;
-  // Table length = 8*M = 4*blocksize, entry j = cos(pi*j/(4M)) = cos(pi*j/(2*blocksize)).
-  SetLength(FCosTab0, 4 * FBlocksize0);
-  for j := 0 to 4 * FBlocksize0 - 1 do
-    FCosTab0[j] := Cos(PI * j / (2 * FBlocksize0));
-  SetLength(FCosTab1, 4 * FBlocksize1);
-  for j := 0 to 4 * FBlocksize1 - 1 do
-    FCosTab1[j] := Cos(PI * j / (2 * FBlocksize1));
+  // FFT-based IMDCT tables for the two block sizes.
+  BuildMDCT(0, FBlocksize0);
+  BuildMDCT(1, FBlocksize1);
   SetLength(FPrevTail, FChannels);
   for ch := 0 to FChannels - 1 do SetLength(FPrevTail[ch], 0);
   FPrevTailLen := 0;
@@ -1594,33 +1595,111 @@ begin
     DoResidue01(ARes.ResidueType, ACh, AHalf, AVectors, ADoNotDecode);
 end;
 
-// Inverse MDCT: M = AN/2 spectral coefficients -> AN time samples, the standard
-// MDCT pair x[n] = (2/N) sum_k X[k] cos[(pi/M)(n+1/2+M/2)(k+1/2)] with M = N/2
-// (the modulus is the bin count, so bin k maps to (k+0.5)/N cycles/sample).
-// Direct cosine form via a precomputed cos table; ACosTab[j] = cos(pi*j/(4M)).
-// No 1/N scaling here: libvorbis folds the normalization into the forward MDCT,
-// so the decoder's cosine sum (windowed + overlap-added) already yields PCM.
-procedure TSedaiVorbisDecoder.IMDCT(const ACosTab: array of Single;
-  AInput, AOutput: PSingle; AN: Integer);
+// Build the FFT-based IMDCT tables for a block size (AN), at slot AIdx (0/1):
+// the N/4-point FFT bit-reversal + twiddles, and the MDCT pre/post-rotation.
+procedure TSedaiVorbisDecoder.BuildMDCT(AIdx, AN: Integer);
 var
-  M, P, n, k, idx, stepN, baseI: Integer;
-  acc: Double;
+  n4, bits, i, j, b, rev: Integer;
+  alpha: Double;
 begin
-  M := AN div 2;
-  P := 8 * M;
-  for n := 0 to AN - 1 do
+  n4 := AN div 4;
+  bits := 0; while (1 shl bits) < n4 do Inc(bits);
+  SetLength(FMdctBitrev[AIdx], n4);
+  for i := 0 to n4 - 1 do
   begin
-    baseI := 2 * n + 1 + M;
-    idx := baseI mod P;
-    stepN := (2 * baseI) mod P;
-    acc := 0;
-    for k := 0 to M - 1 do
+    rev := 0; b := i;
+    for j := 0 to bits - 1 do begin rev := (rev shl 1) or (b and 1); b := b shr 1; end;
+    FMdctBitrev[AIdx][i] := rev;
+  end;
+  SetLength(FMdctTwC[AIdx], n4); SetLength(FMdctTwS[AIdx], n4);
+  for i := 0 to n4 - 1 do
+  begin
+    FMdctTwC[AIdx][i] := Cos(2 * PI * i / n4);
+    FMdctTwS[AIdx][i] := Sin(2 * PI * i / n4);
+  end;
+  SetLength(FMdctRotC[AIdx], n4); SetLength(FMdctRotS[AIdx], n4);
+  for i := 0 to n4 - 1 do
+  begin
+    alpha := 2 * PI * (i + 1.0 / 8.0) / AN;
+    FMdctRotC[AIdx][i] := Cos(alpha);
+    FMdctRotS[AIdx][i] := Sin(alpha);
+  end;
+  SetLength(FMdctZRe[AIdx], n4); SetLength(FMdctZIm[AIdx], n4);
+end;
+
+// Inverse MDCT in O(N log N): an N/4-point complex FFT with MDCT pre/post
+// rotation (the libvorbis/FFmpeg convention), producing the same AN samples as
+// the direct cosine form. The transform pair is verified bit-close to the
+// direct sum y[n] = sum_k X[k] cos[(pi/(4M))(2n+1+M)(2k+1)] (M = AN/2); libvorbis
+// folds the 1/N normalization into the forward MDCT, so no scaling is applied.
+procedure TSedaiVorbisDecoder.IMDCT(AIdx, AN: Integer; AInput, AOutput: PSingle);
+var
+  n2, n4, n8, k, j, len, half, step, i, idx: Integer;
+  zRe, zIm, rotC, rotS, twC, twS: array of Double;
+  are, aim, r0, i0, r1, i1, wr, wi, tr, ti, ur, ui: Double;
+begin
+  n2 := AN div 2; n4 := AN div 4; n8 := AN div 8;
+  zRe := FMdctZRe[AIdx]; zIm := FMdctZIm[AIdx];
+  rotC := FMdctRotC[AIdx]; rotS := FMdctRotS[AIdx];
+  twC := FMdctTwC[AIdx]; twS := FMdctTwS[AIdx];
+
+  // Pre-rotation, placed directly into bit-reversed FFT slots.
+  for k := 0 to n4 - 1 do
+  begin
+    are := AInput[n2 - 1 - 2 * k];
+    aim := AInput[2 * k];
+    j := FMdctBitrev[AIdx][k];
+    zRe[j] := are * rotC[k] - aim * rotS[k];
+    zIm[j] := are * rotS[k] + aim * rotC[k];
+  end;
+
+  // In-place DIT FFT (input already bit-reversed), forward sign exp(+2*pi*i).
+  len := 2;
+  while len <= n4 do
+  begin
+    half := len div 2; step := n4 div len;
+    i := 0;
+    while i < n4 do
     begin
-      acc := acc + AInput[k] * ACosTab[idx];
-      idx := idx + stepN;
-      if idx >= P then idx := idx - P;
+      for j := 0 to half - 1 do
+      begin
+        idx := j * step;
+        wr := twC[idx]; wi := twS[idx];
+        tr := wr * zRe[i + j + half] - wi * zIm[i + j + half];
+        ti := wr * zIm[i + j + half] + wi * zRe[i + j + half];
+        ur := zRe[i + j]; ui := zIm[i + j];
+        zRe[i + j] := ur + tr; zIm[i + j] := ui + ti;
+        zRe[i + j + half] := ur - tr; zIm[i + j + half] := ui - ti;
+      end;
+      Inc(i, len);
     end;
-    AOutput[n] := acc;
+    len := len * 2;
+  end;
+
+  // Post-rotation.
+  for k := 0 to n8 - 1 do
+  begin
+    are := zIm[n8 - 1 - k]; aim := zRe[n8 - 1 - k];
+    r0 := are * rotS[n8 - 1 - k] - aim * rotC[n8 - 1 - k];
+    i1 := are * rotC[n8 - 1 - k] + aim * rotS[n8 - 1 - k];
+    are := zIm[n8 + k]; aim := zRe[n8 + k];
+    r1 := are * rotS[n8 + k] - aim * rotC[n8 + k];
+    i0 := are * rotC[n8 + k] + aim * rotS[n8 + k];
+    zRe[n8 - 1 - k] := r0; zIm[n8 - 1 - k] := i0;
+    zRe[n8 + k] := r1;     zIm[n8 + k] := i1;
+  end;
+
+  // Expand the n2 half-samples to AN, negated (matches the direct form's sign).
+  // Half is z reinterpreted: half[2j]=zRe[j], half[2j+1]=zIm[j], at offset n4.
+  for j := 0 to n4 - 1 do
+  begin
+    AOutput[n4 + 2 * j] := -zRe[j];
+    AOutput[n4 + 2 * j + 1] := -zIm[j];
+  end;
+  for k := 0 to n4 - 1 do
+  begin
+    AOutput[k] := -AOutput[n2 - 1 - k];
+    AOutput[AN - 1 - k] := AOutput[n2 + k];
   end;
 end;
 
@@ -1758,8 +1837,8 @@ begin
 
     // 6) IMDCT per channel.
     for ch := 0 to FChannels - 1 do
-      if blockflag then IMDCT(FCosTab1, @residue[ch][0], @timeBuf[ch][0], n)
-      else IMDCT(FCosTab0, @residue[ch][0], @timeBuf[ch][0], n);
+      if blockflag then IMDCT(1, n, @residue[ch][0], @timeBuf[ch][0])
+      else IMDCT(0, n, @residue[ch][0], @timeBuf[ch][0]);
 
     // 7) Window + overlap-add.
     SetLength(win, n);
