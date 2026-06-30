@@ -304,6 +304,7 @@ begin
     psAdditive: Result := 'psAdditive';
     psSample: Result := 'psSample';
     psKarplus: Result := 'psKarplus';
+    psSID: Result := 'psSID';
   else
     Result := 'psClassic';
   end;
@@ -316,6 +317,7 @@ begin
   else if SameText(AName, 'psAdditive') then Result := psAdditive
   else if SameText(AName, 'psSample') then Result := psSample
   else if SameText(AName, 'psKarplus') then Result := psKarplus
+  else if SameText(AName, 'psSID') then Result := psSID
   else Result := psClassic;
 end;
 
@@ -783,6 +785,13 @@ begin
   Add('Harp',          icPlucked, 'bright singing',     psKarplus, 'harp');
   Add('Muted Pluck',   icPlucked, 'short staccato',     psKarplus, 'mute');
   Add('Karplus Drum',  icDrums, 'percussive',           psKarplus, 'drum');
+
+  // --- SID-flavoured oscillator (psSID) ---
+  Add('SID Lead',      icLead,  'bright retro chip',    psSID, 'lead');
+  Add('SID Pulse',     icLead,  'thin retro chip',      psSID, 'pulse');
+  Add('SID Bass',      icBass,  'punchy retro chip',    psSID, 'bass');
+  Add('SID Triangle',  icSynth, 'soft retro chip',      psSID, 'triangle');
+  Add('SID Noise',     icDrums, 'noise retro chip',     psSID, 'noise');
 end;
 
 initialization

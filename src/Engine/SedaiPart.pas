@@ -27,7 +27,7 @@ uses
 type
   // Which generator the part's voices use. Mirrors TVoiceSourceType but is the
   // public, instrument-level selector exposed by the Part.
-  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample, psKarplus);
+  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample, psKarplus, psSID);
 
   // Optional "common layer" overrides applied on top of the preset's own values
   // (envelope / filter / output level). Each Override* flag gates one group; all
@@ -342,6 +342,9 @@ function ExplodeFMParams(const APresetKey: string): TFMParams;
 procedure ConfigureWavetableVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureAdditiveVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureKarplusVoice(AVoice: TSedaiVoice; const APreset: string);
+// SID-flavoured oscillator voice (the chip's authentic waveforms, polyphonic,
+// licence-clean: uses SedaiOscillator's SID modes, not the reSID port).
+procedure ConfigureSIDVoice(AVoice: TSedaiVoice; const APreset: string);
 // Full-parameter-block configurators + explode (author side), one per technique.
 procedure ConfigureClassicVoiceFromParams(AVoice: TSedaiVoice; const AParams: TClassicParams);
 function ExplodeClassicParams(const APresetKey: string): TClassicParams;
@@ -1005,6 +1008,78 @@ begin
   AVoice.OutputLevel := Trim;
 end;
 
+procedure ConfigureSIDVoice(AVoice: TSedaiVoice; const APreset: string);
+var
+  Osc: TSedaiOscillator;
+  P: string;
+  Trim: Single;
+begin
+  // A SID-flavoured voice = a single oscillator running the chip's authentic
+  // waveforms (24-bit accumulator, SID saw/triangle/pulse/noise + combined).
+  // It is an ordinary polyphonic voice, so it can play chords (unlike the real
+  // 3-voice chip) and mixes freely with the orchestral techniques.
+  AVoice.SetSourceType(vstOscillators);
+  AVoice.SetOscillatorEnabled(0, True);
+  AVoice.SetOscillatorEnabled(1, False);
+  AVoice.SetOscillatorEnabled(2, False);
+  Osc := AVoice.Oscillators[0];
+  if Osc <> nil then Osc.SIDMode := True;
+
+  // Sensible SID defaults; refined per preset below.
+  AVoice.FilterEnabled := True;
+  AVoice.SetFilterType(ftLowPass);
+  AVoice.SetFilterCutoff(3000.0);
+  AVoice.SetFilterResonance(0.3);
+  AVoice.SetEnvelopeADSR(0, 0.005, 0.15, 0.6, 0.2);
+
+  P := LowerCase(APreset);
+  Trim := 0.55;
+
+  if P = 'lead' then
+  begin
+    if Osc <> nil then begin Osc.SetSIDWaveform(False, False, True, False); Osc.PulseWidth := 0.5; end;
+    AVoice.SetFilterCutoff(3800.0); AVoice.SetFilterResonance(0.5);
+    Trim := 0.5;
+  end
+  else if (P = 'pulse') or (P = 'pwm') then
+  begin
+    if Osc <> nil then begin Osc.SetSIDWaveform(False, False, True, False); Osc.PulseWidth := 0.25; end;
+    Trim := 0.5;
+  end
+  else if P = 'bass' then
+  begin
+    if Osc <> nil then Osc.SetSIDWaveform(False, True, False, False);   // sawtooth
+    AVoice.SetFilterCutoff(1100.0); AVoice.SetFilterResonance(0.35);
+    AVoice.SetEnvelopeADSR(0, 0.004, 0.2, 0.55, 0.15);
+    Trim := 0.5;
+  end
+  else if (P = 'triangle') or (P = 'soft') then
+  begin
+    if Osc <> nil then Osc.SetSIDWaveform(True, False, False, False);   // triangle
+    AVoice.SetFilterCutoff(6000.0);
+    Trim := 0.7;
+  end
+  else if P = 'saw' then
+  begin
+    if Osc <> nil then Osc.SetSIDWaveform(False, True, False, False);
+    Trim := 0.5;
+  end
+  else if (P = 'noise') or (P = 'drum') then
+  begin
+    if Osc <> nil then Osc.SetSIDWaveform(False, False, False, True);   // noise
+    AVoice.FilterEnabled := False;
+    AVoice.SetEnvelopeADSR(0, 0.001, 0.12, 0.0, 0.1);
+    Trim := 0.5;
+  end
+  else  // default: a classic SID pulse lead
+  begin
+    if Osc <> nil then begin Osc.SetSIDWaveform(False, False, True, False); Osc.PulseWidth := 0.5; end;
+    Trim := 0.55;
+  end;
+
+  AVoice.OutputLevel := Trim;
+end;
+
 function BuildWavetableFromData(const AData: TWavetable): TSedaiWavetable;
 var
   I, TableSize: Integer;
@@ -1094,6 +1169,8 @@ begin
         ConfigureKarplusVoiceFromParams(AVoice, FKarplusParams)
       else
         ConfigureKarplusVoice(AVoice, FPreset);
+    psSID:
+      ConfigureSIDVoice(AVoice, FPreset);
     psSample:
       if Assigned(FSampleData) then
       begin

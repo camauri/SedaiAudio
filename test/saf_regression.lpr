@@ -153,12 +153,13 @@ var
   end;
 
 begin
-  WriteLn('== 6 source-type dispatch (non-silent) ==');
+  WriteLn('== 7 source-type dispatch (non-silent) ==');
   RunPreset('classic',   psClassic,   'saw');
   RunPreset('fm',        psFM,        'epiano');
   RunPreset('wavetable', psWavetable, 'basic');
   RunPreset('additive',  psAdditive,  'organ');
   RunPreset('karplus',   psKarplus,   'guitar');
+  RunPreset('sid',       psSID,       'lead');
 
   // Sample source needs a loaded buffer (no preset string).
   p := TSAFPart.Create(4);
