@@ -1121,6 +1121,97 @@ begin
   end;
 end;
 
+procedure TestMacros;
+var
+  reg, reg2: TSedaiInstrumentRegistry;
+  pr: TInstrumentPreset;
+  pLo, pHi, pDet: TSAFPart;
+  bufLo, bufHi, bufB: array of Single;
+  frames, i, idx: Integer;
+  maxDiff, diff, peakLo: Single;
+  ms: TMemoryStream;
+
+  procedure LoadAndRender(out APart: TSAFPart; ALib: TSedaiInstrumentRegistry;
+    AMacroVal: Single; var ABuf: array of Single);
+  begin
+    APart := TSAFPart.Create;
+    APart.SetSampleRate(SR);
+    ALib.ApplyToPartByName('Macro Pad', APart);
+    APart.SetMacroValue(0, AMacroVal);
+    APart.NoteOn(60, 1.0);
+    FillChar(ABuf[0], frames * 2 * SizeOf(Single), 0);
+    APart.RenderBlock(@ABuf[0], frames);
+  end;
+
+begin
+  WriteLn('== Macros (composer quick-controls) ==');
+  frames := 4096;
+  SetLength(bufLo, frames * 2); SetLength(bufHi, frames * 2); SetLength(bufB, frames * 2);
+
+  // Author a preset carrying a "Brightness" macro wired to the filter cutoff.
+  pr := Default(TInstrumentPreset);
+  pr.Name := 'Macro Pad'; pr.Category := icPad;
+  pr.Technique := psClassic; pr.PresetKey := 'saw';
+  SetLength(pr.Macros, 1);
+  pr.Macros[0].Name := 'Brightness';
+  pr.Macros[0].Value := 0.0;
+  SetLength(pr.Macros[0].Mappings, 1);
+  pr.Macros[0].Mappings[0].Dest := mdFilterCutoff;
+  pr.Macros[0].Mappings[0].MinVal := 300.0;
+  pr.Macros[0].Mappings[0].MaxVal := 8000.0;
+  pr.Macros[0].Mappings[0].Curve := mcLinear;
+
+  reg := TSedaiInstrumentRegistry.CreateEmpty;
+  try
+    reg.AddPreset(pr);
+
+    // Dark (0.0) vs bright (1.0): the cutoff macro must change the timbre.
+    LoadAndRender(pLo, reg, 0.0, bufLo);
+    Ok('macro loaded onto part', pLo.MacroCount = 1, Format('%d macros', [pLo.MacroCount]));
+    LoadAndRender(pHi, reg, 1.0, bufHi);
+    maxDiff := 0; peakLo := 0;
+    for i := 0 to frames * 2 - 1 do
+    begin
+      diff := Abs(bufLo[i] - bufHi[i]);
+      if diff > maxDiff then maxDiff := diff;
+      if Abs(bufLo[i]) > peakLo then peakLo := Abs(bufLo[i]);
+    end;
+    Ok('macro changes timbre', (maxDiff > 1e-3) and (peakLo > 0.001),
+       Format('maxDiff=%.4f', [maxDiff]));
+
+    // Determinism: the same macro value reproduces bit-for-bit on a fresh part.
+    LoadAndRender(pDet, reg, 1.0, bufB);
+    maxDiff := 0;
+    for i := 0 to frames * 2 - 1 do
+    begin
+      diff := Abs(bufHi[i] - bufB[i]);
+      if diff > maxDiff then maxDiff := diff;
+    end;
+    Ok('macro value reproduces', maxDiff = 0, Format('maxDiff=%.3g', [maxDiff]));
+    pLo.Free; pHi.Free; pDet.Free;
+
+    // .safinst round-trip of the macro + its mapping.
+    ms := TMemoryStream.Create;
+    reg2 := TSedaiInstrumentRegistry.CreateEmpty;
+    try
+      reg.SaveToStream(ms, 'Macros');
+      ms.Position := 0;
+      reg2.LoadFromStream(ms);
+      idx := reg2.FindByName('Macro Pad');
+      Ok('.safinst macro round-trips',
+         (idx >= 0) and (Length(reg2.Get(idx).Macros) = 1) and
+         (reg2.Get(idx).Macros[0].Name = 'Brightness') and
+         (Length(reg2.Get(idx).Macros[0].Mappings) = 1) and
+         (reg2.Get(idx).Macros[0].Mappings[0].Dest = mdFilterCutoff) and
+         (Abs(reg2.Get(idx).Macros[0].Mappings[0].MaxVal - 8000.0) < 1e-2), '');
+    finally
+      reg2.Free; ms.Free;
+    end;
+  finally
+    reg.Free;
+  end;
+end;
+
 procedure TestExactPitch;
 const
   NREND = 16384;          // ~2.7 Hz Goertzel bin
@@ -1204,6 +1295,7 @@ begin
   TestInstrumentRegistry;
   TestFMParams;
   TestTechniqueParams;
+  TestMacros;
   TestExactPitch;
 
   WriteLn;

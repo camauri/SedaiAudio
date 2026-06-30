@@ -54,6 +54,7 @@ type
     Additive: TAdditiveParams;
     HasKarplusParams: Boolean;
     Karplus: TKarplusParams;
+    Macros: TMacroArray;          // composer quick-controls authored on the preset
   end;
 
   TIntArray = array of Integer;
@@ -241,6 +242,11 @@ begin
     APart.SetKarplusParams(FPresets[AIndex].Karplus)
   else
     APart.ClearKarplusParams;
+  // Composer macros authored on the preset (applied on top; empty -> cleared).
+  if Length(FPresets[AIndex].Macros) > 0 then
+    APart.SetMacros(FPresets[AIndex].Macros)
+  else
+    APart.ClearMacros;
   if HasCommonOverride(FPresets[AIndex].Common) then
     APart.SetCommonOverride(FPresets[AIndex].Common)
   else
@@ -283,7 +289,7 @@ end;
 procedure TSedaiInstrumentRegistry.SaveToStream(AStream: TStream; const ALibraryName: string);
 var
   sl: TStringList;
-  i, op: Integer;
+  i, op, mp: Integer;
   p: TInstrumentPreset;
   fs: TFormatSettings;
 begin
@@ -390,6 +396,17 @@ begin
            FloatToStr(p.Karplus.Sustain, fs), FloatToStr(p.Karplus.Release, fs)]));
         sl.Add('kstrim=' + FloatToStr(p.Karplus.OutputTrim, fs));
       end;
+      // Composer macros: a 'macro=' header followed by its 'map=' mappings.
+      for op := 0 to High(p.Macros) do
+      begin
+        sl.Add(Format('macro=%s,%s', [p.Macros[op].Name, FloatToStr(p.Macros[op].Value, fs)]));
+        for mp := 0 to High(p.Macros[op].Mappings) do
+          sl.Add(Format('map=%d,%s,%s,%d',
+            [Ord(p.Macros[op].Mappings[mp].Dest),
+             FloatToStr(p.Macros[op].Mappings[mp].MinVal, fs),
+             FloatToStr(p.Macros[op].Mappings[mp].MaxVal, fs),
+             Ord(p.Macros[op].Mappings[mp].Curve)]));
+      end;
     end;
     sl.SaveToStream(AStream);
   finally
@@ -400,7 +417,7 @@ end;
 function TSedaiInstrumentRegistry.LoadFromStream(AStream: TStream): Integer;
 var
   sl: TStringList;
-  i, eq, n, opIdx: Integer;
+  i, eq, n, opIdx, mi, mj: Integer;
   line, k, v, rest: string;
   cur: TInstrumentPreset;
   have: Boolean;
@@ -643,6 +660,25 @@ begin
       begin
         cur.HasKarplusParams := True;
         cur.Karplus.OutputTrim := StrToFloatDef(v, 1.0, fs);
+      end
+      // --- MACROS ---
+      else if k = 'macro' then
+      begin
+        rest := v;
+        SetLength(cur.Macros, Length(cur.Macros) + 1);
+        cur.Macros[High(cur.Macros)].Name := NextTok;
+        cur.Macros[High(cur.Macros)].Value := StrToFloatDef(NextTok, 0, fs);
+      end
+      else if (k = 'map') and (Length(cur.Macros) > 0) then
+      begin
+        rest := v;
+        mi := High(cur.Macros);
+        mj := Length(cur.Macros[mi].Mappings);
+        SetLength(cur.Macros[mi].Mappings, mj + 1);
+        cur.Macros[mi].Mappings[mj].Dest := TMacroDest(StrToIntDef(NextTok, 0));
+        cur.Macros[mi].Mappings[mj].MinVal := StrToFloatDef(NextTok, 0, fs);
+        cur.Macros[mi].Mappings[mj].MaxVal := StrToFloatDef(NextTok, 1, fs);
+        cur.Macros[mi].Mappings[mj].Curve := TMacroCurve(StrToIntDef(NextTok, 0));
       end;
     end;
     Flush;

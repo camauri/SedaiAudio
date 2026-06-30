@@ -119,6 +119,26 @@ type
     OutputTrim: Single;
   end;
 
+  // ---- MACROS -----------------------------------------------------------------
+  // A macro is a single composer-facing control (0..1) that the sound designer
+  // wires to one or more universal voice destinations (cutoff/resonance/ADSR/
+  // level). Bidirectional: authored here / in a preset, consumed as a quick
+  // control. Macros apply ON TOP of the preset + technique block + common layer.
+  TMacroDest = (mdFilterCutoff, mdFilterResonance, mdAttack, mdDecay,
+                mdSustain, mdRelease, mdOutputLevel);
+  TMacroCurve = (mcLinear, mcExp, mcLog);
+  TMacroMapping = record
+    Dest: TMacroDest;
+    MinVal, MaxVal: Single;   // destination value at macro 0 / macro 1
+    Curve: TMacroCurve;
+  end;
+  TInstrumentMacro = record
+    Name: string;             // composer label ("Brightness", "Attack", ...)
+    Value: Single;            // 0..1 current value (also the authored default)
+    Mappings: array of TMacroMapping;
+  end;
+  TMacroArray = array of TInstrumentMacro;
+
   // Stored per-Part modulation. Re-applied to every voice of the pool in
   // ApplyToVoice, so the whole instrument shares the same modulation and it
   // survives a preset reconfigure. LFOs are unlimited (FPartLFOs grows freely).
@@ -188,9 +208,15 @@ type
     FHasKarplusParams: Boolean;
     FKarplusParams: TKarplusParams;
 
+    // Composer macros (0..1 quick controls) wired to universal voice
+    // destinations. Applied to every voice on top of the preset/block/common.
+    FMacros: TMacroArray;
+
     // Voice configuration callback (of object) applied to every voice in the
     // pool by FManager.ConfigureAllVoices. Reads FSource / FPreset / modulation.
     procedure ApplyToVoice(AVoice: TSedaiVoice);
+    // Apply the Part's macros to one voice (the "1d" step of ApplyToVoice).
+    procedure ApplyMacrosToVoice(AVoice: TSedaiVoice);
 
   public
     constructor Create(AMaxVoices: Integer = DEFAULT_MAX_VOICES);
@@ -273,6 +299,16 @@ type
     procedure ClearAdditiveParams;
     procedure SetKarplusParams(const AParams: TKarplusParams);
     procedure ClearKarplusParams;
+
+    // Composer macros. SetMacros stores the authored set + re-applies the pool;
+    // SetMacroValue moves one control (0..1) and re-applies; the getters expose
+    // the set to a browse/preview UI. ClearMacros removes them all.
+    procedure SetMacros(const AMacros: TMacroArray);
+    procedure ClearMacros;
+    function MacroCount: Integer;
+    function SetMacroValue(AIndex: Integer; AValue: Single): Boolean;
+    function GetMacroValue(AIndex: Integer): Single;
+    function GetMacroName(AIndex: Integer): string;
 
     // Render a block of audio into AOutput (stereo, interleaved L/R).
     procedure RenderBlock(AOutput: PSingle; AFrameCount: Integer);
@@ -1112,6 +1148,10 @@ begin
   if FCommon.OverrideLevel then
     AVoice.OutputLevel := FCommon.OutputLevel;
 
+  // 1d. Macros: each control (0..1) writes its mapped universal destinations on
+  //     top of everything above. Empty by default -> sound unchanged.
+  ApplyMacrosToVoice(AVoice);
+
   // 2. Rebuild the modulation layer from the Part's stored config. Done from a
   //    clean slate every time so the call is idempotent (no slot/LFO build-up
   //    across reconfigures). LFO indices are captured per-voice into LFOMap so
@@ -1229,6 +1269,98 @@ begin
   FHasKarplusParams := False;
   FillChar(FKarplusParams, SizeOf(FKarplusParams), 0);
   FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+// 0..1 -> shaped 0..1. mcExp favours the low end (e.g. cutoff sweeps), mcLog
+// the high end; mcLinear is the identity.
+function ApplyMacroCurve(ACurve: TMacroCurve; AValue: Single): Single;
+begin
+  if AValue < 0.0 then AValue := 0.0 else if AValue > 1.0 then AValue := 1.0;
+  case ACurve of
+    mcExp: Result := AValue * AValue;
+    mcLog: Result := Sqrt(AValue);
+  else
+    Result := AValue;
+  end;
+end;
+
+procedure TSAFPart.ApplyMacrosToVoice(AVoice: TSedaiVoice);
+var
+  M, J: Integer;
+  cv, val: Single;
+  Env: TSedaiEnvelope;
+begin
+  Env := AVoice.Envelopes[0];
+  for M := 0 to High(FMacros) do
+    for J := 0 to High(FMacros[M].Mappings) do
+    begin
+      cv := ApplyMacroCurve(FMacros[M].Mappings[J].Curve, FMacros[M].Value);
+      val := FMacros[M].Mappings[J].MinVal +
+             (FMacros[M].Mappings[J].MaxVal - FMacros[M].Mappings[J].MinVal) * cv;
+      case FMacros[M].Mappings[J].Dest of
+        mdFilterCutoff:    begin AVoice.FilterEnabled := True; AVoice.SetFilterCutoff(val); end;
+        mdFilterResonance: AVoice.SetFilterResonance(val);
+        mdAttack:    if Env <> nil then Env.AttackTime := val;
+        mdDecay:     if Env <> nil then Env.DecayTime := val;
+        mdSustain:   if Env <> nil then Env.SustainLevel := val;
+        mdRelease:   if Env <> nil then Env.ReleaseTime := val;
+        mdOutputLevel: AVoice.OutputLevel := val;
+      end;
+    end;
+end;
+
+procedure TSAFPart.SetMacros(const AMacros: TMacroArray);
+var
+  I, J: Integer;
+begin
+  // Deep-copy so the Part owns its macros independent of the source array.
+  SetLength(FMacros, Length(AMacros));
+  for I := 0 to High(AMacros) do
+  begin
+    FMacros[I].Name := AMacros[I].Name;
+    FMacros[I].Value := AMacros[I].Value;
+    SetLength(FMacros[I].Mappings, Length(AMacros[I].Mappings));
+    for J := 0 to High(AMacros[I].Mappings) do
+      FMacros[I].Mappings[J] := AMacros[I].Mappings[J];
+  end;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.ClearMacros;
+begin
+  if Length(FMacros) = 0 then Exit;
+  SetLength(FMacros, 0);
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+function TSAFPart.MacroCount: Integer;
+begin
+  Result := Length(FMacros);
+end;
+
+function TSAFPart.SetMacroValue(AIndex: Integer; AValue: Single): Boolean;
+begin
+  Result := (AIndex >= 0) and (AIndex < Length(FMacros));
+  if not Result then Exit;
+  if AValue < 0.0 then AValue := 0.0 else if AValue > 1.0 then AValue := 1.0;
+  FMacros[AIndex].Value := AValue;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+function TSAFPart.GetMacroValue(AIndex: Integer): Single;
+begin
+  if (AIndex >= 0) and (AIndex < Length(FMacros)) then
+    Result := FMacros[AIndex].Value
+  else
+    Result := 0.0;
+end;
+
+function TSAFPart.GetMacroName(AIndex: Integer): string;
+begin
+  if (AIndex >= 0) and (AIndex < Length(FMacros)) then
+    Result := FMacros[AIndex].Name
+  else
+    Result := '';
 end;
 
 procedure TSAFPart.SetCustomWavetable(ATable: TSedaiWavetable; const APreset: string);
