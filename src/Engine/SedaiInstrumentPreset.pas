@@ -39,6 +39,7 @@ type
     Description: string;
     Technique: TSAFPartSource;    // internal: which generator
     PresetKey: string;            // internal: key for ConfigureXxxVoice
+    Common: TPartCommonOverride;  // optional envelope/filter/level overrides
   end;
 
   TIntArray = array of Integer;
@@ -50,10 +51,12 @@ type
     FCount: Integer;
     procedure RegisterBuiltins;
   public
-    constructor Create;
+    constructor Create;                       // seeded with the built-in instruments
+    constructor CreateEmpty;                  // no built-ins (e.g. for loading a file)
     procedure Add(const AName: string; ACategory: TInstrumentCategory;
       const ATags: string; ATechnique: TSAFPartSource; const APresetKey: string;
       const ADescription: string = '');
+    procedure AddPreset(const APreset: TInstrumentPreset);
     function Count: Integer;
     function Get(AIndex: Integer): TInstrumentPreset;
     function FindByName(const AName: string): Integer;        // -1 if absent
@@ -62,10 +65,17 @@ type
     // Configure a Part with the catalogued instrument (by index or name).
     function ApplyToPart(AIndex: Integer; APart: TSAFPart): Boolean;
     function ApplyToPartByName(const AName: string; APart: TSAFPart): Boolean;
+    // .safinst (versioned text) library save / load.
+    procedure SaveToStream(AStream: TStream; const ALibraryName: string);
+    function LoadFromStream(AStream: TStream): Integer;       // returns presets added
+    procedure SaveToFile(const AFileName, ALibraryName: string);
+    function LoadFromFile(const AFileName: string): Integer;
   end;
 
 // Category display label (for browse UIs / debugging).
 function InstrumentCategoryName(ACategory: TInstrumentCategory): string;
+// Whether a common-layer override carries any active group.
+function HasCommonOverride(const AOverride: TPartCommonOverride): Boolean;
 
 // Lazily-created global registry, seeded with the built-in instruments.
 function InstrumentRegistry: TSedaiInstrumentRegistry;
@@ -114,6 +124,18 @@ begin
   RegisterBuiltins;
 end;
 
+constructor TSedaiInstrumentRegistry.CreateEmpty;
+begin
+  inherited Create;
+  FCount := 0;
+  SetLength(FPresets, 32);
+end;
+
+function HasCommonOverride(const AOverride: TPartCommonOverride): Boolean;
+begin
+  Result := AOverride.OverrideEnvelope or AOverride.OverrideFilter or AOverride.OverrideLevel;
+end;
+
 procedure TSedaiInstrumentRegistry.Add(const AName: string;
   ACategory: TInstrumentCategory; const ATags: string;
   ATechnique: TSAFPartSource; const APresetKey: string; const ADescription: string);
@@ -126,6 +148,14 @@ begin
   FPresets[FCount].Description := ADescription;
   FPresets[FCount].Technique := ATechnique;
   FPresets[FCount].PresetKey := APresetKey;
+  Inc(FCount);
+end;
+
+procedure TSedaiInstrumentRegistry.AddPreset(const APreset: TInstrumentPreset);
+begin
+  if FCount >= Length(FPresets) then
+    SetLength(FPresets, Length(FPresets) * 2);
+  FPresets[FCount] := APreset;
   Inc(FCount);
 end;
 
@@ -174,7 +204,182 @@ begin
   Result := False;
   if (AIndex < 0) or (AIndex >= FCount) or (APart = nil) then Exit;
   APart.SetInstrument(FPresets[AIndex].Technique, FPresets[AIndex].PresetKey);
+  if HasCommonOverride(FPresets[AIndex].Common) then
+    APart.SetCommonOverride(FPresets[AIndex].Common)
+  else
+    APart.ClearCommonOverride;
   Result := True;
+end;
+
+// --- name <-> enum helpers for the .safinst text format ---
+function CategoryFromName(const AName: string): TInstrumentCategory;
+var c: TInstrumentCategory;
+begin
+  for c := Low(TInstrumentCategory) to High(TInstrumentCategory) do
+    if SameText(InstrumentCategoryName(c), AName) then Exit(c);
+  Result := icOther;
+end;
+
+function TechniqueName(ATechnique: TSAFPartSource): string;
+begin
+  case ATechnique of
+    psFM: Result := 'psFM';
+    psWavetable: Result := 'psWavetable';
+    psAdditive: Result := 'psAdditive';
+    psSample: Result := 'psSample';
+    psKarplus: Result := 'psKarplus';
+  else
+    Result := 'psClassic';
+  end;
+end;
+
+function TechniqueFromName(const AName: string): TSAFPartSource;
+begin
+  if SameText(AName, 'psFM') then Result := psFM
+  else if SameText(AName, 'psWavetable') then Result := psWavetable
+  else if SameText(AName, 'psAdditive') then Result := psAdditive
+  else if SameText(AName, 'psSample') then Result := psSample
+  else if SameText(AName, 'psKarplus') then Result := psKarplus
+  else Result := psClassic;
+end;
+
+procedure TSedaiInstrumentRegistry.SaveToStream(AStream: TStream; const ALibraryName: string);
+var
+  sl: TStringList;
+  i: Integer;
+  p: TInstrumentPreset;
+  fs: TFormatSettings;
+begin
+  fs := DefaultFormatSettings; fs.DecimalSeparator := '.';
+  sl := TStringList.Create;
+  try
+    sl.Add('; SAF instrument library (.safinst) v1');
+    sl.Add('@library ' + ALibraryName);
+    for i := 0 to FCount - 1 do
+    begin
+      p := FPresets[i];
+      sl.Add('@preset');
+      sl.Add('name=' + p.Name);
+      sl.Add('category=' + InstrumentCategoryName(p.Category));
+      if p.Tags <> '' then sl.Add('tags=' + p.Tags);
+      if p.Description <> '' then sl.Add('desc=' + p.Description);
+      sl.Add('technique=' + TechniqueName(p.Technique));
+      sl.Add('key=' + p.PresetKey);
+      if p.Common.OverrideEnvelope then
+        sl.Add(Format('env=%s,%s,%s,%s',
+          [FloatToStr(p.Common.Attack, fs), FloatToStr(p.Common.Decay, fs),
+           FloatToStr(p.Common.Sustain, fs), FloatToStr(p.Common.Release, fs)]));
+      if p.Common.OverrideFilter then
+        sl.Add(Format('filter=%d,%s,%s',
+          [Ord(p.Common.FilterEnabled), FloatToStr(p.Common.FilterCutoff, fs),
+           FloatToStr(p.Common.FilterResonance, fs)]));
+      if p.Common.OverrideLevel then
+        sl.Add('level=' + FloatToStr(p.Common.OutputLevel, fs));
+    end;
+    sl.SaveToStream(AStream);
+  finally
+    sl.Free;
+  end;
+end;
+
+function TSedaiInstrumentRegistry.LoadFromStream(AStream: TStream): Integer;
+var
+  sl: TStringList;
+  i, eq, n: Integer;
+  line, k, v, rest: string;
+  cur: TInstrumentPreset;
+  have: Boolean;
+  fs: TFormatSettings;
+
+  function NextTok: string;
+  var pc: Integer;
+  begin
+    pc := Pos(',', rest);
+    if pc = 0 then begin Result := Trim(rest); rest := ''; end
+    else begin Result := Trim(Copy(rest, 1, pc - 1)); rest := Copy(rest, pc + 1, MaxInt); end;
+  end;
+
+  procedure Flush;
+  begin
+    if have and (cur.Name <> '') then begin AddPreset(cur); Inc(n); end;
+    have := False;
+  end;
+
+begin
+  fs := DefaultFormatSettings; fs.DecimalSeparator := '.';
+  n := 0; have := False;
+  cur := Default(TInstrumentPreset);
+  sl := TStringList.Create;
+  try
+    sl.LoadFromStream(AStream);
+    for i := 0 to sl.Count - 1 do
+    begin
+      line := Trim(sl[i]);
+      if (line = '') or (line[1] = ';') then Continue;
+      if line[1] = '@' then
+      begin
+        if SameText(Copy(line, 1, 7), '@preset') then
+        begin
+          Flush;
+          cur := Default(TInstrumentPreset);
+          cur.Category := icOther;
+          cur.Technique := psClassic;
+          have := True;
+        end;
+        Continue;   // @library and any other directive = metadata, ignored
+      end;
+      eq := Pos('=', line);
+      if (eq = 0) or (not have) then Continue;
+      k := LowerCase(Trim(Copy(line, 1, eq - 1)));
+      v := Trim(Copy(line, eq + 1, MaxInt));
+      if k = 'name' then cur.Name := v
+      else if k = 'category' then cur.Category := CategoryFromName(v)
+      else if k = 'tags' then cur.Tags := LowerCase(v)
+      else if k = 'desc' then cur.Description := v
+      else if k = 'technique' then cur.Technique := TechniqueFromName(v)
+      else if k = 'key' then cur.PresetKey := v
+      else if k = 'env' then
+      begin
+        rest := v;
+        cur.Common.OverrideEnvelope := True;
+        cur.Common.Attack := StrToFloatDef(NextTok, 0, fs);
+        cur.Common.Decay := StrToFloatDef(NextTok, 0, fs);
+        cur.Common.Sustain := StrToFloatDef(NextTok, 1, fs);
+        cur.Common.Release := StrToFloatDef(NextTok, 0, fs);
+      end
+      else if k = 'filter' then
+      begin
+        rest := v;
+        cur.Common.OverrideFilter := True;
+        cur.Common.FilterEnabled := StrToIntDef(NextTok, 1) <> 0;
+        cur.Common.FilterCutoff := StrToFloatDef(NextTok, 2500, fs);
+        cur.Common.FilterResonance := StrToFloatDef(NextTok, 0.2, fs);
+      end
+      else if k = 'level' then
+      begin
+        cur.Common.OverrideLevel := True;
+        cur.Common.OutputLevel := StrToFloatDef(v, 1.0, fs);
+      end;
+    end;
+    Flush;
+  finally
+    sl.Free;
+  end;
+  Result := n;
+end;
+
+procedure TSedaiInstrumentRegistry.SaveToFile(const AFileName, ALibraryName: string);
+var fsr: TFileStream;
+begin
+  fsr := TFileStream.Create(AFileName, fmCreate);
+  try SaveToStream(fsr, ALibraryName); finally fsr.Free; end;
+end;
+
+function TSedaiInstrumentRegistry.LoadFromFile(const AFileName: string): Integer;
+var fsr: TFileStream;
+begin
+  fsr := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyNone);
+  try Result := LoadFromStream(fsr); finally fsr.Free; end;
 end;
 
 function TSedaiInstrumentRegistry.ApplyToPartByName(const AName: string; APart: TSAFPart): Boolean;

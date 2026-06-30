@@ -29,6 +29,20 @@ type
   // public, instrument-level selector exposed by the Part.
   TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample, psKarplus);
 
+  // Optional "common layer" overrides applied on top of the preset's own values
+  // (envelope / filter / output level). Each Override* flag gates one group; all
+  // False (the default) leaves the preset untouched. Used by the instrument
+  // preset system so authored patches can tweak these without a new preset key.
+  TPartCommonOverride = record
+    OverrideEnvelope: Boolean;
+    Attack, Decay, Sustain, Release: Single;
+    OverrideFilter: Boolean;
+    FilterEnabled: Boolean;
+    FilterCutoff, FilterResonance: Single;
+    OverrideLevel: Boolean;
+    OutputLevel: Single;
+  end;
+
   // Stored per-Part modulation. Re-applied to every voice of the pool in
   // ApplyToVoice, so the whole instrument shares the same modulation and it
   // survives a preset reconfigure. LFOs are unlimited (FPartLFOs grows freely).
@@ -76,6 +90,9 @@ type
     // Instrument-level oscillator config (classic source).
     FOscMode: TVoiceOscMode;
     FOscCfg: array[0..2] of TPartOscConfig;
+
+    // Common-layer overrides (envelope/filter/level) applied after the preset.
+    FCommon: TPartCommonOverride;
 
     // Voice configuration callback (of object) applied to every voice in the
     // pool by FManager.ConfigureAllVoices. Reads FSource / FPreset / modulation.
@@ -138,6 +155,12 @@ type
       AWaveform: TWaveformType; ALevel, ADetuneCents: Single);
     // Convenience: osc2 = square, one octave below the fundamental.
     procedure EnableSubOscillator(ALevel: Single = 0.5);
+
+    // Common-layer overrides (envelope/filter/output level) applied on top of
+    // the preset. Stored and re-applied to the whole pool. ClearCommonOverride
+    // returns to the preset's own values.
+    procedure SetCommonOverride(const AOverride: TPartCommonOverride);
+    procedure ClearCommonOverride;
 
     // Render a block of audio into AOutput (stereo, interleaved L/R).
     procedure RenderBlock(AOutput: PSingle; AFrameCount: Integer);
@@ -633,6 +656,22 @@ begin
       end;
   end;
 
+  // 1c. Common-layer overrides on top of the preset (off by default).
+  if FCommon.OverrideEnvelope then
+    AVoice.SetEnvelopeADSR(0, FCommon.Attack, FCommon.Decay, FCommon.Sustain, FCommon.Release);
+  if FCommon.OverrideFilter then
+  begin
+    AVoice.FilterEnabled := FCommon.FilterEnabled;
+    if FCommon.FilterEnabled then
+    begin
+      AVoice.SetFilterType(ftLowPass);
+      AVoice.SetFilterCutoff(FCommon.FilterCutoff);
+      AVoice.SetFilterResonance(FCommon.FilterResonance);
+    end;
+  end;
+  if FCommon.OverrideLevel then
+    AVoice.OutputLevel := FCommon.OutputLevel;
+
   // 2. Rebuild the modulation layer from the Part's stored config. Done from a
   //    clean slate every time so the call is idempotent (no slot/LFO build-up
   //    across reconfigures). LFO indices are captured per-voice into LFOMap so
@@ -662,6 +701,18 @@ procedure TSAFPart.SetInstrument(ASource: TSAFPartSource; const APreset: string)
 begin
   FSource := ASource;
   FPreset := APreset;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.SetCommonOverride(const AOverride: TPartCommonOverride);
+begin
+  FCommon := AOverride;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.ClearCommonOverride;
+begin
+  FillChar(FCommon, SizeOf(FCommon), 0);   // all Override* := False
   FManager.ConfigureAllVoices(@ApplyToVoice);
 end;
 

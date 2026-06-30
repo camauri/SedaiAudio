@@ -767,6 +767,10 @@ var
   buf: array of Single;
   i, frames: Integer;
   peak: Single;
+  ms: TMemoryStream;
+  reg2, reg3: TSedaiInstrumentRegistry;
+  added, idx: Integer;
+  authored: TInstrumentPreset;
 begin
   // Phase A: the instrument catalog. Browse by category/tag (technique hidden)
   // and load an instrument into a Part, which must then render audible audio.
@@ -799,6 +803,51 @@ begin
     Ok('loaded instrument is audible', peak > 0.001, Format('peak=%.4f', [peak]));
   finally
     part.Free;
+  end;
+
+  // .safinst round-trip: save the built-in catalog, reload into an empty
+  // registry, and check the count + a spot preset survive.
+  ms := TMemoryStream.Create;
+  reg2 := TSedaiInstrumentRegistry.CreateEmpty;
+  try
+    reg.SaveToStream(ms, 'Builtins');
+    ms.Position := 0;
+    added := reg2.LoadFromStream(ms);
+    Ok('.safinst round-trip count', added = reg.Count, Format('%d/%d', [added, reg.Count]));
+    idx := reg2.FindByName('FM E-Piano');
+    Ok('.safinst preset preserved',
+       (idx >= 0) and (reg2.Get(idx).Technique = psFM) and
+       (reg2.Get(idx).PresetKey = 'epiano') and (reg2.Get(idx).Category = icKeys), '');
+  finally
+    reg2.Free; ms.Free;
+  end;
+
+  // Authored common-layer override (envelope) round-trips through .safinst.
+  authored := Default(TInstrumentPreset);
+  authored.Name := 'Slow Pad'; authored.Category := icPad;
+  authored.Technique := psClassic; authored.PresetKey := 'pad';
+  authored.Common.OverrideEnvelope := True;
+  authored.Common.Attack := 0.5; authored.Common.Decay := 0.2;
+  authored.Common.Sustain := 0.8; authored.Common.Release := 1.5;
+  ms := TMemoryStream.Create;
+  reg2 := TSedaiInstrumentRegistry.CreateEmpty;
+  try
+    reg2.AddPreset(authored);
+    reg2.SaveToStream(ms, 'Custom');
+    ms.Position := 0;
+    reg3 := TSedaiInstrumentRegistry.CreateEmpty;
+    try
+      reg3.LoadFromStream(ms);
+      idx := reg3.FindByName('Slow Pad');
+      Ok('override env round-trips',
+         (idx >= 0) and reg3.Get(idx).Common.OverrideEnvelope and
+         (Abs(reg3.Get(idx).Common.Attack - 0.5) < 1e-6) and
+         (Abs(reg3.Get(idx).Common.Release - 1.5) < 1e-6), '');
+    finally
+      reg3.Free;
+    end;
+  finally
+    reg2.Free; ms.Free;
   end;
 end;
 
