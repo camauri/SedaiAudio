@@ -353,6 +353,9 @@ TSAFEngine
 | **SedaiAudioFileReader** | Audio file loading (WAV PCM/Float, AIFF/AIFC, FLAC) |
 | **SedaiAudioFileWriter** | Audio file export with dithering |
 | **SedaiFLACDecoder** | Pure-Pascal FLAC decoder (lossless, streaming) |
+| **SedaiFLACEncoder** | Pure-Pascal FLAC encoder (lossless; FIXED predictors + Rice) |
+| **SedaiVorbisDecoder** | Pure-Pascal OGG Vorbis decoder (FFT IMDCT, bisection seek) |
+| **SedaiMP3Decoder** | Pure-Pascal MP3 Layer III decoder (minimp3 port) |
 
 ---
 
@@ -806,7 +809,7 @@ The library includes professional audio file reading and writing capabilities.
 | **WAV Float 32-bit** | ✓ | ✓ | IEEE 754 floating point |
 | **WAV Float 64-bit** | ✓ | - | High-precision source files |
 | **AIFF / AIFC** | ✓ | ✓ | Read: big-endian PCM 8/16/24/32 + AIFC `sowt` (LE) / `fl32` / `fl64`. Write: big-endian PCM 16/24/32 |
-| **FLAC** | ✓ | Planned | Pure-Pascal decoder: STREAMINFO, FIXED/LPC subframes, partitioned Rice, all channel modes (8/16/24-bit) |
+| **FLAC** | ✓ | ✓ | Read: STREAMINFO, FIXED/LPC subframes, partitioned Rice, all channel modes (8/16/24-bit). Write: lossless encoder (FIXED predictors, Rice; 16/24-bit; bit-exact round-trip, decodes in ffmpeg) |
 | **OGG Vorbis** | ✓ | Planned | Pure-Pascal decoder: Ogg container (CRC32/paging), codebooks (Huffman + VQ), floor 0/1, residue 0/1/2, channel coupling, FFT-based IMDCT + overlap-add; granulepos bisection seek |
 | **MP3** | ✓ | - | Pure-Pascal MPEG-1/2/2.5 Layer III decoder (minimp3 port): Huffman, requant, stereo (M/S + intensity), IMDCT, polyphase synthesis filterbank; Xing/LAME gapless trim |
 
@@ -1491,7 +1494,7 @@ pure-Pascal **MP3 decoder** (MPEG-1/2/2.5 Layer III, minimp3 port, Xing/LAME gap
 
 | Issue | Description | Workaround |
 |-------|-------------|------------|
-| **Audio File Support** | WAV (read/write), AIFF/AIFC (read/write), FLAC / OGG Vorbis / MP3 (read) | Compressed formats are decode-only |
+| **Audio File Support** | WAV (read/write), AIFF/AIFC (read/write), FLAC (read/write), OGG Vorbis / MP3 (read) | OGG/MP3 are decode-only |
 | **Windows Focus** | Linux support may have minor issues | Report bugs |
 | **API Stability** | API may change in minor versions | Pin version for production |
 | **Documentation** | API documentation is embedded in source | Read unit interfaces |

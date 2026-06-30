@@ -21,7 +21,8 @@ uses
   SysUtils, Math, Classes,
   SedaiAudioTypes, SedaiAudioBuffer,
   SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine,
-  SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter;
+  SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
+  SedaiFLACEncoder, SedaiFLACDecoder;
 
 const
   SR    = 44100;
@@ -493,6 +494,72 @@ begin
   end;
 end;
 
+procedure TestFLACWriter;
+var
+  fxDir, wavPath: string;
+  rW: TSedaiAudioFileReader;
+  bW: TSedaiAudioBuffer;
+  src, back: array of Single;
+  enc: TSedaiFLACEncoder;
+  dec: TSedaiFLACDecoder;
+  ms: TMemoryStream;
+  ch, i, got, cap, n, diffs: Integer;
+  total: Int64;
+  buf: array[0..8191] of Single;
+begin
+  // Encode the 16-bit stereo fixture to FLAC, decode it back, require bit-exact
+  // (lossless). Exercises the pure-Pascal FLAC encoder + decoder together.
+  WriteLn('== FLAC encoder round-trip (lossless) ==');
+  fxDir := FindFixtures;
+  if fxDir = '' then begin Ok('fixtures present', False, 'data/fixtures not found'); Exit; end;
+  wavPath := fxDir + 'tone_s16_stereo.wav';
+
+  bW := nil; rW := TSedaiAudioFileReader.Create;
+  try
+    if not (rW.OpenFile(wavPath) and rW.ReadAll(bW)) then
+    begin Ok('open wav', False, rW.LastError); Exit; end;
+    ch := bW.Channels; n := bW.SampleCount;
+    SetLength(src, n * ch);
+    bW.ReadInterleaved(@src[0], 0, n);
+  finally rW.Free; end;
+
+  ms := TMemoryStream.Create;
+  enc := TSedaiFLACEncoder.Create;
+  try
+    Ok('encoder init', enc.Init(ms, 44100, ch, 16), enc.LastError);
+    enc.WriteFrames(@src[0], n);
+    enc.Finalize;
+    Ok('encoded non-empty', ms.Size > 0, Format('%d bytes', [ms.Size]));
+
+    ms.Position := 0;
+    dec := TSedaiFLACDecoder.Create;
+    cap := 1 shl 20; SetLength(back, cap); total := 0;
+    try
+      if dec.OpenStream(ms) then
+      begin
+        repeat
+          got := dec.ReadFrames(@buf[0], 4096 div ch);
+          if got > 0 then
+          begin
+            if (total + got) * ch > cap then begin cap := cap * 2; SetLength(back, cap); end;
+            Move(buf[0], back[total * ch], got * ch * SizeOf(Single));
+            total := total + got;
+          end;
+        until got = 0;
+      end;
+    finally dec.Free; end;
+
+    diffs := 0;
+    if total = n then
+      for i := 0 to n * ch - 1 do
+        if src[i] <> back[i] then Inc(diffs);
+    Ok('round-trip bit-exact', (total = n) and (diffs = 0),
+       Format('frames %d/%d, %d differ', [Integer(total), n, diffs]));
+  finally
+    enc.Free; ms.Free; bW.Free;
+  end;
+end;
+
 procedure TestVorbisReader;
 const
   SEEK_AT = 3000;
@@ -719,6 +786,7 @@ begin
   TestAIFFReader;
   TestAIFFWriter;
   TestFLACReader;
+  TestFLACWriter;
   TestVorbisReader;
   TestMP3Reader;
   TestExactPitch;

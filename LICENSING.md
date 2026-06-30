@@ -57,9 +57,10 @@ derivative works — but the formats themselves are very much someone else's lab
 deserves recognition:
 
 - **Josh Coalson** and the **Xiph.Org Foundation** — author and maintainers of **FLAC**
-  (Free Lossless Audio Codec) and its format specification, from which `SedaiFLACDecoder` is
-  implemented. Thank you for an open, meticulously documented lossless format — the clarity of
-  the spec is the reason a from-scratch decoder was even feasible.
+  (Free Lossless Audio Codec) and its format specification, from which `SedaiFLACDecoder` and
+  `SedaiFLACEncoder` are implemented clean-room. Thank you for an open, meticulously documented
+  lossless format — the clarity of the spec is the reason a from-scratch decoder *and encoder*
+  were even feasible.
 
 - The **Xiph.Org Foundation** and the **Vorbis** authors — for the **Ogg** container and
   **Vorbis I** specifications, from which `SedaiVorbisDecoder` is implemented clean-room
@@ -75,5 +76,6 @@ deserves recognition:
   patent-unencumbered worldwide since 2017.)
 
 See the headers of `src/SID/SedaiSIDEvo.pas`, `src/Players/SedaiGoatTracker.pas`,
-`src/FileIO/SedaiFLACDecoder.pas`, `src/FileIO/SedaiVorbisDecoder.pas` and
-`src/FileIO/SedaiMP3Decoder.pas` for the detailed per-component attribution.
+`src/FileIO/SedaiFLACDecoder.pas`, `src/FileIO/SedaiFLACEncoder.pas`,
+`src/FileIO/SedaiVorbisDecoder.pas` and `src/FileIO/SedaiMP3Decoder.pas` for the detailed
+per-component attribution.

@@ -15,7 +15,7 @@ unit SedaiAudioFileWriter;
 interface
 
 uses
-  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer;
+  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer, SedaiFLACEncoder;
 
 type
   // Export format settings
@@ -87,6 +87,9 @@ type
 
     // Internal buffers
     FEncodeBuffer: array of Byte;
+
+    // FLAC encoding (nil unless the export format is aefFLAC)
+    FFLACEnc: TSedaiFLACEncoder;
 
     procedure InitDithering;
     function GetDitherSample: Single;
@@ -705,8 +708,18 @@ begin
       end;
     aefFLAC:
       begin
-        // TODO: Implement FLAC encoding
-        FLastError := 'FLAC format not yet implemented';
+        // 16-bit FLAC (lossless). The encoder writes its own fLaC + STREAMINFO.
+        FFLACEnc := TSedaiFLACEncoder.Create;
+        if FFLACEnc.Init(FStream, ASettings.SampleRate, ASettings.Channels, 16) then
+        begin
+          FIsOpen := True;
+          Result := True;
+        end
+        else
+        begin
+          FLastError := FFLACEnc.LastError;
+          FreeAndNil(FFLACEnc);
+        end;
       end;
   else
     FLastError := 'Unknown export format';
@@ -729,8 +742,12 @@ begin
         FinalizeWAV;
       aefAIFF16, aefAIFF24, aefAIFF32:
         FinalizeAIFF;
+      aefFLAC:
+        if Assigned(FFLACEnc) then FFLACEnc.Finalize;
     end;
   end;
+
+  FreeAndNil(FFLACEnc);
 
   if Assigned(FStream) and FOwnsStream then
     FStream.Free;
@@ -758,6 +775,12 @@ begin
       Result := WriteWAVSamples(ABuffer, AFrameCount);
     aefAIFF16, aefAIFF24, aefAIFF32:
       Result := WriteAIFFSamples(ABuffer, AFrameCount);
+    aefFLAC:
+      if Assigned(FFLACEnc) then
+      begin
+        Result := FFLACEnc.WriteFrames(ABuffer, AFrameCount);
+        if Result then Inc(FSamplesWritten, AFrameCount);
+      end;
   end;
 end;
 
