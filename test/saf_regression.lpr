@@ -580,8 +580,8 @@ var
   i, lag, bestLag, nm, nw: Integer;
   dr, dd, rr, c, bestCorr: Double;
 begin
-  // MP3 is lossy and carries encoder/decoder delay (no gapless trim), so the
-  // decoded stream is longer and shifted vs the source. Validate via the best
+  // MP3 is lossy; the Xing/LAME gapless trim aligns the decoded stream to the
+  // source (length match, zero lag). Validate the trimmed length and the best
   // integer-lag normalized cross-correlation on channel 0.
   WriteLn('== MP3 decoder vs WAV oracle (tolerance) ==');
   fxDir := FindFixtures;
@@ -603,6 +603,7 @@ begin
       if rM.ReadAll(bM) and rW.ReadAll(bW) then
       begin
         nm := bM.SampleCount; nw := bW.SampleCount;
+        Ok('gapless length match', Abs(nm - nw) <= 2, Format('mp3=%d wav=%d', [nm, nw]));
         bestCorr := -2; bestLag := 0;
         for lag := -3000 to 3000 do
         begin

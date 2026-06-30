@@ -1275,16 +1275,73 @@ begin
   if success then Result := hdr_frame_samples(@dec.Header[0]) else Result := 0;
 end;
 
+// Parse a Xing/Info VBR tag (+ LAME extension) in the first frame for gapless
+// playback. Returns 1 if a tag with a frame count was found (frames/delay/
+// padding filled), -1 if a tag without the frame count, 0 if no tag. delay and
+// padding are per-channel sample-frame counts (delay already includes the
+// 528+1 decoder delay; padding already has it subtracted).
+function CheckVbrtag(frame: PByte; frame_size: Integer; out frames: LongWord;
+  out delay, padding: Integer): Integer;
+const
+  FRAMES_FLAG = 1; BYTES_FLAG = 2; TOC_FLAG = 4; VBR_SCALE_FLAG = 8;
+var
+  bs: TMP3BitReader;
+  gr: array[0..3] of TL3GrInfo;
+  tagOff, flags: Integer;
+  tag: PByte;
+begin
+  frames := 0; delay := 0; padding := 0;
+  Result := 0;
+  if frame_size < HDR_SIZE + 8 then Exit;
+  BsInit(bs, frame + HDR_SIZE, frame_size - HDR_SIZE);
+  if HDR_IS_CRC(frame) then GetBits(bs, 16);
+  if L3_read_side_info(bs, @gr[0], frame) < 0 then Exit;
+
+  tagOff := HDR_SIZE + bs.Pos div 8;
+  if (tagOff > frame_size) or (frame_size - tagOff < 8) then Exit;
+  tag := frame + tagOff;
+  if not ( ((tag[0]=Ord('X')) and (tag[1]=Ord('i')) and (tag[2]=Ord('n')) and (tag[3]=Ord('g'))) or
+           ((tag[0]=Ord('I')) and (tag[1]=Ord('n')) and (tag[2]=Ord('f')) and (tag[3]=Ord('o'))) ) then Exit;
+  flags := tag[7];
+  if (flags and FRAMES_FLAG) = 0 then Exit(-1);
+  Inc(tagOff, 8);
+  if frame_size - tagOff < 4 then Exit;
+  tag := frame + tagOff;
+  frames := (LongWord(tag[0]) shl 24) or (LongWord(tag[1]) shl 16) or (LongWord(tag[2]) shl 8) or tag[3];
+  Inc(tagOff, 4);
+  if (flags and BYTES_FLAG) <> 0 then
+  begin if frame_size - tagOff < 4 then Exit; Inc(tagOff, 4); end;
+  if (flags and TOC_FLAG) <> 0 then
+  begin if frame_size - tagOff < 100 then Exit; Inc(tagOff, 100); end;
+  if (flags and VBR_SCALE_FLAG) <> 0 then
+  begin if frame_size - tagOff < 4 then Exit; Inc(tagOff, 4); end;
+  if frame_size - tagOff < 1 then Exit;
+  tag := frame + tagOff;
+  if tag[0] <> 0 then    // LAME/Lavc/etc. extension
+  begin
+    if frame_size - tagOff <= 35 then Exit;
+    Inc(tagOff, 21);
+    tag := frame + tagOff;
+    delay   := ((tag[0] shl 4) or (tag[1] shr 4)) + (528 + 1);
+    padding := (((tag[1] and $F) shl 8) or tag[2]) - (528 + 1);
+  end;
+  Result := 1;
+end;
+
 { TSedaiMP3Decoder }
 
 function TSedaiMP3Decoder.DecodeAll: Boolean;
 var
   data: array of Byte;
-  sz, pos, samples, total, cap, k: Integer;
+  sz, pos, samples, total, cap, k, startFrame, skip: Integer;
   core: TMP3Core;
   scratch: TMP3Scratch;
   info: TMP3FrameInfo;
   framePCM: array of Single;
+  ffOfs, ffSize, freefmt, vbr, toSkip: Integer;
+  vbrFrames: LongWord;
+  vbrDelay, vbrPadding: Integer;
+  detectedFrames: Int64;
 begin
   Result := False;
   sz := FStream.Size - FStream.Position;
@@ -1296,10 +1353,27 @@ begin
   SetLength(framePCM, MINIMP3_MAX_SAMPLES_PER_FRAME);
   FillChar(info, SizeOf(info), 0);
 
+  // Locate the first frame and inspect it for a Xing/Info+LAME tag (gapless).
+  toSkip := 0; detectedFrames := -1; pos := 0;
+  freefmt := 0; ffSize := 0;
+  ffOfs := mp3d_find_frame(@data[0], sz, freefmt, ffSize);
+  if (ffSize > 0) and (ffOfs + ffSize <= sz) then
+  begin
+    vbr := CheckVbrtag(@data[ffOfs], ffSize, vbrFrames, vbrDelay, vbrPadding);
+    if vbr > 0 then
+    begin
+      toSkip := vbrDelay;                       // leading samples to drop (per channel)
+      detectedFrames := Int64(hdr_frame_samples(@data[ffOfs])) * vbrFrames - vbrDelay;
+      if vbrPadding > 0 then detectedFrames := detectedFrames - vbrPadding;
+      if detectedFrames < 0 then detectedFrames := 0;
+      pos := ffOfs + ffSize;                    // skip the Xing/Info tag frame itself
+      mp3dec_init_core(core);                   // fresh reservoir for the first real frame
+    end;
+  end;
+
   cap := 1 shl 20;
   SetLength(FPCM, cap);
   total := 0;
-  pos := 0;
   FChannels := 0; FSampleRate := 0;
 
   while pos < sz do
@@ -1313,14 +1387,25 @@ begin
         FChannels := info.Channels;
         FSampleRate := info.Hz;
       end;
-      k := samples * info.Channels;
-      if (total + k) > cap then
+      // Drop the encoder/decoder-delay frames at the very start (gapless).
+      startFrame := 0;
+      if toSkip > 0 then
       begin
-        while (total + k) > cap do cap := cap * 2;
-        SetLength(FPCM, cap);
+        skip := toSkip; if skip > samples then skip := samples;
+        startFrame := skip;
+        Dec(toSkip, skip);
       end;
-      Move(framePCM[0], FPCM[total], k * SizeOf(Single));
-      Inc(total, k);
+      k := (samples - startFrame) * info.Channels;
+      if k > 0 then
+      begin
+        if (total + k) > cap then
+        begin
+          while (total + k) > cap do cap := cap * 2;
+          SetLength(FPCM, cap);
+        end;
+        Move(framePCM[startFrame * info.Channels], FPCM[total], k * SizeOf(Single));
+        Inc(total, k);
+      end;
     end;
     Inc(pos, info.FrameBytes);
   end;
@@ -1330,8 +1415,11 @@ begin
     FLastError := 'MP3: no decodable frames';
     Exit;
   end;
-  SetLength(FPCM, total);
   FFrameCount := total div FChannels;
+  // Trim trailing encoder padding to the tag's detected length.
+  if (detectedFrames >= 0) and (FFrameCount > detectedFrames) then
+    FFrameCount := detectedFrames;
+  SetLength(FPCM, FFrameCount * FChannels);
   Result := True;
 end;
 
