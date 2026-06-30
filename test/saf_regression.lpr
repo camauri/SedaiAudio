@@ -496,6 +496,7 @@ end;
 procedure TestVorbisReader;
 const
   SEEK_AT = 3000;
+  FAR_SEEK = 5000;   // > 2*blocksize1, triggers the granulepos bisection path
 var
   fxDir, oggPath, wavPath: string;
   rO, rW: TSedaiAudioFileReader;
@@ -557,6 +558,7 @@ begin
   try
     if rW.OpenFile(oggPath) and rW.ReadAll(bO) and rO.OpenFile(oggPath) then
     begin
+      // Near-start seek uses the linear restart path.
       if rO.Seek(SEEK_AT) and (rO.ReadSamples(@sbuf[0], 1) = 1) then
         Ok('seek lands bit-exact',
            (sbuf[0] = bO.GetSample(0, SEEK_AT)) and (sbuf[1] = bO.GetSample(1, SEEK_AT)),
@@ -564,6 +566,12 @@ begin
              [sbuf[0], sbuf[1], bO.GetSample(0, SEEK_AT), bO.GetSample(1, SEEK_AT)]))
       else
         Ok('seek + read', False, rO.LastError);
+      // Far seek exercises the granulepos bisection fast-path; must also be exact.
+      if (bO.SampleCount > FAR_SEEK) and rO.Seek(FAR_SEEK) and (rO.ReadSamples(@sbuf[0], 1) = 1) then
+        Ok('bisection seek bit-exact',
+           (sbuf[0] = bO.GetSample(0, FAR_SEEK)) and (sbuf[1] = bO.GetSample(1, FAR_SEEK)),
+           Format('seek=(%.6f,%.6f) full=(%.6f,%.6f)',
+             [sbuf[0], sbuf[1], bO.GetSample(0, FAR_SEEK), bO.GetSample(1, FAR_SEEK)]));
     end
     else
       Ok('open for seek', False, rO.LastError + ' / ' + rW.LastError);

@@ -212,6 +212,10 @@ type
     function DecodeAudioPacket(const APacket: TVorbisPacket): Boolean;
     procedure ScanTotalFrames;             // find the last page granulepos (= total frames)
     procedure RestartAtAudio;              // rewind + skip the 3 headers, reset decode state
+    // Bisection-seek helpers: scan for a page and binary-search by granulepos.
+    function FindPageAtOrAfter(AFromByte, ALimitByte: Int64;
+      out APStart, APGran, APEnd: Int64): Boolean;
+    function BisectPage(ATargetGranule: Int64): Int64;
   public
     function OpenStream(AStream: TStream): Boolean; override;
     function ReadFrames(ABuffer: PSingle; AFrameCount: Integer): Integer; override;
@@ -1953,14 +1957,79 @@ begin
   Result := produced;
 end;
 
+// Scan forward from AFromByte (bounded by ALimitByte) for the next Ogg page of
+// our logical bitstream; return its start byte, granulepos and end byte.
+function TSedaiVorbisDecoder.FindPageAtOrAfter(AFromByte, ALimitByte: Int64;
+  out APStart, APGran, APEnd: Int64): Boolean;
+var
+  buf: array of Byte;
+  readLen, i, segCount, j, bodyLen: Integer;
+  base: Int64;
+begin
+  Result := False;
+  if AFromByte < FStreamStart then AFromByte := FStreamStart;
+  readLen := 65536;
+  if AFromByte + readLen > ALimitByte then readLen := Integer(ALimitByte - AFromByte);
+  if readLen < 27 then Exit;
+  FStream.Position := AFromByte;
+  SetLength(buf, readLen);
+  readLen := FStream.Read(buf[0], readLen);
+  base := AFromByte;
+  for i := 0 to readLen - 28 do
+    if (buf[i] = Ord('O')) and (buf[i+1] = Ord('g')) and (buf[i+2] = Ord('g')) and
+       (buf[i+3] = Ord('S')) and (buf[i+4] = 0) and (ReadU32LE(buf, i + 14) = FSerial) then
+    begin
+      segCount := buf[i + 26];
+      if i + 27 + segCount > readLen then Exit;   // page header crosses the buffer; give up
+      bodyLen := 0;
+      for j := 0 to segCount - 1 do bodyLen := bodyLen + buf[i + 27 + j];
+      APStart := base + i;
+      APGran := Int64(ReadU32LE(buf, i + 6)) or (Int64(ReadU32LE(buf, i + 10)) shl 32);
+      APEnd := APStart + 27 + segCount + bodyLen;
+      Result := True;
+      Exit;
+    end;
+end;
+
+// Binary-search the byte range for the page with the largest granulepos <= the
+// target; return its start byte (or -1 if none / not seekable).
+function TSedaiVorbisDecoder.BisectPage(ATargetGranule: Int64): Int64;
+var
+  lo, hi, mid, pStart, pGran, pEnd: Int64;
+  iter: Integer;
+begin
+  Result := -1;
+  lo := FStreamStart;
+  hi := FStream.Size;
+  iter := 0;
+  while (lo < hi) and (iter < 64) do
+  begin
+    Inc(iter);
+    mid := (lo + hi) div 2;
+    if not FindPageAtOrAfter(mid, hi, pStart, pGran, pEnd) then
+    begin
+      hi := mid;            // no page in [mid, hi): search lower
+      Continue;
+    end;
+    if (pGran >= 0) and (pGran <= ATargetGranule) then
+    begin
+      Result := pStart;     // candidate; try to find a closer (later) one
+      if pEnd <= lo then Break;
+      lo := pEnd;
+    end
+    else
+      hi := pStart;         // this page is past the target; search lower
+  end;
+end;
+
 function TSedaiVorbisDecoder.Seek(AFrame: Int64): Boolean;
 var
   scratch: array of Single;
   chunk, want, got: Integer;
+  searchTarget, pageByte: Int64;
+  pkt: TVorbisPacket;
+  calibrated, usedBisect: Boolean;
 begin
-  // Linear decode-discard seek: restart the bitstream at the first audio packet
-  // and decode forward, dropping samples, until the target frame is reached.
-  // (Sample-accurate; a granulepos bisection fast-path is a later optimisation.)
   Result := False;
   if AFrame < 0 then AFrame := 0;
   if (FTotalFrames > 0) and (AFrame > FTotalFrames) then
@@ -1970,8 +2039,45 @@ begin
   end;
   if not FAudioStarted then InitAudioDecode;
 
-  RestartAtAudio;
-  if AFrame = 0 then Exit(True);
+  usedBisect := False;
+  // Bisection fast-path: jump near the target (leaving warm-up margin), then
+  // calibrate the absolute position from the first page granulepos. Falls back
+  // to a linear restart for near-start targets or if anything looks off.
+  searchTarget := AFrame - 2 * FBlocksize1;
+  if (searchTarget > 0) and FSeekable then
+  begin
+    pageByte := BisectPage(searchTarget);
+    if pageByte >= 0 then
+    begin
+      FStream.Position := pageByte;
+      FExhausted := False;
+      FSegCount := 0; FSegIdx := 0; FBodyPos := 0;
+      SetLength(FPageBody, 0); SetLength(FSegTable, 0);
+      FFirstAudio := True;
+      FPrevTailLen := 0;
+      FOutHead := 0; FOutLen := 0;
+      FDecodeEOS := False;
+      calibrated := False;
+      while not calibrated do
+      begin
+        if not ReadPacket(pkt) then Break;
+        FOutHead := 0; FOutLen := 0;
+        if DecodeAudioPacket(pkt) and (pkt.GranulePos >= 0) then
+        begin
+          // FIFO holds this packet's output ending at granule-1, so its front
+          // is at granule - count (= granule itself when the packet primed).
+          FPosition := pkt.GranulePos - (FOutLen div FChannels);
+          calibrated := True;
+        end;
+        if pkt.EndOfStream then Break;
+      end;
+      // Only trust the bisection if it landed before the target.
+      if calibrated and (FPosition <= AFrame) then usedBisect := True;
+    end;
+  end;
+
+  if not usedBisect then RestartAtAudio;
+  if FPosition = AFrame then Exit(True);
 
   chunk := 4096;
   SetLength(scratch, chunk * FChannels);

@@ -807,7 +807,7 @@ The library includes professional audio file reading and writing capabilities.
 | **WAV Float 64-bit** | ✓ | - | High-precision source files |
 | **AIFF / AIFC** | ✓ | ✓ | Read: big-endian PCM 8/16/24/32 + AIFC `sowt` (LE) / `fl32` / `fl64`. Write: big-endian PCM 16/24/32 |
 | **FLAC** | ✓ | Planned | Pure-Pascal decoder: STREAMINFO, FIXED/LPC subframes, partitioned Rice, all channel modes (8/16/24-bit) |
-| **OGG Vorbis** | ✓ | Planned | Pure-Pascal decoder: Ogg container (CRC32/paging), codebooks (Huffman + VQ), floor 0/1, residue 0/1/2, channel coupling, IMDCT + overlap-add; seek supported |
+| **OGG Vorbis** | ✓ | Planned | Pure-Pascal decoder: Ogg container (CRC32/paging), codebooks (Huffman + VQ), floor 0/1, residue 0/1/2, channel coupling, IMDCT + overlap-add; granulepos bisection seek |
 | **MP3** | ✓ | - | Pure-Pascal MPEG-1/2/2.5 Layer III decoder (minimp3 port): Huffman, requant, stereo (M/S + intensity), IMDCT, polyphase synthesis filterbank; Xing/LAME gapless trim |
 
 ### Dithering Options
@@ -1464,7 +1464,7 @@ Mathematical simulation of physical instrument behavior for realistic sounds.
 
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| **OGG Vorbis seek fast-path** | Optional granulepos bisection (linear decode-discard seek already works) | Low |
+| **FFT-based IMDCT** | Replace the direct O(N²) Vorbis IMDCT with an FFT for faster large-file decode (correctness-first direct form works today) | Low |
 
 *Done since this list was written:* sample playback engine (`vstSample`, one-shot/looped with
 pitch), Karplus-Strong physical-modelling source (`vstKarplus`), voice stealing (oldest/quietest/
