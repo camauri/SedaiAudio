@@ -20,7 +20,7 @@ program saf_regression;
 uses
   SysUtils, Math, Classes,
   SedaiAudioTypes, SedaiAudioBuffer,
-  SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine,
+  SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine, SedaiInstrumentPreset,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
   SedaiFLACEncoder, SedaiFLACDecoder;
 
@@ -759,6 +759,49 @@ begin
   end;
 end;
 
+procedure TestInstrumentRegistry;
+var
+  reg: TSedaiInstrumentRegistry;
+  basses: TIntArray;
+  part: TSAFPart;
+  buf: array of Single;
+  i, frames: Integer;
+  peak: Single;
+begin
+  // Phase A: the instrument catalog. Browse by category/tag (technique hidden)
+  // and load an instrument into a Part, which must then render audible audio.
+  WriteLn('== Instrument preset registry (phase A) ==');
+  reg := InstrumentRegistry;
+  Ok('catalog non-empty', reg.Count >= 20, Format('%d instruments', [reg.Count]));
+
+  basses := reg.ListByCategory(icBass);
+  // Bass spans techniques: Classic + FM + Plucked.
+  Ok('Bass spans techniques', Length(basses) >= 3, Format('%d basses', [Length(basses)]));
+
+  Ok('find by name', reg.FindByName('FM E-Piano') >= 0, '');
+  Ok('miss by name', reg.FindByName('does-not-exist') = -1, '');
+  Ok('browse by character', Length(reg.ListByTag('bright')) > 0,
+     Format('%d "bright"', [Length(reg.ListByTag('bright'))]));
+
+  // Load an instrument into a Part and confirm it produces sound.
+  frames := 2048;
+  SetLength(buf, frames * 2);
+  part := TSAFPart.Create;
+  try
+    part.SetSampleRate(SR);
+    Ok('apply instrument', reg.ApplyToPartByName('Classic Lead', part), '');
+    part.NoteOn(60, 1.0);
+    FillChar(buf[0], frames * 2 * SizeOf(Single), 0);
+    part.RenderBlock(@buf[0], frames);
+    peak := 0;
+    for i := 0 to frames * 2 - 1 do
+      if Abs(buf[i]) > peak then peak := Abs(buf[i]);
+    Ok('loaded instrument is audible', peak > 0.001, Format('peak=%.4f', [peak]));
+  finally
+    part.Free;
+  end;
+end;
+
 procedure TestExactPitch;
 const
   NREND = 16384;          // ~2.7 Hz Goertzel bin
@@ -839,6 +882,7 @@ begin
   TestFLACWriter;
   TestVorbisReader;
   TestMP3Reader;
+  TestInstrumentRegistry;
   TestExactPitch;
 
   WriteLn;
