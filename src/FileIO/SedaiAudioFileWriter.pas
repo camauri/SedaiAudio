@@ -25,10 +25,11 @@ type
     aefWAV32,         // WAV 32-bit PCM
     aefWAVFloat,      // WAV 32-bit IEEE Float
     aefOGG,           // OGG Vorbis
-    aefFLAC,          // FLAC
+    aefFLAC,          // FLAC (16-bit, lossless)
     aefAIFF16,        // AIFF 16-bit PCM (big-endian)
     aefAIFF24,        // AIFF 24-bit PCM (big-endian)
-    aefAIFF32         // AIFF 32-bit PCM (big-endian)
+    aefAIFF32,        // AIFF 32-bit PCM (big-endian)
+    aefFLAC24         // FLAC (24-bit, lossless) — appended to keep prior ordinals
   );
 
   // Dithering type
@@ -706,11 +707,13 @@ begin
         // TODO: Implement OGG Vorbis encoding
         FLastError := 'OGG format not yet implemented';
       end;
-    aefFLAC:
+    aefFLAC, aefFLAC24:
       begin
-        // 16-bit FLAC (lossless). The encoder writes its own fLaC + STREAMINFO.
+        // Lossless FLAC; the encoder writes its own fLaC + STREAMINFO. The
+        // export format selects the bit depth (16 or 24).
         FFLACEnc := TSedaiFLACEncoder.Create;
-        if FFLACEnc.Init(FStream, ASettings.SampleRate, ASettings.Channels, 16) then
+        if FFLACEnc.Init(FStream, ASettings.SampleRate, ASettings.Channels,
+             IfThen(ASettings.Format = aefFLAC24, 24, 16)) then
         begin
           FIsOpen := True;
           Result := True;
@@ -742,7 +745,7 @@ begin
         FinalizeWAV;
       aefAIFF16, aefAIFF24, aefAIFF32:
         FinalizeAIFF;
-      aefFLAC:
+      aefFLAC, aefFLAC24:
         if Assigned(FFLACEnc) then FFLACEnc.Finalize;
     end;
   end;
@@ -775,7 +778,7 @@ begin
       Result := WriteWAVSamples(ABuffer, AFrameCount);
     aefAIFF16, aefAIFF24, aefAIFF32:
       Result := WriteAIFFSamples(ABuffer, AFrameCount);
-    aefFLAC:
+    aefFLAC, aefFLAC24:
       if Assigned(FFLACEnc) then
       begin
         Result := FFLACEnc.WriteFrames(ABuffer, AFrameCount);

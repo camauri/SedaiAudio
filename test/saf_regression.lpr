@@ -506,6 +506,13 @@ var
   ch, i, got, cap, n, diffs: Integer;
   total: Int64;
   buf: array[0..8191] of Single;
+  // 24-bit writer-path round-trip
+  wr: TSedaiAudioFileWriter;
+  settings: TAudioExportSettings;
+  rdr: TSedaiAudioFileReader;
+  b24, bb24: TSedaiAudioBuffer;
+  s24: array of Single;
+  n24, ch24: Integer;
 begin
   // Encode the 16-bit stereo fixture to FLAC, decode it back, require bit-exact
   // (lossless). Exercises the pure-Pascal FLAC encoder + decoder together.
@@ -557,6 +564,49 @@ begin
        Format('frames %d/%d, %d differ', [Integer(total), n, diffs]));
   finally
     enc.Free; ms.Free; bW.Free;
+  end;
+
+  // 24-bit, through the full TSedaiAudioFileWriter (aefFLAC24) + reader path.
+  b24 := nil; bb24 := nil;
+  rdr := TSedaiAudioFileReader.Create;
+  try
+    if rdr.OpenFile(fxDir + 'tone_s24_stereo.wav') and rdr.ReadAll(b24) then
+    begin
+      ch24 := b24.Channels; n24 := b24.SampleCount;
+      SetLength(s24, n24 * ch24);
+      b24.ReadInterleaved(@s24[0], 0, n24);
+      ms := TMemoryStream.Create;
+      wr := TSedaiAudioFileWriter.Create;
+      try
+        FillChar(settings, SizeOf(settings), 0);
+        settings.Format := aefFLAC24;
+        settings.SampleRate := 44100;
+        settings.Channels := ch24;
+        if wr.CreateStream(ms, False, settings) then
+        begin
+          wr.WriteSamples(@s24[0], n24);
+          wr.Close;
+          ms.Position := 0;
+          if rdr.OpenStream(ms, False) and rdr.ReadAll(bb24) then
+          begin
+            diffs := 0;
+            if bb24.SampleCount = n24 then
+              for i := 0 to n24 - 1 do
+                if (b24.GetSample(0, i) <> bb24.GetSample(0, i)) or
+                   (b24.GetSample(1, i) <> bb24.GetSample(1, i)) then Inc(diffs);
+            Ok('24-bit writer round-trip bit-exact',
+               (bb24.SampleCount = n24) and (diffs = 0),
+               Format('frames %d/%d, %d differ', [bb24.SampleCount, n24, diffs]));
+          end
+          else Ok('24-bit read back', False, rdr.LastError);
+        end
+        else Ok('24-bit writer create', False, wr.LastError);
+      finally
+        wr.Free; ms.Free;
+      end;
+    end;
+  finally
+    rdr.Free; b24.Free; bb24.Free;
   end;
 end;
 
