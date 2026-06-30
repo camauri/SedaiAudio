@@ -21,6 +21,7 @@ uses
   SysUtils, Math, Classes,
   SedaiAudioTypes, SedaiAudioBuffer,
   SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine, SedaiInstrumentPreset,
+  SedaiFMOperator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
   SedaiFLACEncoder, SedaiFLACDecoder;
 
@@ -851,6 +852,129 @@ begin
   end;
 end;
 
+procedure TestFMParams;
+var
+  params, params2: TFMParams;
+  partA, partB: TSAFPart;
+  bufA, bufB: array of Single;
+  i, frames, op: Integer;
+  maxDiff, diff, peakC: Single;
+  reg2, reg3: TSedaiInstrumentRegistry;
+  authored: TInstrumentPreset;
+  ms: TMemoryStream;
+  idx: Integer;
+
+  procedure RenderPart(APart: TSAFPart; var ABuf: array of Single; AFrames: Integer);
+  begin
+    APart.SetSampleRate(SR);
+    APart.NoteOn(60, 1.0);
+    FillChar(ABuf[0], AFrames * 2 * SizeOf(Single), 0);
+    APart.RenderBlock(@ABuf[0], AFrames);
+  end;
+
+begin
+  // Author side: a full FM parameter block must reproduce the named built-in
+  // bit-for-bit (ExplodeFMParams + ConfigureFMVoiceFromParams == ConfigureFMVoice),
+  // round-trip through .safinst, and actually change the sound when edited.
+  WriteLn('== FM parameter block (author side) ==');
+
+  frames := 4096;
+  SetLength(bufA, frames * 2);
+  SetLength(bufB, frames * 2);
+
+  // 1. Explode a built-in and confirm the params-driven path is bit-identical.
+  params := ExplodeFMParams('epiano');
+  partA := TSAFPart.Create;
+  partB := TSAFPart.Create;
+  try
+    partA.SetInstrument(psFM, 'epiano');          // named-preset path
+    partB.SetSampleRate(SR);
+    partB.SetInstrument(psFM, 'epiano');
+    partB.SetFMParams(params);                    // full-block path
+    RenderPart(partA, bufA, frames);
+    RenderPart(partB, bufB, frames);
+    maxDiff := 0;
+    peakC := 0;
+    for i := 0 to frames * 2 - 1 do
+    begin
+      diff := Abs(bufA[i] - bufB[i]);
+      if diff > maxDiff then maxDiff := diff;
+      if Abs(bufA[i]) > peakC then peakC := Abs(bufA[i]);
+    end;
+    Ok('FM block reproduces named preset', (maxDiff = 0) and (peakC > 0.001),
+       Format('maxDiff=%.3g peak=%.4f', [maxDiff, peakC]));
+  finally
+    partA.Free; partB.Free;
+  end;
+
+  // 2. Editing a parameter changes the rendered output.
+  params2 := params;
+  for op := 0 to MAX_FM_OPERATORS - 1 do
+    params2.Ops[op].Ratio := params2.Ops[op].Ratio * 2.0;   // octave-ish shift
+  partA := TSAFPart.Create;
+  partB := TSAFPart.Create;
+  try
+    partA.SetSampleRate(SR); partA.SetInstrument(psFM, 'epiano'); partA.SetFMParams(params);
+    partB.SetSampleRate(SR); partB.SetInstrument(psFM, 'epiano'); partB.SetFMParams(params2);
+    RenderPart(partA, bufA, frames);
+    RenderPart(partB, bufB, frames);
+    maxDiff := 0;
+    for i := 0 to frames * 2 - 1 do
+    begin
+      diff := Abs(bufA[i] - bufB[i]);
+      if diff > maxDiff then maxDiff := diff;
+    end;
+    Ok('edited FM param changes sound', maxDiff > 1e-4, Format('maxDiff=%.4f', [maxDiff]));
+  finally
+    partA.Free; partB.Free;
+  end;
+
+  // 3. .safinst round-trip of a full FM block.
+  authored := Default(TInstrumentPreset);
+  authored.Name := 'Author EP'; authored.Category := icKeys;
+  authored.Technique := psFM; authored.PresetKey := 'epiano';
+  authored.HasFMParams := True;
+  authored.FM := params;
+  ms := TMemoryStream.Create;
+  reg2 := TSedaiInstrumentRegistry.CreateEmpty;
+  try
+    reg2.AddPreset(authored);
+    reg2.SaveToStream(ms, 'FM Custom');
+    ms.Position := 0;
+    reg3 := TSedaiInstrumentRegistry.CreateEmpty;
+    try
+      reg3.LoadFromStream(ms);
+      idx := reg3.FindByName('Author EP');
+      maxDiff := 0;
+      if idx >= 0 then
+      begin
+        params2 := reg3.Get(idx).FM;
+        if Abs(params2.FeedbackLevel - params.FeedbackLevel) > maxDiff then
+          maxDiff := Abs(params2.FeedbackLevel - params.FeedbackLevel);
+        if Abs(params2.OutputTrim - params.OutputTrim) > maxDiff then
+          maxDiff := Abs(params2.OutputTrim - params.OutputTrim);
+        for op := 0 to MAX_FM_OPERATORS - 1 do
+        begin
+          if Abs(params2.Ops[op].Ratio - params.Ops[op].Ratio) > maxDiff then
+            maxDiff := Abs(params2.Ops[op].Ratio - params.Ops[op].Ratio);
+          if Abs(params2.Ops[op].Level - params.Ops[op].Level) > maxDiff then
+            maxDiff := Abs(params2.Ops[op].Level - params.Ops[op].Level);
+          if Abs(params2.Ops[op].SustainLevel - params.Ops[op].SustainLevel) > maxDiff then
+            maxDiff := Abs(params2.Ops[op].SustainLevel - params.Ops[op].SustainLevel);
+        end;
+      end;
+      Ok('.safinst FM block round-trips',
+         (idx >= 0) and reg3.Get(idx).HasFMParams and
+         (reg3.Get(idx).FM.Algorithm = params.Algorithm) and (maxDiff < 1e-4),
+         Format('maxDiff=%.3g', [maxDiff]));
+    finally
+      reg3.Free;
+    end;
+  finally
+    reg2.Free; ms.Free;
+  end;
+end;
+
 procedure TestExactPitch;
 const
   NREND = 16384;          // ~2.7 Hz Goertzel bin
@@ -932,6 +1056,7 @@ begin
   TestVorbisReader;
   TestMP3Reader;
   TestInstrumentRegistry;
+  TestFMParams;
   TestExactPitch;
 
   WriteLn;

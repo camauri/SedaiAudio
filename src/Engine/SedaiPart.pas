@@ -43,6 +43,27 @@ type
     OutputLevel: Single;
   end;
 
+  // Full FM parameter block — the sound-designer "author" view of an FM patch
+  // (every operator). When a preset carries one, it fully configures the FM
+  // voice instead of the named ConfigureFMVoice key.
+  TFMOperatorParams = record
+    Ratio: Double;
+    Fixed: Boolean;
+    FixedFreq: Single;
+    Detune: Single;
+    Level: Single;
+    VelocitySensitivity: Single;
+    AttackRate, Decay1Rate, Decay2Rate, ReleaseRate: Single;
+    AttackLevel, Decay1Level, SustainLevel: Single;
+  end;
+
+  TFMParams = record
+    Algorithm: Integer;        // 1..32
+    FeedbackLevel: Single;
+    OutputTrim: Single;
+    Ops: array[0..MAX_FM_OPERATORS-1] of TFMOperatorParams;
+  end;
+
   // Stored per-Part modulation. Re-applied to every voice of the pool in
   // ApplyToVoice, so the whole instrument shares the same modulation and it
   // survives a preset reconfigure. LFOs are unlimited (FPartLFOs grows freely).
@@ -93,6 +114,12 @@ type
 
     // Common-layer overrides (envelope/filter/level) applied after the preset.
     FCommon: TPartCommonOverride;
+
+    // Full FM parameter block (author side). When FHasFMParams is set and the
+    // source is psFM, ApplyToVoice configures voices from FFMParams instead of
+    // the named ConfigureFMVoice preset.
+    FHasFMParams: Boolean;
+    FFMParams: TFMParams;
 
     // Voice configuration callback (of object) applied to every voice in the
     // pool by FManager.ConfigureAllVoices. Reads FSource / FPreset / modulation.
@@ -162,6 +189,12 @@ type
     procedure SetCommonOverride(const AOverride: TPartCommonOverride);
     procedure ClearCommonOverride;
 
+    // Full FM parameter block (author side). When set and the source is psFM,
+    // every voice is configured from this block (every operator editable)
+    // instead of a named built-in. ClearFMParams returns to the named preset.
+    procedure SetFMParams(const AParams: TFMParams);
+    procedure ClearFMParams;
+
     // Render a block of audio into AOutput (stereo, interleaved L/R).
     procedure RenderBlock(AOutput: PSingle; AFrameCount: Integer);
 
@@ -178,6 +211,11 @@ type
 // Stand-alone preset configurators (reused by the facade/engine if needed).
 procedure ConfigureClassicVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureFMVoice(AVoice: TSedaiVoice; const APreset: string);
+// Configure an FM voice from a full parameter block (author side).
+procedure ConfigureFMVoiceFromParams(AVoice: TSedaiVoice; const AParams: TFMParams);
+// Capture the FM parameter block produced by a named ConfigureFMVoice preset,
+// so a designer can start from a built-in and edit every operator.
+function ExplodeFMParams(const APresetKey: string): TFMParams;
 procedure ConfigureWavetableVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureAdditiveVoice(AVoice: TSedaiVoice; const APreset: string);
 procedure ConfigureKarplusVoice(AVoice: TSedaiVoice; const APreset: string);
@@ -372,6 +410,77 @@ begin
   end;
 
   AVoice.OutputLevel := Trim;
+end;
+
+procedure ConfigureFMVoiceFromParams(AVoice: TSedaiVoice; const AParams: TFMParams);
+var
+  FM: TSedaiFMSynth;
+  Op: TSedaiFMOperator;
+  I, Alg: Integer;
+begin
+  AVoice.SetSourceType(vstFM);
+  FM := AVoice.GetFMSynth;
+  if FM = nil then Exit;
+  Alg := AParams.Algorithm;
+  if Alg < 1 then Alg := 1 else if Alg > 32 then Alg := 32;
+  FM.Algorithm := Alg;
+  FM.FeedbackLevel := AParams.FeedbackLevel;
+  for I := 0 to MAX_FM_OPERATORS - 1 do
+  begin
+    Op := FM.GetOperator(I);
+    Op.Ratio := AParams.Ops[I].Ratio;
+    Op.Fixed := AParams.Ops[I].Fixed;
+    Op.FixedFreq := AParams.Ops[I].FixedFreq;
+    Op.Detune := AParams.Ops[I].Detune;
+    Op.Level := AParams.Ops[I].Level;
+    Op.VelocitySensitivity := AParams.Ops[I].VelocitySensitivity;
+    Op.AttackRate := AParams.Ops[I].AttackRate;
+    Op.Decay1Rate := AParams.Ops[I].Decay1Rate;
+    Op.Decay2Rate := AParams.Ops[I].Decay2Rate;
+    Op.ReleaseRate := AParams.Ops[I].ReleaseRate;
+    Op.AttackLevel := AParams.Ops[I].AttackLevel;
+    Op.Decay1Level := AParams.Ops[I].Decay1Level;
+    Op.SustainLevel := AParams.Ops[I].SustainLevel;
+  end;
+  AVoice.OutputLevel := AParams.OutputTrim;
+end;
+
+function ExplodeFMParams(const APresetKey: string): TFMParams;
+var
+  V: TSedaiVoice;
+  FM: TSedaiFMSynth;
+  Op: TSedaiFMOperator;
+  I: Integer;
+begin
+  FillChar(Result, SizeOf(Result), 0);   // no managed fields in TFMParams
+  V := TSedaiVoice.Create;
+  try
+    ConfigureFMVoice(V, APresetKey);
+    FM := V.GetFMSynth;
+    if FM = nil then Exit;
+    Result.Algorithm := FM.Algorithm;
+    Result.FeedbackLevel := FM.FeedbackLevel;
+    Result.OutputTrim := V.OutputLevel;
+    for I := 0 to MAX_FM_OPERATORS - 1 do
+    begin
+      Op := FM.GetOperator(I);
+      Result.Ops[I].Ratio := Op.Ratio;
+      Result.Ops[I].Fixed := Op.Fixed;
+      Result.Ops[I].FixedFreq := Op.FixedFreq;
+      Result.Ops[I].Detune := Op.Detune;
+      Result.Ops[I].Level := Op.Level;
+      Result.Ops[I].VelocitySensitivity := Op.VelocitySensitivity;
+      Result.Ops[I].AttackRate := Op.AttackRate;
+      Result.Ops[I].Decay1Rate := Op.Decay1Rate;
+      Result.Ops[I].Decay2Rate := Op.Decay2Rate;
+      Result.Ops[I].ReleaseRate := Op.ReleaseRate;
+      Result.Ops[I].AttackLevel := Op.AttackLevel;
+      Result.Ops[I].Decay1Level := Op.Decay1Level;
+      Result.Ops[I].SustainLevel := Op.SustainLevel;
+    end;
+  finally
+    V.Free;
+  end;
 end;
 
 procedure ConfigureWavetableVoice(AVoice: TSedaiVoice; const APreset: string);
@@ -607,7 +716,10 @@ begin
   // 1. Preset: source generator + timbre.
   case FSource of
     psFM:
-      ConfigureFMVoice(AVoice, FPreset);
+      if FHasFMParams then
+        ConfigureFMVoiceFromParams(AVoice, FFMParams)
+      else
+        ConfigureFMVoice(AVoice, FPreset);
     psAdditive:
       ConfigureAdditiveVoice(AVoice, FPreset);
     psKarplus:
@@ -713,6 +825,21 @@ end;
 procedure TSAFPart.ClearCommonOverride;
 begin
   FillChar(FCommon, SizeOf(FCommon), 0);   // all Override* := False
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.SetFMParams(const AParams: TFMParams);
+begin
+  FFMParams := AParams;
+  FHasFMParams := True;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.ClearFMParams;
+begin
+  if not FHasFMParams then Exit;   // already on the named preset; no-op
+  FHasFMParams := False;
+  FillChar(FFMParams, SizeOf(FFMParams), 0);   // no managed fields in TFMParams
   FManager.ConfigureAllVoices(@ApplyToVoice);
 end;
 

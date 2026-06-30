@@ -22,7 +22,7 @@ unit SedaiInstrumentPreset;
 interface
 
 uses
-  Classes, SysUtils, SedaiPart;
+  Classes, SysUtils, SedaiPart, SedaiFMOperator;
 
 type
   // Composer-facing role of a sound. The PRIMARY browse axis (with character
@@ -40,6 +40,8 @@ type
     Technique: TSAFPartSource;    // internal: which generator
     PresetKey: string;            // internal: key for ConfigureXxxVoice
     Common: TPartCommonOverride;  // optional envelope/filter/level overrides
+    HasFMParams: Boolean;         // author side: full FM block overrides the key
+    FM: TFMParams;                // every operator editable (when HasFMParams)
   end;
 
   TIntArray = array of Integer;
@@ -204,6 +206,11 @@ begin
   Result := False;
   if (AIndex < 0) or (AIndex >= FCount) or (APart = nil) then Exit;
   APart.SetInstrument(FPresets[AIndex].Technique, FPresets[AIndex].PresetKey);
+  // Author side: a full FM block (if present) replaces the named-key timbre.
+  if (FPresets[AIndex].Technique = psFM) and FPresets[AIndex].HasFMParams then
+    APart.SetFMParams(FPresets[AIndex].FM)
+  else
+    APart.ClearFMParams;
   if HasCommonOverride(FPresets[AIndex].Common) then
     APart.SetCommonOverride(FPresets[AIndex].Common)
   else
@@ -246,7 +253,7 @@ end;
 procedure TSedaiInstrumentRegistry.SaveToStream(AStream: TStream; const ALibraryName: string);
 var
   sl: TStringList;
-  i: Integer;
+  i, op: Integer;
   p: TInstrumentPreset;
   fs: TFormatSettings;
 begin
@@ -275,6 +282,29 @@ begin
            FloatToStr(p.Common.FilterResonance, fs)]));
       if p.Common.OverrideLevel then
         sl.Add('level=' + FloatToStr(p.Common.OutputLevel, fs));
+      // Author side: full FM parameter block (one line per operator).
+      if (p.Technique = psFM) and p.HasFMParams then
+      begin
+        sl.Add(Format('fmalg=%d', [p.FM.Algorithm]));
+        sl.Add('fmfb=' + FloatToStr(p.FM.FeedbackLevel, fs));
+        sl.Add('fmtrim=' + FloatToStr(p.FM.OutputTrim, fs));
+        for op := 0 to MAX_FM_OPERATORS - 1 do
+          sl.Add(Format('fmop=%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%s,%s,%s',
+            [op,
+             FloatToStr(p.FM.Ops[op].Ratio, fs),
+             FloatToStr(p.FM.Ops[op].Level, fs),
+             FloatToStr(p.FM.Ops[op].AttackRate, fs),
+             FloatToStr(p.FM.Ops[op].Decay1Rate, fs),
+             FloatToStr(p.FM.Ops[op].Decay2Rate, fs),
+             FloatToStr(p.FM.Ops[op].ReleaseRate, fs),
+             FloatToStr(p.FM.Ops[op].SustainLevel, fs),
+             FloatToStr(p.FM.Ops[op].AttackLevel, fs),
+             FloatToStr(p.FM.Ops[op].Decay1Level, fs),
+             Ord(p.FM.Ops[op].Fixed),
+             FloatToStr(p.FM.Ops[op].FixedFreq, fs),
+             FloatToStr(p.FM.Ops[op].Detune, fs),
+             FloatToStr(p.FM.Ops[op].VelocitySensitivity, fs)]));
+      end;
     end;
     sl.SaveToStream(AStream);
   finally
@@ -285,7 +315,7 @@ end;
 function TSedaiInstrumentRegistry.LoadFromStream(AStream: TStream): Integer;
 var
   sl: TStringList;
-  i, eq, n: Integer;
+  i, eq, n, opIdx: Integer;
   line, k, v, rest: string;
   cur: TInstrumentPreset;
   have: Boolean;
@@ -359,6 +389,43 @@ begin
       begin
         cur.Common.OverrideLevel := True;
         cur.Common.OutputLevel := StrToFloatDef(v, 1.0, fs);
+      end
+      else if k = 'fmalg' then
+      begin
+        cur.HasFMParams := True;
+        cur.FM.Algorithm := StrToIntDef(v, 1);
+      end
+      else if k = 'fmfb' then
+      begin
+        cur.HasFMParams := True;
+        cur.FM.FeedbackLevel := StrToFloatDef(v, 0, fs);
+      end
+      else if k = 'fmtrim' then
+      begin
+        cur.HasFMParams := True;
+        cur.FM.OutputTrim := StrToFloatDef(v, 1.0, fs);
+      end
+      else if k = 'fmop' then
+      begin
+        cur.HasFMParams := True;
+        rest := v;
+        opIdx := StrToIntDef(NextTok, 0);
+        if (opIdx >= 0) and (opIdx < MAX_FM_OPERATORS) then
+        begin
+          cur.FM.Ops[opIdx].Ratio := StrToFloatDef(NextTok, 1.0, fs);
+          cur.FM.Ops[opIdx].Level := StrToFloatDef(NextTok, 0, fs);
+          cur.FM.Ops[opIdx].AttackRate := StrToFloatDef(NextTok, 99, fs);
+          cur.FM.Ops[opIdx].Decay1Rate := StrToFloatDef(NextTok, 0, fs);
+          cur.FM.Ops[opIdx].Decay2Rate := StrToFloatDef(NextTok, 0, fs);
+          cur.FM.Ops[opIdx].ReleaseRate := StrToFloatDef(NextTok, 0, fs);
+          cur.FM.Ops[opIdx].SustainLevel := StrToFloatDef(NextTok, 1.0, fs);
+          cur.FM.Ops[opIdx].AttackLevel := StrToFloatDef(NextTok, 1.0, fs);
+          cur.FM.Ops[opIdx].Decay1Level := StrToFloatDef(NextTok, 1.0, fs);
+          cur.FM.Ops[opIdx].Fixed := StrToIntDef(NextTok, 0) <> 0;
+          cur.FM.Ops[opIdx].FixedFreq := StrToFloatDef(NextTok, 0, fs);
+          cur.FM.Ops[opIdx].Detune := StrToFloatDef(NextTok, 0, fs);
+          cur.FM.Ops[opIdx].VelocitySensitivity := StrToFloatDef(NextTok, 0, fs);
+        end;
       end;
     end;
     Flush;
