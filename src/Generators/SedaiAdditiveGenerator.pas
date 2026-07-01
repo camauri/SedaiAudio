@@ -53,6 +53,18 @@ type
     FHarmonicEnvelopes: array[0..ADDITIVE_MAX_HARMONICS - 1] of TSedaiEnvelope;
     FUseHarmonicEnvelopes: Boolean;
 
+    // Optional per-harmonic amplitude BREAKPOINT TRACKS (analysis/resynthesis).
+    // When FUseHarmonicTracks is on, a harmonic's level over time is read from
+    // its (time,value) track by linear interpolation (held past the last point)
+    // instead of the static FHarmonicLevels[]. FTrackCursor advances forward with
+    // FNoteTime so lookup is O(1)/sample. Designed to extend: a parallel
+    // frequency track can be added later without disturbing this path.
+    FHarmonicTrackT: array[0..ADDITIVE_MAX_HARMONICS - 1] of array of Single;
+    FHarmonicTrackV: array[0..ADDITIVE_MAX_HARMONICS - 1] of array of Single;
+    FTrackCursor: array[0..ADDITIVE_MAX_HARMONICS - 1] of Integer;
+    FUseHarmonicTracks: Boolean;
+    FNoteTime: Double;    // seconds since NoteOn (drives the tracks)
+
     // Main envelope
     FAmpEnvelope: TSedaiEnvelope;
 
@@ -73,6 +85,7 @@ type
     procedure ApplyPreset(APreset: TAdditivePreset);
 
     function CalculateSample: Single;
+    function TrackLevel(AHarmonic: Integer): Single;
 
   public
     constructor Create; override;
@@ -95,6 +108,12 @@ type
     procedure SetHarmonicDetune(AHarmonic: Integer; ADetuneCents: Single);
     procedure SetAllHarmonics(const ALevels: array of Single);
     procedure ClearAllHarmonics;
+    // Per-harmonic amplitude breakpoint track (analysis/resynthesis). Times in
+    // seconds (ascending from 0), values 0..1. Sets FUseHarmonicTracks on and
+    // seeds the static level with the track peak so active-harmonic/Nyquist
+    // accounting stays correct.
+    procedure SetHarmonicTrack(AHarmonic: Integer; const ATimes, AValues: array of Single);
+    procedure ClearHarmonicTracks;
     function GetHarmonicLevel(AHarmonic: Integer): Single;
     function GetHarmonicDetune(AHarmonic: Integer): Single;
     function GetHarmonicEnvelope(AHarmonic: Integer): TSedaiEnvelope;
@@ -115,6 +134,7 @@ type
     // Properties
     property HarmonicCount: Integer read FHarmonicCount write SetHarmonicCount;
     property UseHarmonicEnvelopes: Boolean read FUseHarmonicEnvelopes write FUseHarmonicEnvelopes;
+    property UseHarmonicTracks: Boolean read FUseHarmonicTracks write FUseHarmonicTracks;
     property AmpEnvelope: TSedaiEnvelope read FAmpEnvelope;
     property CurrentPreset: TAdditivePreset read FCurrentPreset;
     property Note: Integer read FNote;
@@ -140,6 +160,8 @@ begin
   FGateOpen := False;
   FReleasing := False;
   FUseHarmonicEnvelopes := False;
+  FUseHarmonicTracks := False;
+  FNoteTime := 0;
   FActiveHarmonics := 0;
   FNyquistLimit := FSampleRate * 0.5;
 
@@ -149,6 +171,9 @@ begin
     FHarmonicLevels[I] := 0;
     FHarmonicDetune[I] := 0;
     FHarmonicPhases[I] := 0;
+    FHarmonicTrackT[I] := nil;
+    FHarmonicTrackV[I] := nil;
+    FTrackCursor[I] := 0;
     FHarmonicEnvelopes[I] := TSedaiEnvelope.Create;
     FHarmonicEnvelopes[I].SetSampleRate(FSampleRate);
   end;
@@ -238,8 +263,10 @@ begin
   begin
     if FHarmonicLevels[I] > 0.001 then
     begin
-      // Get harmonic level (with optional envelope)
-      if FUseHarmonicEnvelopes then
+      // Get harmonic level: breakpoint track > per-harmonic env > static level
+      if FUseHarmonicTracks then
+        HarmonicLevel := TrackLevel(I)
+      else if FUseHarmonicEnvelopes then
         HarmonicLevel := FHarmonicLevels[I] * FHarmonicEnvelopes[I].Process
       else
         HarmonicLevel := FHarmonicLevels[I];
@@ -284,10 +311,12 @@ begin
   // Calculate frequency from MIDI note
   FFrequency := 440 * Power(2, (ANote - 69) / 12);
 
-  // Reset phases
+  // Reset phases and per-harmonic track state
+  FNoteTime := 0;
   for I := 0 to ADDITIVE_MAX_HARMONICS - 1 do
   begin
     FHarmonicPhases[I] := 0;
+    FTrackCursor[I] := 0;
     if FUseHarmonicEnvelopes then
       FHarmonicEnvelopes[I].Trigger;
   end;
@@ -319,11 +348,13 @@ begin
   FGateOpen := False;
   FReleasing := False;
   FNote := -1;
+  FNoteTime := 0;
 
   // Reset all phases
   for I := 0 to ADDITIVE_MAX_HARMONICS - 1 do
   begin
     FHarmonicPhases[I] := 0;
+    FTrackCursor[I] := 0;
     FHarmonicEnvelopes[I].Reset;
   end;
 
@@ -351,8 +382,12 @@ begin
     Exit;
   end;
 
-  // Calculate sample from all harmonics
+  // Calculate sample from all harmonics (tracks read the CURRENT FNoteTime)
   Result := CalculateSample * EnvValue * FVelocity * FAmplitude;
+
+  // Advance the per-note clock that drives the breakpoint tracks
+  if FSampleRate > 0 then
+    FNoteTime := FNoteTime + 1.0 / FSampleRate;
 end;
 
 procedure TSedaiAdditiveGenerator.GenerateBlock(AOutput: PSingle; AFrameCount: Integer);
@@ -398,6 +433,76 @@ begin
     FHarmonicDetune[I] := 0;
   end;
   FActiveHarmonics := 0;
+end;
+
+// Interpolated amplitude of a harmonic's breakpoint track at the current
+// FNoteTime. Linear between points; holds the first/last value outside the
+// range. FTrackCursor advances monotonically with FNoteTime (O(1)/sample).
+function TSedaiAdditiveGenerator.TrackLevel(AHarmonic: Integer): Single;
+var
+  n, c: Integer;
+  t0, t1, v0, v1: Single;
+begin
+  n := Length(FHarmonicTrackT[AHarmonic]);
+  if n = 0 then Exit(FHarmonicLevels[AHarmonic]);   // no track: static fallback
+  if n = 1 then Exit(FHarmonicTrackV[AHarmonic][0]);
+
+  if FNoteTime >= FHarmonicTrackT[AHarmonic][n - 1] then
+    Exit(FHarmonicTrackV[AHarmonic][n - 1]);        // hold last value past the end
+
+  c := FTrackCursor[AHarmonic];
+  if c < 0 then c := 0
+  else if c > n - 2 then c := n - 2;
+  // advance forward to the segment containing FNoteTime (monotonic clock)
+  while (c < n - 2) and (FNoteTime > FHarmonicTrackT[AHarmonic][c + 1]) do
+    Inc(c);
+  FTrackCursor[AHarmonic] := c;
+
+  t0 := FHarmonicTrackT[AHarmonic][c];
+  t1 := FHarmonicTrackT[AHarmonic][c + 1];
+  v0 := FHarmonicTrackV[AHarmonic][c];
+  v1 := FHarmonicTrackV[AHarmonic][c + 1];
+  if (FNoteTime <= t0) or (t1 <= t0) then Exit(v0);
+  Result := v0 + (v1 - v0) * ((FNoteTime - t0) / (t1 - t0));
+end;
+
+procedure TSedaiAdditiveGenerator.SetHarmonicTrack(AHarmonic: Integer;
+  const ATimes, AValues: array of Single);
+var
+  n, i: Integer;
+  peak: Single;
+begin
+  if (AHarmonic < 0) or (AHarmonic >= ADDITIVE_MAX_HARMONICS) then Exit;
+  n := Length(ATimes);
+  if Length(AValues) < n then n := Length(AValues);
+  SetLength(FHarmonicTrackT[AHarmonic], n);
+  SetLength(FHarmonicTrackV[AHarmonic], n);
+  peak := 0;
+  for i := 0 to n - 1 do
+  begin
+    FHarmonicTrackT[AHarmonic][i] := ATimes[i];
+    FHarmonicTrackV[AHarmonic][i] := AValues[i];
+    if AValues[i] > peak then peak := AValues[i];
+  end;
+  FTrackCursor[AHarmonic] := 0;
+  // seed the static level with the track peak so active-harmonic / Nyquist
+  // accounting (which reads FHarmonicLevels) still counts this harmonic
+  FHarmonicLevels[AHarmonic] := peak;
+  FUseHarmonicTracks := True;
+  UpdateActiveHarmonics;
+end;
+
+procedure TSedaiAdditiveGenerator.ClearHarmonicTracks;
+var
+  i: Integer;
+begin
+  for i := 0 to ADDITIVE_MAX_HARMONICS - 1 do
+  begin
+    FHarmonicTrackT[i] := nil;
+    FHarmonicTrackV[i] := nil;
+    FTrackCursor[i] := 0;
+  end;
+  FUseHarmonicTracks := False;
 end;
 
 function TSedaiAdditiveGenerator.GetHarmonicLevel(AHarmonic: Integer): Single;

@@ -21,7 +21,7 @@ uses
   SysUtils, Math, Classes,
   SedaiAudioTypes, SedaiAudioBuffer,
   SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine, SedaiInstrumentPreset,
-  SedaiFMOperator,
+  SedaiFMOperator, SedaiAdditiveGenerator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
   SedaiFLACEncoder, SedaiFLACDecoder;
 
@@ -1439,6 +1439,52 @@ begin
   end;
 end;
 
+// Per-harmonic amplitude breakpoint tracks (analysis/resynthesis enabler): a
+// track on harmonic 0 = (0,0)->(0.5,1)->(1.0,0.5) must shape the output
+// amplitude accordingly, held past the end. Tracks are opt-in (off by default).
+procedure TestHarmonicTrack;
+const TSR = 48000;
+var
+  g: TSedaiAdditiveGenerator;
+  ts: array[0..2] of Single = (0.0, 0.5, 1.0);
+  vs: array[0..2] of Single = (0.0, 1.0, 0.5);
+  buf: array of Single;
+  i, n: Integer;
+  refp: Single;
+
+  function PeakAt(t: Single): Single;
+  var a, b, k: Integer;
+  begin
+    a := Round((t-0.010)*TSR); if a < 0 then a := 0;
+    b := Round((t+0.010)*TSR); if b > High(buf) then b := High(buf);
+    Result := 0;
+    for k := a to b do if Abs(buf[k]) > Result then Result := Abs(buf[k]);
+  end;
+
+begin
+  WriteLn('== per-harmonic breakpoint tracks ==');
+  g := TSedaiAdditiveGenerator.Create;
+  try
+    g.SetSampleRate(TSR);
+    g.HarmonicCount := 1;
+    g.AmpEnvelope.AttackTime := 0; g.AmpEnvelope.DecayTime := 0;
+    g.AmpEnvelope.SustainLevel := 1; g.AmpEnvelope.ReleaseTime := 0;
+    g.SetHarmonicTrack(0, ts, vs);
+    g.NoteOn(69, 1.0);
+    n := Round(1.2*TSR); SetLength(buf, n);
+    for i := 0 to n-1 do buf[i] := g.GenerateSample;
+    refp := PeakAt(0.5);
+    Ok('track shapes amplitude',
+       (refp > 0) and (Abs(PeakAt(0.25)/refp - 0.5) < 0.05)
+       and (Abs(PeakAt(0.75)/refp - 0.75) < 0.05)
+       and (Abs(PeakAt(1.10)/refp - 0.5) < 0.05),
+       Format('r25=%.2f r75=%.2f rHold=%.2f',
+         [PeakAt(0.25)/refp, PeakAt(0.75)/refp, PeakAt(1.10)/refp]));
+  finally
+    g.Free;
+  end;
+end;
+
 // ---------------------------------------------------------------------------
 
 begin
@@ -1465,6 +1511,7 @@ begin
   TestEngineMix;
   TestExactPitch;
   TestStereoToMono;
+  TestHarmonicTrack;
 
   WriteLn;
   if Failures = 0 then
