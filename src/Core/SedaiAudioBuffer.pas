@@ -619,16 +619,24 @@ begin
   if FChannels <> 2 then
     Exit;
 
-  TempData := Copy(FData);
-  FChannels := 1;
-  SetLength(FData, FSampleCount);
-  FInterleaved := True;
+  TempData := Copy(FData);        // full copy taken BEFORE FData is truncated
 
   if Length(TempData) = FSampleCount * 2 then
   begin
-    for I := 0 to FSampleCount - 1 do
-      FData[I] := (TempData[I * 2] + TempData[I * 2 + 1]) * 0.5;
+    SetLength(FData, FSampleCount);
+    if FInterleaved then
+      // interleaved LRLR: the two channels of frame I are adjacent
+      for I := 0 to FSampleCount - 1 do
+        FData[I] := (TempData[I * 2] + TempData[I * 2 + 1]) * 0.5
+    else
+      // planar LLL..RRR: right channel starts at FSampleCount (the layout the
+      // file readers produce via SetFormat, which forces FInterleaved := False)
+      for I := 0 to FSampleCount - 1 do
+        FData[I] := (TempData[I] + TempData[FSampleCount + I]) * 0.5;
   end;
+
+  FChannels := 1;
+  FInterleaved := True;           // a single channel: interleaved == planar
 end;
 
 function TSedaiAudioBuffer.GetPeak: Single;

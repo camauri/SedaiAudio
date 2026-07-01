@@ -1396,6 +1396,49 @@ begin
   finally p.Free; end;
 end;
 
+// StereoToMono must respect the buffer layout. File readers produce PLANAR
+// buffers (SetFormat forces FInterleaved := False), and a previous bug folded
+// them as if interleaved -> it averaged adjacent samples of the LEFT channel,
+// i.e. decimation-by-2 (an octave up) instead of (L+R)/2. Guard both the
+// averaging and the absence of that octave shift.
+procedure TestStereoToMono;
+const
+  NS = 4096;
+  F  = 100.0;   // low freq: the decimation bug would shift it to 200 Hz
+var
+  b: TSedaiAudioBuffer;
+  inter: array of Single;
+  i: Integer;
+  got, maxErr: Double;
+begin
+  WriteLn('== StereoToMono layout (planar) ==');
+  SetLength(inter, NS * 2);
+  for i := 0 to NS - 1 do
+  begin
+    inter[i*2]     := Sin(2*Pi*F*i/SR);        // L
+    inter[i*2 + 1] := 0.5 * Sin(2*Pi*F*i/SR);  // R -> average = 0.75*sin
+  end;
+  b := TSedaiAudioBuffer.Create;
+  try
+    b.Allocate(2, NS);
+    b.SetFormat(SR, 2);                 // planar (FInterleaved := False)
+    b.WriteInterleaved(@inter[0], 0, NS);
+    b.StereoToMono;
+    maxErr := 0;
+    for i := 0 to NS - 1 do
+    begin
+      got := b.GetSample(0, i);
+      if Abs(got - 0.75 * Sin(2*Pi*F*i/SR)) > maxErr then
+        maxErr := Abs(got - 0.75 * Sin(2*Pi*F*i/SR));
+    end;
+    Ok('stereo->mono planar avg',
+       (b.Channels = 1) and (b.SampleCount = NS) and (maxErr < 1e-4),
+       Format('maxErr=%.2e', [maxErr]));
+  finally
+    b.Free;
+  end;
+end;
+
 // ---------------------------------------------------------------------------
 
 begin
@@ -1421,6 +1464,7 @@ begin
   TestPartPolyphony;
   TestEngineMix;
   TestExactPitch;
+  TestStereoToMono;
 
   WriteLn;
   if Failures = 0 then
