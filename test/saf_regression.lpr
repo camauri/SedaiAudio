@@ -1485,6 +1485,55 @@ begin
   end;
 end;
 
+// Per-voice micro-instability (human factor): with jitter+shimmer enabled the
+// sustain is no longer dead-steady (amplitude wobbles) and stays bounded; with it
+// off (default) the voice is unchanged (covered by the additive round-trip above).
+procedure TestMicroInstability;
+const TSR = 48000;
+var
+  g: TSedaiAdditiveGenerator;
+  buf: array of Single;
+  i, n, w, nw: Integer;
+  pk, mean, sd, cv: Double;
+  peaks: array of Double;
+
+  function WinPeak(a: Integer): Single;
+  var k, e: Integer;
+  begin
+    Result := 0; e := a + Round(0.05*TSR);
+    if e > High(buf) then e := High(buf);
+    for k := a to e do if Abs(buf[k]) > Result then Result := Abs(buf[k]);
+  end;
+
+begin
+  WriteLn('== per-voice micro-instability ==');
+  RandSeed := 12345;
+  g := TSedaiAdditiveGenerator.Create;
+  try
+    g.SetSampleRate(TSR);
+    g.HarmonicCount := 1; g.SetHarmonicLevel(0, 1.0);
+    g.AmpEnvelope.AttackTime := 0; g.AmpEnvelope.DecayTime := 0;
+    g.AmpEnvelope.SustainLevel := 1; g.AmpEnvelope.ReleaseTime := 0;
+    g.SetMicroInstability(6.0, 0.2, 5.0);   // 6 cents jitter, 20% shimmer, 5 Hz
+    g.NoteOn(69, 1.0);
+    n := TSR; SetLength(buf, n);
+    for i := 0 to n-1 do buf[i] := g.GenerateSample;
+    // per-50ms window peaks over the second half (past any settling)
+    nw := 0; SetLength(peaks, 20);
+    w := n div 2;
+    while (w + Round(0.05*TSR) < n) and (nw < 20) do
+    begin peaks[nw] := WinPeak(w); Inc(nw); Inc(w, Round(0.05*TSR)); end;
+    mean := 0; for i := 0 to nw-1 do mean := mean + peaks[i]; mean := mean/nw;
+    sd := 0; for i := 0 to nw-1 do sd := sd + Sqr(peaks[i]-mean); sd := Sqrt(sd/nw);
+    cv := sd/(mean+1e-9);
+    pk := 0; for i := 0 to n-1 do if Abs(buf[i]) > pk then pk := Abs(buf[i]);
+    Ok('shimmer wobbles amplitude', (cv > 0.03) and (pk < 1.5),
+       Format('cv=%.3f peak=%.2f', [cv, pk]));
+  finally
+    g.Free;
+  end;
+end;
+
 // ---------------------------------------------------------------------------
 
 begin
@@ -1512,6 +1561,7 @@ begin
   TestExactPitch;
   TestStereoToMono;
   TestHarmonicTrack;
+  TestMicroInstability;
 
   WriteLn;
   if Failures = 0 then

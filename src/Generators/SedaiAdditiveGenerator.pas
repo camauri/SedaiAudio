@@ -65,6 +65,24 @@ type
     FUseHarmonicTracks: Boolean;
     FNoteTime: Double;    // seconds since NoteOn (drives the tracks)
 
+    // Per-voice HUMAN micro-instability + airy breath (opt-in; all 0 = inert, so
+    // existing presets/tracks are unchanged). Pitch jitter (cents peak) + amplitude
+    // shimmer (fraction peak) are smooth random-target LFOs at ~FModRate Hz, seeded
+    // per-voice at NoteOn -> two voices on one note are never identical (ensemble
+    // "chorus"). Breath = one-pole low-passed white noise (airy, not hiss).
+    FJitterCents: Single;   // peak pitch deviation (cents); 0 = off
+    FShimmerDepth: Single;  // peak amplitude deviation (fraction); 0 = off
+    FModRate: Single;       // micro-instability rate (Hz)
+    FBreathLevel: Single;   // breath layer level; 0 = off
+    FBreathCut: Single;     // breath low-pass cutoff (Hz)
+    FBreathCoeff: Single;   // cached one-pole coeff for FBreathCut
+    FLfoPhase: Single;      // 0..1 ramp for the random-target LFOs
+    FLfoPCur, FLfoPTgt: Single;   // pitch LFO current/target
+    FLfoACur, FLfoATgt: Single;   // amp LFO current/target
+    FPitchMod: Single;      // per-sample pitch multiplier (1 = none)
+    FAmpMod: Single;        // per-sample amplitude multiplier (1 = none)
+    FBreathState: Single;   // one-pole LP state for breath noise
+
     // Main envelope
     FAmpEnvelope: TSedaiEnvelope;
 
@@ -86,6 +104,8 @@ type
 
     function CalculateSample: Single;
     function TrackLevel(AHarmonic: Integer): Single;
+    procedure UpdateModulation;
+    procedure RecalcBreathCoeff;
 
   public
     constructor Create; override;
@@ -114,6 +134,11 @@ type
     // accounting stays correct.
     procedure SetHarmonicTrack(AHarmonic: Integer; const ATimes, AValues: array of Single);
     procedure ClearHarmonicTracks;
+    // Per-voice human micro-instability. AJitterCents = peak pitch wobble (cents),
+    // AShimmerDepth = peak amplitude wobble (fraction), ARateHz = ~5. All 0 = off.
+    procedure SetMicroInstability(AJitterCents, AShimmerDepth, ARateHz: Single);
+    // Airy breath layer. ALevel 0 = off; ACutoffHz shapes it ("air" low / "hiss" high).
+    procedure SetBreath(ALevel, ACutoffHz: Single);
     function GetHarmonicLevel(AHarmonic: Integer): Single;
     function GetHarmonicDetune(AHarmonic: Integer): Single;
     function GetHarmonicEnvelope(AHarmonic: Integer): TSedaiEnvelope;
@@ -135,6 +160,10 @@ type
     property HarmonicCount: Integer read FHarmonicCount write SetHarmonicCount;
     property UseHarmonicEnvelopes: Boolean read FUseHarmonicEnvelopes write FUseHarmonicEnvelopes;
     property UseHarmonicTracks: Boolean read FUseHarmonicTracks write FUseHarmonicTracks;
+    property JitterCents: Single read FJitterCents write FJitterCents;
+    property ShimmerDepth: Single read FShimmerDepth write FShimmerDepth;
+    property ModRate: Single read FModRate write FModRate;
+    property BreathLevel: Single read FBreathLevel write FBreathLevel;
     property AmpEnvelope: TSedaiEnvelope read FAmpEnvelope;
     property CurrentPreset: TAdditivePreset read FCurrentPreset;
     property Note: Integer read FNote;
@@ -162,6 +191,11 @@ begin
   FUseHarmonicEnvelopes := False;
   FUseHarmonicTracks := False;
   FNoteTime := 0;
+  FJitterCents := 0; FShimmerDepth := 0; FModRate := 5.0;
+  FBreathLevel := 0; FBreathCut := 4000;
+  FLfoPhase := 0; FLfoPCur := 0; FLfoPTgt := 0; FLfoACur := 0; FLfoATgt := 0;
+  FPitchMod := 1; FAmpMod := 1; FBreathState := 0;
+  RecalcBreathCoeff;
   FActiveHarmonics := 0;
   FNyquistLimit := FSampleRate * 0.5;
 
@@ -206,6 +240,7 @@ var
 begin
   inherited SampleRateChanged;
   UpdateNyquistLimit;
+  RecalcBreathCoeff;
   FAmpEnvelope.SetSampleRate(FSampleRate);
   for I := 0 to ADDITIVE_MAX_HARMONICS - 1 do
     FHarmonicEnvelopes[I].SetSampleRate(FSampleRate);
@@ -280,7 +315,7 @@ begin
         else
           DetuneRatio := 1.0;
 
-        HarmonicFreq := FFrequency * (I + 1) * DetuneRatio;
+        HarmonicFreq := FFrequency * FPitchMod * (I + 1) * DetuneRatio;
 
         // Check Nyquist limit
         if HarmonicFreq < FNyquistLimit then
@@ -313,6 +348,16 @@ begin
 
   // Reset phases and per-harmonic track state
   FNoteTime := 0;
+  // Per-voice micro-instability: fresh random LFO seeds so voices differ. Only
+  // touch the RNG when the feature is active, so with everything off the voice is
+  // bit-identical to before (and deterministic RandSeed-based tests are unaffected).
+  FLfoPhase := 0; FPitchMod := 1; FAmpMod := 1; FBreathState := 0;
+  FLfoPCur := 0; FLfoPTgt := 0; FLfoACur := 0; FLfoATgt := 0;
+  if (FJitterCents > 0) or (FShimmerDepth > 0) or (FBreathLevel > 0) then
+  begin
+    FLfoPCur := Random * 2 - 1; FLfoPTgt := Random * 2 - 1;
+    FLfoACur := Random * 2 - 1; FLfoATgt := Random * 2 - 1;
+  end;
   for I := 0 to ADDITIVE_MAX_HARMONICS - 1 do
   begin
     FHarmonicPhases[I] := 0;
@@ -382,8 +427,19 @@ begin
     Exit;
   end;
 
-  // Calculate sample from all harmonics (tracks read the CURRENT FNoteTime)
-  Result := CalculateSample * EnvValue * FVelocity * FAmplitude;
+  // Per-voice micro-instability: update pitch/amp modulators (before generating)
+  UpdateModulation;
+
+  // Calculate sample (CalculateSample applies FPitchMod to the harmonic freqs;
+  // FAmpMod is the amplitude shimmer). tracks read the CURRENT FNoteTime.
+  Result := CalculateSample * EnvValue * FVelocity * FAmplitude * FAmpMod;
+
+  // Airy breath layer: one-pole low-passed white noise, following the envelope
+  if FBreathLevel > 0 then
+  begin
+    FBreathState := FBreathState + FBreathCoeff * ((Random * 2 - 1) - FBreathState);
+    Result := Result + FBreathState * FBreathLevel * EnvValue * FVelocity * FAmplitude;
+  end;
 
   // Advance the per-note clock that drives the breakpoint tracks
   if FSampleRate > 0 then
@@ -503,6 +559,62 @@ begin
     FTrackCursor[i] := 0;
   end;
   FUseHarmonicTracks := False;
+end;
+
+procedure TSedaiAdditiveGenerator.RecalcBreathCoeff;
+begin
+  if (FSampleRate > 0) and (FBreathCut > 0) then
+    FBreathCoeff := 1.0 - Exp(-2.0 * Pi * FBreathCut / FSampleRate)
+  else
+    FBreathCoeff := 1.0;
+end;
+
+// Advance the two random-target LFOs and derive the per-sample pitch/amp
+// modulators. Inert (mults = 1) while both depths are 0.
+procedure TSedaiAdditiveGenerator.UpdateModulation;
+var
+  inc, lp, la: Single;
+begin
+  if (FJitterCents <= 0) and (FShimmerDepth <= 0) then
+  begin
+    FPitchMod := 1.0; FAmpMod := 1.0;
+    Exit;
+  end;
+  if FSampleRate > 0 then inc := FModRate / FSampleRate else inc := 0;
+  FLfoPhase := FLfoPhase + inc;
+  if FLfoPhase >= 1.0 then
+  begin
+    FLfoPhase := FLfoPhase - 1.0;
+    FLfoPCur := FLfoPTgt; FLfoPTgt := Random * 2 - 1;
+    FLfoACur := FLfoATgt; FLfoATgt := Random * 2 - 1;
+  end;
+  lp := FLfoPCur + (FLfoPTgt - FLfoPCur) * FLfoPhase;   // -1..1, smooth
+  la := FLfoACur + (FLfoATgt - FLfoACur) * FLfoPhase;
+  if FJitterCents > 0 then
+    FPitchMod := Power(2, (FJitterCents * lp) / 1200)    // cents -> ratio
+  else
+    FPitchMod := 1.0;
+  if FShimmerDepth > 0 then
+    FAmpMod := 1.0 + FShimmerDepth * la
+  else
+    FAmpMod := 1.0;
+end;
+
+procedure TSedaiAdditiveGenerator.SetMicroInstability(AJitterCents, AShimmerDepth, ARateHz: Single);
+begin
+  if AJitterCents < 0 then AJitterCents := 0;
+  if AShimmerDepth < 0 then AShimmerDepth := 0;
+  FJitterCents := AJitterCents;
+  FShimmerDepth := AShimmerDepth;
+  if ARateHz > 0 then FModRate := ARateHz;
+end;
+
+procedure TSedaiAdditiveGenerator.SetBreath(ALevel, ACutoffHz: Single);
+begin
+  if ALevel < 0 then ALevel := 0;
+  FBreathLevel := ALevel;
+  if ACutoffHz > 0 then FBreathCut := ACutoffHz;
+  RecalcBreathCoeff;
 end;
 
 function TSedaiAdditiveGenerator.GetHarmonicLevel(AHarmonic: Integer): Single;
