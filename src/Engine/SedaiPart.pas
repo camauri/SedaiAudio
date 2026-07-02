@@ -99,15 +99,31 @@ type
     OutputTrim: Single;
   end;
 
+  // One harmonic's amplitude track: breakpoints of (time in s, value 0..1).
+  // Empty T/V -> that harmonic uses the static Levels[] entry instead.
+  TAdditiveTrack = record
+    T, V: array of Single;
+  end;
+
   // Full ADDITIVE parameter block — per-harmonic level + detune (the generator
   // resets phases on note-on, so level+detune fully describe the timbre) plus
-  // the additive generator's own amp envelope.
+  // the additive generator's own amp envelope. The living/human layer below is
+  // all-zero on classic additive presets (0 = off -> static additive, unchanged);
+  // it is populated by the sample-analysis authoring path to make the timbre
+  // "alive": per-harmonic amplitude tracks + per-voice micro-instability + breath.
   TAdditiveParams = record
     HarmonicCount: Integer;
     Levels: array[0..ADDITIVE_MAX_HARMONICS-1] of Single;
     Detunes: array[0..ADDITIVE_MAX_HARMONICS-1] of Single;   // cents
     Attack, Decay, Sustain, Release: Single;
     OutputTrim: Single;
+    // Living layer (all 0 = off):
+    JitterCents: Single;      // pitch micro-instability depth (cents peak), per-voice
+    ShimmerDepth: Single;     // amplitude micro-instability depth (0..1 peak), per-voice
+    RateHz: Single;           // micro-instability modulation rate
+    BreathLevel: Single;      // airy breath (low-passed noise) level; 0 = off
+    BreathCutoff: Single;     // breath low-pass cutoff (Hz)
+    Tracks: array[0..ADDITIVE_MAX_HARMONICS-1] of TAdditiveTrack;  // per-harmonic amp tracks
   end;
 
   // Full KARPLUS-STRONG parameter block — string damping/blend + the gating
@@ -767,6 +783,15 @@ begin
   AG.AmpEnvelope.DecayTime := AParams.Decay;
   AG.AmpEnvelope.SustainLevel := AParams.Sustain;
   AG.AmpEnvelope.ReleaseTime := AParams.Release;
+  // Living layer: per-harmonic amplitude tracks + per-voice micro-instability +
+  // airy breath. All-zero on classic presets -> tracks stay off, jitter/shimmer/
+  // breath at 0 (SetMicroInstability/SetBreath ignore 0 rate/cutoff -> defaults).
+  AG.ClearHarmonicTracks;
+  for I := 0 to ADDITIVE_MAX_HARMONICS - 1 do
+    if Length(AParams.Tracks[I].T) > 0 then
+      AG.SetHarmonicTrack(I, AParams.Tracks[I].T, AParams.Tracks[I].V);
+  AG.SetMicroInstability(AParams.JitterCents, AParams.ShimmerDepth, AParams.RateHz);
+  AG.SetBreath(AParams.BreathLevel, AParams.BreathCutoff);
   AVoice.OutputLevel := AParams.OutputTrim;
 end;
 
@@ -776,7 +801,7 @@ var
   AG: TSedaiAdditiveGenerator;
   I: Integer;
 begin
-  FillChar(Result, SizeOf(Result), 0);
+  Result := Default(TAdditiveParams);   // NOT FillChar: Tracks[] holds managed arrays
   V := TSedaiVoice.Create;
   try
     ConfigureAdditiveVoice(V, APresetKey);
@@ -793,6 +818,12 @@ begin
       Result.Decay := AG.AmpEnvelope.DecayTime;
       Result.Sustain := AG.AmpEnvelope.SustainLevel;
       Result.Release := AG.AmpEnvelope.ReleaseTime;
+      // Living layer (built-ins leave these at their defaults / 0):
+      Result.JitterCents := AG.JitterCents;
+      Result.ShimmerDepth := AG.ShimmerDepth;
+      Result.RateHz := AG.ModRate;
+      Result.BreathLevel := AG.BreathLevel;
+      Result.BreathCutoff := AG.BreathCutoff;
     end;
     Result.OutputTrim := V.OutputLevel;
   finally
@@ -1337,7 +1368,7 @@ procedure TSAFPart.ClearAdditiveParams;
 begin
   if not FHasAdditiveParams then Exit;
   FHasAdditiveParams := False;
-  FillChar(FAdditiveParams, SizeOf(FAdditiveParams), 0);
+  FAdditiveParams := Default(TAdditiveParams);   // NOT FillChar: Tracks[] is managed
   FManager.ConfigureAllVoices(@ApplyToVoice);
 end;
 

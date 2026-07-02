@@ -1534,6 +1534,99 @@ begin
   end;
 end;
 
+// The LIVING additive preset (per-harmonic amplitude tracks + micro-instability
+// + breath + natural release + RMS-matched trim) survives a .safinst round-trip:
+// the naturalness layer is carried in the file, not just in the analyzer harness.
+// Also confirms it loads into a Part and renders audible + bounded.
+procedure TestLivingPresetRoundTrip;
+const TSR = 48000;
+var
+  authored: TInstrumentPreset;
+  reg, reg2: TSedaiInstrumentRegistry;
+  ms: TMemoryStream;
+  idx, i, n: Integer;
+  gp: TAdditiveParams;
+  tracksOk, humanOk, breathOk: Boolean;
+  part: TSAFPart;
+  buf: array of Single;
+  pk: Single;
+begin
+  WriteLn('== living additive preset .safinst round-trip ==');
+  authored := Default(TInstrumentPreset);
+  authored.Name := 'RT Living'; authored.Category := icStrings;
+  authored.Technique := psAdditive; authored.PresetKey := 'strings';
+  authored.Polyphony := 8;
+  authored.Common.OverrideFilter := True; authored.Common.FilterEnabled := False;
+  authored.HasAdditiveParams := True;
+  authored.Additive.HarmonicCount := 3;
+  authored.Additive.Levels[0] := 1.0; authored.Additive.Levels[1] := 0.5;
+  authored.Additive.Levels[2] := 0.25; authored.Additive.Detunes[2] := 3.0;
+  authored.Additive.Attack := 0.0; authored.Additive.Decay := 0.0;
+  authored.Additive.Sustain := 1.0; authored.Additive.Release := 0.18;
+  authored.Additive.OutputTrim := 0.42;
+  authored.Additive.JitterCents := 2.2;
+  authored.Additive.ShimmerDepth := 0.06;
+  authored.Additive.RateHz := 5.0;
+  authored.Additive.BreathLevel := 0.015;
+  authored.Additive.BreathCutoff := 4000;
+  // harmonic 0: 3 breakpoints; harmonic 2: 2 breakpoints; harmonic 1: none.
+  SetLength(authored.Additive.Tracks[0].T, 3); SetLength(authored.Additive.Tracks[0].V, 3);
+  authored.Additive.Tracks[0].T[0] := 0.0;  authored.Additive.Tracks[0].V[0] := 0.0;
+  authored.Additive.Tracks[0].T[1] := 0.05; authored.Additive.Tracks[0].V[1] := 1.0;
+  authored.Additive.Tracks[0].T[2] := 1.0;  authored.Additive.Tracks[0].V[2] := 0.8;
+  SetLength(authored.Additive.Tracks[2].T, 2); SetLength(authored.Additive.Tracks[2].V, 2);
+  authored.Additive.Tracks[2].T[0] := 0.0; authored.Additive.Tracks[2].V[0] := 0.0;
+  authored.Additive.Tracks[2].T[1] := 0.3; authored.Additive.Tracks[2].V[1] := 0.25;
+
+  ms := TMemoryStream.Create;
+  reg := TSedaiInstrumentRegistry.CreateEmpty;
+  reg2 := TSedaiInstrumentRegistry.CreateEmpty;
+  try
+    reg.AddPreset(authored);
+    reg.SaveToStream(ms, 'Living');
+    ms.Position := 0;
+    reg2.LoadFromStream(ms);
+    idx := reg2.FindByName('RT Living');
+    if idx >= 0 then gp := reg2.Get(idx).Additive else gp := Default(TAdditiveParams);
+
+    humanOk := (Abs(gp.JitterCents - 2.2) < 1e-4) and (Abs(gp.ShimmerDepth - 0.06) < 1e-4)
+      and (Abs(gp.RateHz - 5.0) < 1e-4);
+    breathOk := (Abs(gp.BreathLevel - 0.015) < 1e-4) and (Abs(gp.BreathCutoff - 4000) < 1e-2);
+    tracksOk := (Length(gp.Tracks[0].T) = 3) and (Length(gp.Tracks[1].T) = 0)
+      and (Length(gp.Tracks[2].T) = 2)
+      and (Abs(gp.Tracks[0].V[1] - 1.0) < 1e-4) and (Abs(gp.Tracks[0].T[2] - 1.0) < 1e-4)
+      and (Abs(gp.Tracks[2].V[1] - 0.25) < 1e-4);
+
+    Ok('living human params round-trip', (idx >= 0) and humanOk,
+       Format('jit=%.3f shim=%.3f rate=%.2f', [gp.JitterCents, gp.ShimmerDepth, gp.RateHz]));
+    Ok('living breath round-trips', (idx >= 0) and breathOk,
+       Format('lvl=%.4f cut=%.0f', [gp.BreathLevel, gp.BreathCutoff]));
+    Ok('living tracks round-trip', (idx >= 0) and tracksOk,
+       Format('t0=%d t1=%d t2=%d',
+         [Length(gp.Tracks[0].T), Length(gp.Tracks[1].T), Length(gp.Tracks[2].T)]));
+
+    // Loads into a Part and renders audible + bounded (RandSeed fixes the human RNG).
+    RandSeed := 777;
+    part := TSAFPart.Create;
+    try
+      part.SetSampleRate(TSR);
+      if idx >= 0 then part.SetInstrument(psAdditive, reg2.Get(idx).PresetKey);
+      part.SetAdditiveParams(gp);
+      n := 8192; SetLength(buf, n*2);
+      FillChar(buf[0], n*2*SizeOf(Single), 0);
+      part.NoteOn(69, 1.0);
+      part.RenderBlock(@buf[0], n);
+      pk := 0; for i := 0 to n*2-1 do if Abs(buf[i]) > pk then pk := Abs(buf[i]);
+      Ok('living preset renders bounded', (idx >= 0) and (pk > 0.001) and (pk < 1.5),
+         Format('peak=%.3f', [pk]));
+    finally
+      part.Free;
+    end;
+  finally
+    reg.Free; reg2.Free; ms.Free;
+  end;
+end;
+
 // ---------------------------------------------------------------------------
 
 begin
@@ -1562,6 +1655,7 @@ begin
   TestStereoToMono;
   TestHarmonicTrack;
   TestMicroInstability;
+  TestLivingPresetRoundTrip;
 
   WriteLn;
   if Failures = 0 then

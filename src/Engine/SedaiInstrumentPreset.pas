@@ -324,9 +324,10 @@ end;
 procedure TSedaiInstrumentRegistry.SaveToStream(AStream: TStream; const ALibraryName: string);
 var
   sl: TStringList;
-  i, op, mp: Integer;
+  i, op, mp, tp: Integer;
   p: TInstrumentPreset;
   fs: TFormatSettings;
+  trkline: string;
 begin
   fs := DefaultFormatSettings; fs.DecimalSeparator := '.';
   sl := TStringList.Create;
@@ -421,6 +422,27 @@ begin
           [FloatToStr(p.Additive.Attack, fs), FloatToStr(p.Additive.Decay, fs),
            FloatToStr(p.Additive.Sustain, fs), FloatToStr(p.Additive.Release, fs)]));
         sl.Add('addtrim=' + FloatToStr(p.Additive.OutputTrim, fs));
+        // Living layer (only emitted when active) — makes the additive "alive".
+        if (p.Additive.JitterCents <> 0) or (p.Additive.ShimmerDepth <> 0) or
+           (p.Additive.RateHz <> 0) then
+          sl.Add(Format('addhuman=%s,%s,%s',
+            [FloatToStr(p.Additive.JitterCents, fs), FloatToStr(p.Additive.ShimmerDepth, fs),
+             FloatToStr(p.Additive.RateHz, fs)]));
+        if p.Additive.BreathLevel <> 0 then
+          sl.Add(Format('addbreath=%s,%s',
+            [FloatToStr(p.Additive.BreathLevel, fs), FloatToStr(p.Additive.BreathCutoff, fs)]));
+        // Per-harmonic amplitude tracks: one line per harmonic that has one,
+        // 'addtrack=k,t0,v0,t1,v1,...' (variable number of breakpoint pairs).
+        for op := 0 to High(p.Additive.Tracks) do
+          if Length(p.Additive.Tracks[op].T) > 0 then
+          begin
+            trkline := Format('addtrack=%d', [op]);
+            for tp := 0 to High(p.Additive.Tracks[op].T) do
+              trkline := trkline + ',' +
+                FloatToStr(p.Additive.Tracks[op].T[tp], fs) + ',' +
+                FloatToStr(p.Additive.Tracks[op].V[tp], fs);
+            sl.Add(trkline);
+          end;
       end;
       // Author side: full KARPLUS parameter block.
       if (p.Technique = psKarplus) and p.HasKarplusParams then
@@ -453,8 +475,8 @@ end;
 function TSedaiInstrumentRegistry.LoadFromStream(AStream: TStream): Integer;
 var
   sl: TStringList;
-  i, eq, n, opIdx, mi, mj: Integer;
-  line, k, v, rest: string;
+  i, eq, n, opIdx, mi, mj, tc: Integer;
+  line, k, v, rest, ts, vs: string;
   cur: TInstrumentPreset;
   have: Boolean;
   fs: TFormatSettings;
@@ -672,6 +694,44 @@ begin
       begin
         cur.HasAdditiveParams := True;
         cur.Additive.OutputTrim := StrToFloatDef(v, 1.0, fs);
+      end
+      else if k = 'addhuman' then
+      begin
+        cur.HasAdditiveParams := True;
+        rest := v;
+        cur.Additive.JitterCents := StrToFloatDef(NextTok, 0, fs);
+        cur.Additive.ShimmerDepth := StrToFloatDef(NextTok, 0, fs);
+        cur.Additive.RateHz := StrToFloatDef(NextTok, 0, fs);
+      end
+      else if k = 'addbreath' then
+      begin
+        cur.HasAdditiveParams := True;
+        rest := v;
+        cur.Additive.BreathLevel := StrToFloatDef(NextTok, 0, fs);
+        cur.Additive.BreathCutoff := StrToFloatDef(NextTok, 0, fs);
+      end
+      else if k = 'addtrack' then
+      begin
+        cur.HasAdditiveParams := True;
+        rest := v;
+        opIdx := StrToIntDef(NextTok, -1);
+        if (opIdx >= 0) and (opIdx <= High(cur.Additive.Tracks)) then
+        begin
+          tc := 0;
+          SetLength(cur.Additive.Tracks[opIdx].T, 0);
+          SetLength(cur.Additive.Tracks[opIdx].V, 0);
+          while rest <> '' do
+          begin
+            ts := NextTok;
+            if rest = '' then Break;   // need a value to pair with the time
+            vs := NextTok;
+            SetLength(cur.Additive.Tracks[opIdx].T, tc + 1);
+            SetLength(cur.Additive.Tracks[opIdx].V, tc + 1);
+            cur.Additive.Tracks[opIdx].T[tc] := StrToFloatDef(ts, 0, fs);
+            cur.Additive.Tracks[opIdx].V[tc] := StrToFloatDef(vs, 0, fs);
+            Inc(tc);
+          end;
+        end;
       end
       // --- KARPLUS block ---
       else if k = 'ksdamp' then

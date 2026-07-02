@@ -164,6 +164,7 @@ type
     property ShimmerDepth: Single read FShimmerDepth write FShimmerDepth;
     property ModRate: Single read FModRate write FModRate;
     property BreathLevel: Single read FBreathLevel write FBreathLevel;
+    property BreathCutoff: Single read FBreathCut;
     property AmpEnvelope: TSedaiEnvelope read FAmpEnvelope;
     property CurrentPreset: TAdditivePreset read FCurrentPreset;
     property Note: Integer read FNote;
