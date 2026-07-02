@@ -83,6 +83,19 @@ type
     FAmpMod: Single;        // per-sample amplitude multiplier (1 = none)
     FBreathState: Single;   // one-pole LP state for breath noise
 
+    // Per-partial BANDWIDTH ("bandwidth-enhanced partials", Loris-style). Each
+    // active harmonic gets its OWN one-pole low-passed white-noise amplitude
+    // modulator (~FBandCut Hz), normalized to ~unit std, scaled by FBandDepth:
+    // level *= 1 + FBandDepth * normNoise. This slight, decorrelated fast AM
+    // broadens each partial into a narrow band -> the "metal" character (vs the
+    // sterile "plastic" of pure sinusoids). FBandDepth 0 = off (inert; no RNG
+    // touched, so existing presets/tracks stay bit-identical). ~0.04 = tuned.
+    FBandDepth: Single;     // per-partial band depth (fraction peak-ish); 0 = off
+    FBandCut: Single;       // band-noise low-pass cutoff (Hz)
+    FBandCoeff: Single;     // cached one-pole coeff for FBandCut
+    FBandNorm: Single;      // std-normalization factor for the LP noise
+    FBandState: array[0..ADDITIVE_MAX_HARMONICS - 1] of Single;  // per-partial LP state
+
     // Main envelope
     FAmpEnvelope: TSedaiEnvelope;
 
@@ -106,6 +119,7 @@ type
     function TrackLevel(AHarmonic: Integer): Single;
     procedure UpdateModulation;
     procedure RecalcBreathCoeff;
+    procedure RecalcBandCoeff;
 
   public
     constructor Create; override;
@@ -139,6 +153,10 @@ type
     procedure SetMicroInstability(AJitterCents, AShimmerDepth, ARateHz: Single);
     // Airy breath layer. ALevel 0 = off; ACutoffHz shapes it ("air" low / "hiss" high).
     procedure SetBreath(ALevel, ACutoffHz: Single);
+    // Per-partial bandwidth ("metal"). ADepth = fractional AM depth per partial
+    // (~0.04 tuned; 0 = off), ACutoffHz = band-noise low-pass (~45 Hz). Each
+    // active harmonic gets an independent LP-noise modulator.
+    procedure SetBandwidth(ADepth, ACutoffHz: Single);
     function GetHarmonicLevel(AHarmonic: Integer): Single;
     function GetHarmonicDetune(AHarmonic: Integer): Single;
     function GetHarmonicEnvelope(AHarmonic: Integer): TSedaiEnvelope;
@@ -165,6 +183,8 @@ type
     property ModRate: Single read FModRate write FModRate;
     property BreathLevel: Single read FBreathLevel write FBreathLevel;
     property BreathCutoff: Single read FBreathCut;
+    property BandDepth: Single read FBandDepth write FBandDepth;
+    property BandCutoff: Single read FBandCut;
     property AmpEnvelope: TSedaiEnvelope read FAmpEnvelope;
     property CurrentPreset: TAdditivePreset read FCurrentPreset;
     property Note: Integer read FNote;
@@ -196,7 +216,9 @@ begin
   FBreathLevel := 0; FBreathCut := 4000;
   FLfoPhase := 0; FLfoPCur := 0; FLfoPTgt := 0; FLfoACur := 0; FLfoATgt := 0;
   FPitchMod := 1; FAmpMod := 1; FBreathState := 0;
+  FBandDepth := 0; FBandCut := 45;
   RecalcBreathCoeff;
+  RecalcBandCoeff;
   FActiveHarmonics := 0;
   FNyquistLimit := FSampleRate * 0.5;
 
@@ -209,6 +231,7 @@ begin
     FHarmonicTrackT[I] := nil;
     FHarmonicTrackV[I] := nil;
     FTrackCursor[I] := 0;
+    FBandState[I] := 0;
     FHarmonicEnvelopes[I] := TSedaiEnvelope.Create;
     FHarmonicEnvelopes[I].SetSampleRate(FSampleRate);
   end;
@@ -242,6 +265,7 @@ begin
   inherited SampleRateChanged;
   UpdateNyquistLimit;
   RecalcBreathCoeff;
+  RecalcBandCoeff;
   FAmpEnvelope.SetSampleRate(FSampleRate);
   for I := 0 to ADDITIVE_MAX_HARMONICS - 1 do
     FHarmonicEnvelopes[I].SetSampleRate(FSampleRate);
@@ -307,6 +331,16 @@ begin
       else
         HarmonicLevel := FHarmonicLevels[I];
 
+      // Per-partial bandwidth: each active harmonic gets an independent one-pole
+      // LP-noise AM (opt-in; broadens the partial -> "metal"). State advances per
+      // active harmonic every sample so the bands stay decorrelated.
+      if FBandDepth > 0 then
+      begin
+        FBandState[I] := FBandState[I] + FBandCoeff * ((Random * 2 - 1) - FBandState[I]);
+        HarmonicLevel := HarmonicLevel * (1.0 + FBandDepth * FBandNorm * FBandState[I]);
+        if HarmonicLevel < 0 then HarmonicLevel := 0;
+      end;
+
       if HarmonicLevel > 0.001 then
       begin
         // Calculate harmonic frequency with detune
@@ -363,6 +397,7 @@ begin
   begin
     FHarmonicPhases[I] := 0;
     FTrackCursor[I] := 0;
+    FBandState[I] := 0;
     if FUseHarmonicEnvelopes then
       FHarmonicEnvelopes[I].Trigger;
   end;
@@ -401,6 +436,7 @@ begin
   begin
     FHarmonicPhases[I] := 0;
     FTrackCursor[I] := 0;
+    FBandState[I] := 0;
     FHarmonicEnvelopes[I].Reset;
   end;
 
@@ -570,6 +606,25 @@ begin
     FBreathCoeff := 1.0;
 end;
 
+// One-pole coeff + std-normalization for the per-partial band noise. A one-pole
+// LP of white noise (uniform [-1,1], variance 1/3) has output variance
+// a/(2-a)*(1/3); normalize by sqrt(3*(2-a)/a) so FBandDepth is the true
+// fractional AM depth regardless of cutoff/sample-rate.
+procedure TSedaiAdditiveGenerator.RecalcBandCoeff;
+var
+  a: Single;
+begin
+  if (FSampleRate > 0) and (FBandCut > 0) then
+    a := 1.0 - Exp(-2.0 * Pi * FBandCut / FSampleRate)
+  else
+    a := 1.0;
+  FBandCoeff := a;
+  if a > 0 then
+    FBandNorm := Sqrt(3.0 * (2.0 - a) / a)
+  else
+    FBandNorm := 1.0;
+end;
+
 // Advance the two random-target LFOs and derive the per-sample pitch/amp
 // modulators. Inert (mults = 1) while both depths are 0.
 procedure TSedaiAdditiveGenerator.UpdateModulation;
@@ -616,6 +671,14 @@ begin
   FBreathLevel := ALevel;
   if ACutoffHz > 0 then FBreathCut := ACutoffHz;
   RecalcBreathCoeff;
+end;
+
+procedure TSedaiAdditiveGenerator.SetBandwidth(ADepth, ACutoffHz: Single);
+begin
+  if ADepth < 0 then ADepth := 0;
+  FBandDepth := ADepth;
+  if ACutoffHz > 0 then FBandCut := ACutoffHz;
+  RecalcBandCoeff;
 end;
 
 function TSedaiAdditiveGenerator.GetHarmonicLevel(AHarmonic: Integer): Single;

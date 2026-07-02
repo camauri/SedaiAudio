@@ -123,6 +123,8 @@ type
     RateHz: Single;           // micro-instability modulation rate
     BreathLevel: Single;      // airy breath (low-passed noise) level; 0 = off
     BreathCutoff: Single;     // breath low-pass cutoff (Hz)
+    BandDepth: Single;        // per-partial bandwidth ("metal") AM depth; 0 = off
+    BandCutoff: Single;       // per-partial band-noise low-pass cutoff (Hz)
     Tracks: array[0..ADDITIVE_MAX_HARMONICS-1] of TAdditiveTrack;  // per-harmonic amp tracks
   end;
 
@@ -792,6 +794,7 @@ begin
       AG.SetHarmonicTrack(I, AParams.Tracks[I].T, AParams.Tracks[I].V);
   AG.SetMicroInstability(AParams.JitterCents, AParams.ShimmerDepth, AParams.RateHz);
   AG.SetBreath(AParams.BreathLevel, AParams.BreathCutoff);
+  AG.SetBandwidth(AParams.BandDepth, AParams.BandCutoff);
   AVoice.OutputLevel := AParams.OutputTrim;
 end;
 
@@ -824,6 +827,8 @@ begin
       Result.RateHz := AG.ModRate;
       Result.BreathLevel := AG.BreathLevel;
       Result.BreathCutoff := AG.BreathCutoff;
+      Result.BandDepth := AG.BandDepth;
+      Result.BandCutoff := AG.BandCutoff;
     end;
     Result.OutputTrim := V.OutputLevel;
   finally

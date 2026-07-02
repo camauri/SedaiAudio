@@ -431,6 +431,10 @@ begin
         if p.Additive.BreathLevel <> 0 then
           sl.Add(Format('addbreath=%s,%s',
             [FloatToStr(p.Additive.BreathLevel, fs), FloatToStr(p.Additive.BreathCutoff, fs)]));
+        // Per-partial bandwidth ("metal"): depth + noise cutoff.
+        if p.Additive.BandDepth <> 0 then
+          sl.Add(Format('addband=%s,%s',
+            [FloatToStr(p.Additive.BandDepth, fs), FloatToStr(p.Additive.BandCutoff, fs)]));
         // Per-harmonic amplitude tracks: one line per harmonic that has one,
         // 'addtrack=k,t0,v0,t1,v1,...' (variable number of breakpoint pairs).
         for op := 0 to High(p.Additive.Tracks) do
@@ -709,6 +713,13 @@ begin
         rest := v;
         cur.Additive.BreathLevel := StrToFloatDef(NextTok, 0, fs);
         cur.Additive.BreathCutoff := StrToFloatDef(NextTok, 0, fs);
+      end
+      else if k = 'addband' then
+      begin
+        cur.HasAdditiveParams := True;
+        rest := v;
+        cur.Additive.BandDepth := StrToFloatDef(NextTok, 0, fs);
+        cur.Additive.BandCutoff := StrToFloatDef(NextTok, 0, fs);
       end
       else if k = 'addtrack' then
       begin

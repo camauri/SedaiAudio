@@ -1534,6 +1534,65 @@ begin
   end;
 end;
 
+// Per-partial bandwidth ("metal"): with depth 0 the generator is inert (a single
+// harmonic + flat envelope is a dead-constant sine, no RNG touched); with depth on,
+// each partial's amplitude wobbles (spectral broadening) but stays bounded.
+procedure TestBandwidth;
+const TSR = 48000;
+var
+  g: TSedaiAdditiveGenerator;
+  buf: array of Single;
+  i, n, w, nw: Integer;
+  pk, mean, sd, cv: Double;
+  peaks: array of Double;
+
+  function WinPeak(a: Integer): Single;
+  var k, e: Integer;
+  begin
+    Result := 0; e := a + Round(0.05*TSR);
+    if e > High(buf) then e := High(buf);
+    for k := a to e do if Abs(buf[k]) > Result then Result := Abs(buf[k]);
+  end;
+
+  // local counter j: a nested function may not use an enclosing-scope var as a
+  // for-loop counter ("Illegal counter variable" in FPC).
+  function RenderCV(depth: Single): Double;
+  var j: Integer;
+  begin
+    g.SetBandwidth(depth, 30);
+    g.NoteOn(69, 1.0);
+    n := TSR; SetLength(buf, n);
+    for j := 0 to n-1 do buf[j] := g.GenerateSample;
+    nw := 0; SetLength(peaks, 20); w := n div 2;
+    while (w + Round(0.05*TSR) < n) and (nw < 20) do
+    begin peaks[nw] := WinPeak(w); Inc(nw); Inc(w, Round(0.05*TSR)); end;
+    mean := 0; for j := 0 to nw-1 do mean := mean + peaks[j]; mean := mean/nw;
+    sd := 0; for j := 0 to nw-1 do sd := sd + Sqr(peaks[j]-mean); sd := Sqrt(sd/nw);
+    Result := sd/(mean+1e-9);
+  end;
+
+begin
+  WriteLn('== per-partial bandwidth ("metal") ==');
+  RandSeed := 4242;
+  g := TSedaiAdditiveGenerator.Create;
+  try
+    g.SetSampleRate(TSR);
+    g.HarmonicCount := 1; g.SetHarmonicLevel(0, 1.0);
+    g.AmpEnvelope.AttackTime := 0; g.AmpEnvelope.DecayTime := 0;
+    g.AmpEnvelope.SustainLevel := 1; g.AmpEnvelope.ReleaseTime := 0;
+
+    cv := RenderCV(0.0);          // inert: flat sine, no wobble
+    Ok('bandwidth 0 is inert', cv < 1e-4, Format('cv=%.5f', [cv]));
+
+    cv := RenderCV(0.10);         // band on: clear per-window wobble, bounded
+    pk := 0; for i := 0 to High(buf) do if Abs(buf[i]) > pk then pk := Abs(buf[i]);
+    Ok('bandwidth broadens the partial', (cv > 0.02) and (pk < 1.5),
+       Format('cv=%.3f peak=%.2f', [cv, pk]));
+  finally
+    g.Free;
+  end;
+end;
+
 // The LIVING additive preset (per-harmonic amplitude tracks + micro-instability
 // + breath + natural release + RMS-matched trim) survives a .safinst round-trip:
 // the naturalness layer is carried in the file, not just in the analyzer harness.
@@ -1569,6 +1628,8 @@ begin
   authored.Additive.RateHz := 5.0;
   authored.Additive.BreathLevel := 0.015;
   authored.Additive.BreathCutoff := 4000;
+  authored.Additive.BandDepth := 0.04;
+  authored.Additive.BandCutoff := 45;
   // harmonic 0: 3 breakpoints; harmonic 2: 2 breakpoints; harmonic 1: none.
   SetLength(authored.Additive.Tracks[0].T, 3); SetLength(authored.Additive.Tracks[0].V, 3);
   authored.Additive.Tracks[0].T[0] := 0.0;  authored.Additive.Tracks[0].V[0] := 0.0;
@@ -1591,7 +1652,8 @@ begin
 
     humanOk := (Abs(gp.JitterCents - 2.2) < 1e-4) and (Abs(gp.ShimmerDepth - 0.06) < 1e-4)
       and (Abs(gp.RateHz - 5.0) < 1e-4);
-    breathOk := (Abs(gp.BreathLevel - 0.015) < 1e-4) and (Abs(gp.BreathCutoff - 4000) < 1e-2);
+    breathOk := (Abs(gp.BreathLevel - 0.015) < 1e-4) and (Abs(gp.BreathCutoff - 4000) < 1e-2)
+      and (Abs(gp.BandDepth - 0.04) < 1e-4) and (Abs(gp.BandCutoff - 45) < 1e-2);
     tracksOk := (Length(gp.Tracks[0].T) = 3) and (Length(gp.Tracks[1].T) = 0)
       and (Length(gp.Tracks[2].T) = 2)
       and (Abs(gp.Tracks[0].V[1] - 1.0) < 1e-4) and (Abs(gp.Tracks[0].T[2] - 1.0) < 1e-4)
@@ -1599,8 +1661,9 @@ begin
 
     Ok('living human params round-trip', (idx >= 0) and humanOk,
        Format('jit=%.3f shim=%.3f rate=%.2f', [gp.JitterCents, gp.ShimmerDepth, gp.RateHz]));
-    Ok('living breath round-trips', (idx >= 0) and breathOk,
-       Format('lvl=%.4f cut=%.0f', [gp.BreathLevel, gp.BreathCutoff]));
+    Ok('living breath+band round-trip', (idx >= 0) and breathOk,
+       Format('breath=%.4f/%.0f band=%.3f/%.0f',
+         [gp.BreathLevel, gp.BreathCutoff, gp.BandDepth, gp.BandCutoff]));
     Ok('living tracks round-trip', (idx >= 0) and tracksOk,
        Format('t0=%d t1=%d t2=%d',
          [Length(gp.Tracks[0].T), Length(gp.Tracks[1].T), Length(gp.Tracks[2].T)]));
@@ -1655,6 +1718,7 @@ begin
   TestStereoToMono;
   TestHarmonicTrack;
   TestMicroInstability;
+  TestBandwidth;
   TestLivingPresetRoundTrip;
 
   WriteLn;
