@@ -23,7 +23,8 @@ uses
   SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine, SedaiInstrumentPreset,
   SedaiFMOperator, SedaiAdditiveGenerator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
-  SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator;
+  SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
+  SedaiSpatialChain;
 
 const
   SR    = 44100;
@@ -1908,6 +1909,55 @@ begin
   end;
 end;
 
+// Spatial chain end-to-end: body (C) -> auto-space (D) per Part + a shared room
+// (reverb) on the master bus, wired through TSAFSpatialChain and rendered by the
+// engine. Objective: the full chain renders audible + bounded, produces stereo
+// width, and the ownership/free order (engine first, chain second) is clean.
+procedure TestSpatialChain;
+const TSR = 44100;
+var
+  eng: TSAFEngine;
+  chain: TSAFSpatialChain;
+  part: TSAFPart;
+  buf: array of Single;
+  frames, done, n, i: Integer;
+  pk, sideE, e: Double;
+begin
+  WriteLn('== spatial chain (body -> auto-space -> room) ==');
+  eng := TSAFEngine.Create(TSR);
+  chain := TSAFSpatialChain.Create;
+  try
+    part := eng.AddPart('Solo', 8);
+    part.SetInstrument(psAdditive, 'strings');
+    chain.SpatializePart(eng, 0, bodyViolin, 0.5, 0.5, 0.5);   // C then D
+    chain.SetRoom(eng, roomMedium, 0.25);                       // shared room
+    part.NoteOn(60, 1.0);
+    frames := TSR div 2;                                        // 0.5 s
+    SetLength(buf, 512 * 2);
+    pk := 0; sideE := 0; e := 0; done := 0;
+    while done < frames do
+    begin
+      n := 512; if done + n > frames then n := frames - done;
+      eng.RenderBlock(@buf[0], n);
+      for i := 0 to n - 1 do
+      begin
+        if Abs(buf[i*2])   > pk then pk := Abs(buf[i*2]);
+        if Abs(buf[i*2+1]) > pk then pk := Abs(buf[i*2+1]);
+        sideE := sideE + Sqr(buf[i*2] - buf[i*2+1]);
+        e := e + Sqr(buf[i*2]) + Sqr(buf[i*2+1]);
+      end;
+      Inc(done, n);
+    end;
+    Ok('chain renders audible + bounded', (e > 1e-4) and (pk > 0.0) and (pk < 1.5),
+       Format('e=%.3f pk=%.3f', [e, pk]));
+    Ok('chain produces stereo width', sideE / (e + 1e-9) > 1e-3,
+       Format('side/tot=%.4f', [sideE / (e + 1e-9)]));
+  finally
+    eng.Free;      // engine first: stops referencing the inserts
+    chain.Free;    // then the chain frees the owned effects
+  end;
+end;
+
 // ---------------------------------------------------------------------------
 
 begin
@@ -1941,6 +1991,7 @@ begin
   TestAutoSpace;
   TestResidual;
   TestBodyResonator;
+  TestSpatialChain;
 
   WriteLn;
   if Failures = 0 then
