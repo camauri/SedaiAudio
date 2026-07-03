@@ -2035,6 +2035,54 @@ begin
   end;
 end;
 
+// Commutation: the body resonator (C v1) is LTI, so convolving with its captured
+// impulse response (C v2) reproduces the live filter exactly -> the two "il tubo"
+// paths are equivalent (the commuted-synthesis theorem, on our code).
+procedure TestCommutation;
+const TSR = 48000; TAPS = 4096;
+var
+  br: TSedaiBodyResonator;
+  cv: TSedaiConvolver;
+  imp, cap, hL, hR, sig, brOut, cvOut: array of Single;
+  i, n: Integer;
+  err, pk: Double;
+begin
+  WriteLn('== convolver == body resonator (LTI commutation) ==');
+  SetLength(imp, TAPS*2); SetLength(cap, TAPS*2);
+  SetLength(hL, TAPS); SetLength(hR, TAPS);
+  br := TSedaiBodyResonator.Create;
+  try
+    br.SetSampleRate(TSR); br.LoadBody(bodyViolin); br.Width := 0.6; br.Mix := 1.0; br.Reset;
+    for i := 0 to TAPS*2-1 do imp[i] := 0;
+    imp[0] := 1.0; imp[1] := 1.0;                 // dual-mono delta
+    br.ProcessBlock(@imp[0], @cap[0], TAPS);      // capture the IR
+    for i := 0 to TAPS-1 do begin hL[i] := cap[i*2]; hR[i] := cap[i*2+1]; end;
+
+    n := TAPS;
+    SetLength(sig, n*2); SetLength(brOut, n*2); SetLength(cvOut, n*2);
+    for i := 0 to n*2-1 do sig[i] := 0;
+    sig[0]:=0.6; sig[1]:=0.6; sig[8]:=-0.3; sig[9]:=-0.3; sig[20]:=0.2; sig[21]:=0.2;
+    br.Reset;
+    br.ProcessBlock(@sig[0], @brOut[0], n);
+
+    cv := TSedaiConvolver.Create;
+    try
+      cv.SetSampleRate(TSR); cv.LoadIR(hL, hR); cv.Reset;
+      cv.ProcessBlock(@sig[0], @cvOut[0], n);
+    finally cv.Free; end;
+
+    err := 0; pk := 0;
+    for i := 0 to (n div 2)*2 - 1 do
+    begin
+      err := Max(err, Abs(brOut[i] - cvOut[i]));
+      if Abs(brOut[i]) > pk then pk := Abs(brOut[i]);
+    end;
+    Ok('convolve(IR) == live body filter', err < 1e-4, Format('maxdiff=%.2e peak=%.3f', [err, pk]));
+  finally
+    br.Free;
+  end;
+end;
+
 // ---------------------------------------------------------------------------
 
 begin
@@ -2070,6 +2118,7 @@ begin
   TestBodyResonator;
   TestSpatialChain;
   TestConvolver;
+  TestCommutation;
 
   WriteLn;
   if Failures = 0 then
