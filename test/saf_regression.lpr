@@ -24,7 +24,7 @@ uses
   SedaiFMOperator, SedaiAdditiveGenerator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
   SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
-  SedaiSpatialChain;
+  SedaiSpatialChain, SedaiConvolver;
 
 const
   SR    = 44100;
@@ -1973,6 +1973,68 @@ begin
   end;
 end;
 
+// Convolver ("il tubo" C v2, measured IR): a delta input must return the IR
+// per-tap (out L = hL, out R = hR), the process is linear (conv(2x) = 2*conv(x)),
+// and no IR = passthrough. Objective, no ear needed.
+procedure TestConvolver;
+const TSR = 48000;
+var
+  cv: TSedaiConvolver;
+  hL, hR: array[0..4] of Single;
+  inp, outp, out2: array[0..31] of Single;
+  i: Integer;
+  tapOk, linOk, passOk: Boolean;
+  d: Single;
+begin
+  WriteLn('== convolver (measured IR: delta->IR, linear) ==');
+  hL[0]:=0.5; hL[1]:=0.3; hL[2]:=-0.2; hL[3]:=0.1; hL[4]:=0.05;
+  hR[0]:=0.4; hR[1]:=-0.25; hR[2]:=0.15; hR[3]:=0.0; hR[4]:=-0.1;
+
+  cv := TSedaiConvolver.Create;
+  try
+    cv.SetSampleRate(TSR);
+
+    // no IR -> passthrough
+    for i := 0 to 31 do inp[i] := 0;
+    inp[0]:=0.7; inp[1]:=0.7; inp[2]:=-0.3; inp[3]:=-0.3;
+    cv.ProcessBlock(@inp[0], @outp[0], 16);
+    passOk := True;
+    for i := 0 to 31 do if Abs(outp[i]-inp[i]) > 1e-7 then passOk := False;
+    Ok('no IR = passthrough', passOk);
+
+    cv.LoadIR(hL, hR);
+    cv.Reset;
+    // delta on both channels at frame 0
+    for i := 0 to 31 do inp[i] := 0;
+    inp[0] := 1.0; inp[1] := 1.0;
+    cv.ProcessBlock(@inp[0], @outp[0], 16);
+    // out[frame k] L should equal hL[k], R equal hR[k] for k=0..4
+    tapOk := True;
+    for i := 0 to 4 do
+    begin
+      if Abs(outp[i*2]   - hL[i]) > 1e-6 then tapOk := False;
+      if Abs(outp[i*2+1] - hR[i]) > 1e-6 then tapOk := False;
+    end;
+    Ok('delta returns the IR per-tap', tapOk,
+       Format('outL[0..2]=%.2f,%.2f,%.2f', [outp[0], outp[2], outp[4]]));
+
+    // linearity: 2*delta -> 2*IR
+    cv.Reset;
+    for i := 0 to 31 do inp[i] := 0;
+    inp[0] := 2.0; inp[1] := 2.0;
+    cv.ProcessBlock(@inp[0], @out2[0], 16);
+    linOk := True;
+    for i := 0 to 9 do
+    begin
+      d := Abs(out2[i] - 2.0*outp[i]);
+      if d > 1e-6 then linOk := False;
+    end;
+    Ok('convolution is linear (2x->2y)', linOk);
+  finally
+    cv.Free;
+  end;
+end;
+
 // ---------------------------------------------------------------------------
 
 begin
@@ -2007,6 +2069,7 @@ begin
   TestResidual;
   TestBodyResonator;
   TestSpatialChain;
+  TestConvolver;
 
   WriteLn;
   if Failures = 0 then
