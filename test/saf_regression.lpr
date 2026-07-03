@@ -1749,6 +1749,21 @@ begin
        (sideEnergy / (refEnergy + 1e-9) > 0.05) and (pk < 1.5),
        Format('side/ref=%.3f peak=%.3f', [sideEnergy/(refEnergy+1e-9), pk]));
 
+    // lateral reflections raise the side energy further, still mono-safe & bounded.
+    sp.Reflect := 0.6; sp.Reset;
+    sp.ProcessBlock(@ins[0], @outs[0], n);
+    refEnergy := 0; passDiff := 0; pk := 0;   // reuse refEnergy=side2, passDiff=monoDiff2
+    for i := 0 to n-1 do
+    begin
+      refEnergy := refEnergy + Sqr(outs[i*2] - outs[i*2+1]);
+      passDiff := Max(passDiff, Abs((outs[i*2] + outs[i*2+1]) - (ins[i*2] + ins[i*2+1])));
+      if Abs(outs[i*2]) > pk then pk := Abs(outs[i*2]);
+    end;
+    Ok('reflections raise side, stay mono-safe',
+       (refEnergy > sideEnergy) and (passDiff < 1e-4) and (pk < 1.5),
+       Format('side2=%.1f vs side=%.1f monoDiff=%.2e', [refEnergy, sideEnergy, passDiff]));
+    sp.Reflect := 0.0;
+
     // Width=0 is a passthrough for a mono source (side vanishes -> out == in).
     sp.Width := 0.0; sp.Reset;
     sp.ProcessBlock(@ins[0], @outs[0], n);
