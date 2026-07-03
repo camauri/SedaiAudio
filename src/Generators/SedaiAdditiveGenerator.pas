@@ -22,6 +22,14 @@ const
   ADDITIVE_DEFAULT_HARMONICS = 32;
   TWO_PI = 2 * Pi;
 
+  // Filtered-noise residual: a small fixed bank of ~octave-spaced band-pass
+  // filters. White noise through these, weighted by per-band gains, is the SMS
+  // "stochastic" layer (breath/bow/reed noise). 6 bands span ~250 Hz..8 kHz.
+  RESIDUAL_BANDS = 6;
+  RESIDUAL_BAND_HZ: array[0..RESIDUAL_BANDS-1] of Single =
+    (250, 500, 1000, 2000, 4000, 8000);
+  RESIDUAL_BAND_Q = 2.0;
+
 type
   { TAdditivePreset }
   TAdditivePreset = (
@@ -96,6 +104,20 @@ type
     FBandNorm: Single;      // std-normalization factor for the LP noise
     FBandState: array[0..ADDITIVE_MAX_HARMONICS - 1] of Single;  // per-partial LP state
 
+    // Filtered-noise RESIDUAL (SMS/DDSP "stochastic" layer). White noise shaped by
+    // a bank of RESIDUAL_BANDS band-pass filters with per-band gains (the measured
+    // residual spectral envelope), scaled by FResidualLevel and the amp envelope.
+    // This is the breath/bow/reed noise pure partials discard. More general than
+    // FBreathLevel (a single one-pole): the band gains give the residual its
+    // instrument-specific colour (airy vs hissy vs buzzy). Opt-in: level 0 = off
+    // (no RNG touched -> existing presets bit-identical).
+    FResidualLevel: Single;   // overall residual level; 0 = off
+    FResidualGains: array[0..RESIDUAL_BANDS-1] of Single;   // per-band gains
+    FResidualBP: array[0..RESIDUAL_BANDS-1] of record
+      b0, b1, b2, a1, a2: Single;   // RBJ band-pass coefficients (a0-normalized)
+      x1, x2, y1, y2: Single;       // biquad state (Direct Form I)
+    end;
+
     // Main envelope
     FAmpEnvelope: TSedaiEnvelope;
 
@@ -120,6 +142,8 @@ type
     procedure UpdateModulation;
     procedure RecalcBreathCoeff;
     procedure RecalcBandCoeff;
+    procedure RecalcResidualCoeffs;
+    procedure ResetResidualState;
 
   public
     constructor Create; override;
@@ -157,8 +181,14 @@ type
     // (~0.04 tuned; 0 = off), ACutoffHz = band-noise low-pass (~45 Hz). Each
     // active harmonic gets an independent LP-noise modulator.
     procedure SetBandwidth(ADepth, ACutoffHz: Single);
+    // Filtered-noise residual (SMS/DDSP stochastic layer). ALevel 0 = off. AGains =
+    // per-band gains (up to RESIDUAL_BANDS, ~octave-spaced 250 Hz..8 kHz) = the
+    // residual spectral envelope. White noise band-shaped by these + scaled by the
+    // amp envelope is added to the partials (breath/bow/reed noise).
+    procedure SetResidual(ALevel: Single; const AGains: array of Single);
     function GetHarmonicLevel(AHarmonic: Integer): Single;
     function GetHarmonicDetune(AHarmonic: Integer): Single;
+    function GetResidualGain(ABand: Integer): Single;
     function GetHarmonicEnvelope(AHarmonic: Integer): TSedaiEnvelope;
 
     // Preset control
@@ -185,6 +215,7 @@ type
     property BreathCutoff: Single read FBreathCut;
     property BandDepth: Single read FBandDepth write FBandDepth;
     property BandCutoff: Single read FBandCut;
+    property ResidualLevel: Single read FResidualLevel;
     property AmpEnvelope: TSedaiEnvelope read FAmpEnvelope;
     property CurrentPreset: TAdditivePreset read FCurrentPreset;
     property Note: Integer read FNote;
@@ -217,8 +248,12 @@ begin
   FLfoPhase := 0; FLfoPCur := 0; FLfoPTgt := 0; FLfoACur := 0; FLfoATgt := 0;
   FPitchMod := 1; FAmpMod := 1; FBreathState := 0;
   FBandDepth := 0; FBandCut := 45;
+  FResidualLevel := 0;
+  for I := 0 to RESIDUAL_BANDS - 1 do FResidualGains[I] := 0;
   RecalcBreathCoeff;
   RecalcBandCoeff;
+  RecalcResidualCoeffs;
+  ResetResidualState;
   FActiveHarmonics := 0;
   FNyquistLimit := FSampleRate * 0.5;
 
@@ -266,6 +301,7 @@ begin
   UpdateNyquistLimit;
   RecalcBreathCoeff;
   RecalcBandCoeff;
+  RecalcResidualCoeffs;
   FAmpEnvelope.SetSampleRate(FSampleRate);
   for I := 0 to ADDITIVE_MAX_HARMONICS - 1 do
     FHarmonicEnvelopes[I].SetSampleRate(FSampleRate);
@@ -388,6 +424,7 @@ begin
   // bit-identical to before (and deterministic RandSeed-based tests are unaffected).
   FLfoPhase := 0; FPitchMod := 1; FAmpMod := 1; FBreathState := 0;
   FLfoPCur := 0; FLfoPTgt := 0; FLfoACur := 0; FLfoATgt := 0;
+  ResetResidualState;
   if (FJitterCents > 0) or (FShimmerDepth > 0) or (FBreathLevel > 0) then
   begin
     FLfoPCur := Random * 2 - 1; FLfoPTgt := Random * 2 - 1;
@@ -439,6 +476,7 @@ begin
     FBandState[I] := 0;
     FHarmonicEnvelopes[I].Reset;
   end;
+  ResetResidualState;
 
   FAmpEnvelope.Reset;
 end;
@@ -446,6 +484,8 @@ end;
 function TSedaiAdditiveGenerator.GenerateSample: Single;
 var
   EnvValue: Single;
+  ri: Integer;
+  noise, bp, resAcc: Single;
 begin
   if (not FGateOpen) and (not FReleasing) then
   begin
@@ -476,6 +516,25 @@ begin
   begin
     FBreathState := FBreathState + FBreathCoeff * ((Random * 2 - 1) - FBreathState);
     Result := Result + FBreathState * FBreathLevel * EnvValue * FVelocity * FAmplitude;
+  end;
+
+  // Filtered-noise residual (SMS/DDSP stochastic layer): one white-noise source
+  // through the band-pass bank, summed with the per-band gains = the residual
+  // spectral envelope. Following the amp envelope so it fades with the note.
+  if FResidualLevel > 0 then
+  begin
+    noise := Random * 2 - 1;
+    resAcc := 0;
+    for ri := 0 to RESIDUAL_BANDS - 1 do
+      with FResidualBP[ri] do
+      begin
+        // RBJ band-pass, Direct Form I (double-free single precision is fine here)
+        bp := b0 * noise + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+        x2 := x1; x1 := noise;
+        y2 := y1; y1 := bp;
+        resAcc := resAcc + FResidualGains[ri] * bp;
+      end;
+    Result := Result + resAcc * FResidualLevel * EnvValue * FVelocity * FAmplitude;
   end;
 
   // Advance the per-note clock that drives the breakpoint tracks
@@ -681,6 +740,58 @@ begin
   RecalcBandCoeff;
 end;
 
+// RBJ band-pass (constant 0 dB peak) coefficients for each residual band.
+procedure TSedaiAdditiveGenerator.RecalcResidualCoeffs;
+var
+  i: Integer;
+  w0, cw, sw, alpha, a0: Single;
+begin
+  for i := 0 to RESIDUAL_BANDS - 1 do
+  begin
+    if (FSampleRate > 0) and (RESIDUAL_BAND_HZ[i] < FSampleRate * 0.45) then
+    begin
+      w0 := TWO_PI * RESIDUAL_BAND_HZ[i] / FSampleRate;
+      cw := Cos(w0); sw := Sin(w0);
+      alpha := sw / (2.0 * RESIDUAL_BAND_Q);
+      a0 := 1.0 + alpha;
+      FResidualBP[i].b0 :=  alpha / a0;
+      FResidualBP[i].b1 :=  0.0;
+      FResidualBP[i].b2 := -alpha / a0;
+      FResidualBP[i].a1 := (-2.0 * cw) / a0;
+      FResidualBP[i].a2 := (1.0 - alpha) / a0;
+    end
+    else
+    begin
+      // band above Nyquist: make it a silent pass-through (no contribution)
+      FResidualBP[i].b0 := 0; FResidualBP[i].b1 := 0; FResidualBP[i].b2 := 0;
+      FResidualBP[i].a1 := 0; FResidualBP[i].a2 := 0;
+    end;
+  end;
+end;
+
+procedure TSedaiAdditiveGenerator.ResetResidualState;
+var
+  i: Integer;
+begin
+  for i := 0 to RESIDUAL_BANDS - 1 do
+  begin
+    FResidualBP[i].x1 := 0; FResidualBP[i].x2 := 0;
+    FResidualBP[i].y1 := 0; FResidualBP[i].y2 := 0;
+  end;
+end;
+
+procedure TSedaiAdditiveGenerator.SetResidual(ALevel: Single; const AGains: array of Single);
+var
+  i, n: Integer;
+begin
+  if ALevel < 0 then ALevel := 0;
+  FResidualLevel := ALevel;
+  n := Length(AGains);
+  for i := 0 to RESIDUAL_BANDS - 1 do
+    if i < n then FResidualGains[i] := AGains[i] else FResidualGains[i] := 0;
+  RecalcResidualCoeffs;
+end;
+
 function TSedaiAdditiveGenerator.GetHarmonicLevel(AHarmonic: Integer): Single;
 begin
   if (AHarmonic >= 0) and (AHarmonic < ADDITIVE_MAX_HARMONICS) then
@@ -693,6 +804,14 @@ function TSedaiAdditiveGenerator.GetHarmonicDetune(AHarmonic: Integer): Single;
 begin
   if (AHarmonic >= 0) and (AHarmonic < ADDITIVE_MAX_HARMONICS) then
     Result := FHarmonicDetune[AHarmonic]
+  else
+    Result := 0;
+end;
+
+function TSedaiAdditiveGenerator.GetResidualGain(ABand: Integer): Single;
+begin
+  if (ABand >= 0) and (ABand < RESIDUAL_BANDS) then
+    Result := FResidualGains[ABand]
   else
     Result := 0;
 end;

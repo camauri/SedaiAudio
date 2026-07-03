@@ -125,6 +125,8 @@ type
     BreathCutoff: Single;     // breath low-pass cutoff (Hz)
     BandDepth: Single;        // per-partial bandwidth ("metal") AM depth; 0 = off
     BandCutoff: Single;       // per-partial band-noise low-pass cutoff (Hz)
+    ResidualLevel: Single;    // filtered-noise residual (SMS stochastic) level; 0 = off
+    ResidualGains: array[0..RESIDUAL_BANDS-1] of Single;  // residual per-band gains (spectral envelope)
     Tracks: array[0..ADDITIVE_MAX_HARMONICS-1] of TAdditiveTrack;  // per-harmonic amp tracks
   end;
 
@@ -795,6 +797,7 @@ begin
   AG.SetMicroInstability(AParams.JitterCents, AParams.ShimmerDepth, AParams.RateHz);
   AG.SetBreath(AParams.BreathLevel, AParams.BreathCutoff);
   AG.SetBandwidth(AParams.BandDepth, AParams.BandCutoff);
+  AG.SetResidual(AParams.ResidualLevel, AParams.ResidualGains);
   AVoice.OutputLevel := AParams.OutputTrim;
 end;
 
@@ -829,6 +832,9 @@ begin
       Result.BreathCutoff := AG.BreathCutoff;
       Result.BandDepth := AG.BandDepth;
       Result.BandCutoff := AG.BandCutoff;
+      Result.ResidualLevel := AG.ResidualLevel;
+      for I := 0 to RESIDUAL_BANDS - 1 do
+        Result.ResidualGains[I] := AG.GetResidualGain(I);
     end;
     Result.OutputTrim := V.OutputLevel;
   finally

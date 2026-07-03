@@ -23,7 +23,7 @@ uses
   SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine, SedaiInstrumentPreset,
   SedaiFMOperator, SedaiAdditiveGenerator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
-  SedaiFLACEncoder, SedaiFLACDecoder;
+  SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace;
 
 const
   SR    = 44100;
@@ -1605,7 +1605,7 @@ var
   ms: TMemoryStream;
   idx, i, n: Integer;
   gp: TAdditiveParams;
-  tracksOk, humanOk, breathOk: Boolean;
+  tracksOk, humanOk, breathOk, residualOk: Boolean;
   part: TSAFPart;
   buf: array of Single;
   pk: Single;
@@ -1630,6 +1630,9 @@ begin
   authored.Additive.BreathCutoff := 4000;
   authored.Additive.BandDepth := 0.04;
   authored.Additive.BandCutoff := 45;
+  authored.Additive.ResidualLevel := 0.03;
+  authored.Additive.ResidualGains[0] := 0.5;
+  authored.Additive.ResidualGains[3] := 0.8;
   // harmonic 0: 3 breakpoints; harmonic 2: 2 breakpoints; harmonic 1: none.
   SetLength(authored.Additive.Tracks[0].T, 3); SetLength(authored.Additive.Tracks[0].V, 3);
   authored.Additive.Tracks[0].T[0] := 0.0;  authored.Additive.Tracks[0].V[0] := 0.0;
@@ -1654,6 +1657,9 @@ begin
       and (Abs(gp.RateHz - 5.0) < 1e-4);
     breathOk := (Abs(gp.BreathLevel - 0.015) < 1e-4) and (Abs(gp.BreathCutoff - 4000) < 1e-2)
       and (Abs(gp.BandDepth - 0.04) < 1e-4) and (Abs(gp.BandCutoff - 45) < 1e-2);
+    residualOk := (Abs(gp.ResidualLevel - 0.03) < 1e-4)
+      and (Abs(gp.ResidualGains[0] - 0.5) < 1e-4) and (Abs(gp.ResidualGains[3] - 0.8) < 1e-4)
+      and (Abs(gp.ResidualGains[1]) < 1e-6);
     tracksOk := (Length(gp.Tracks[0].T) = 3) and (Length(gp.Tracks[1].T) = 0)
       and (Length(gp.Tracks[2].T) = 2)
       and (Abs(gp.Tracks[0].V[1] - 1.0) < 1e-4) and (Abs(gp.Tracks[0].T[2] - 1.0) < 1e-4)
@@ -1664,6 +1670,8 @@ begin
     Ok('living breath+band round-trip', (idx >= 0) and breathOk,
        Format('breath=%.4f/%.0f band=%.3f/%.0f',
          [gp.BreathLevel, gp.BreathCutoff, gp.BandDepth, gp.BandCutoff]));
+    Ok('living residual round-trip', (idx >= 0) and residualOk,
+       Format('res=%.3f g0=%.2f g3=%.2f', [gp.ResidualLevel, gp.ResidualGains[0], gp.ResidualGains[3]]));
     Ok('living tracks round-trip', (idx >= 0) and tracksOk,
        Format('t0=%d t1=%d t2=%d',
          [Length(gp.Tracks[0].T), Length(gp.Tracks[1].T), Length(gp.Tracks[2].T)]));
@@ -1687,6 +1695,130 @@ begin
     end;
   finally
     reg.Free; reg2.Free; ms.Free;
+  end;
+end;
+
+// Auto-space widener: a dual-mono input becomes a decorrelated stereo image
+// while staying MONO-SAFE (the mono sum is preserved bit-for-bit up to float
+// rounding). Also: Width=0 is a passthrough for a mono source, and Width>0 makes
+// L/R genuinely differ (width was created) without clipping.
+procedure TestAutoSpace;
+const TSR = 48000;
+var
+  sp: TSedaiAutoSpace;
+  ins, outs: array of Single;
+  i, n: Integer;
+  monoDiff, sideEnergy, refEnergy, pk, ph: Double;
+  passDiff: Double;
+begin
+  WriteLn('== auto-space stereo widener (mono-safe) ==');
+  n := TSR;                        // 1 s
+  SetLength(ins, n*2); SetLength(outs, n*2);
+  ph := 0;
+  for i := 0 to n-1 do
+  begin
+    ph := ph + 2*Pi*220.0/TSR;     // 220 Hz dual-mono sine
+    ins[i*2]   := 0.5*Sin(ph);
+    ins[i*2+1] := 0.5*Sin(ph);
+  end;
+
+  sp := TSedaiAutoSpace.Create;
+  try
+    sp.SetSampleRate(TSR);         // exercises the SR-change realloc path
+    sp.Width := 0.6; sp.Size := 0.5; sp.Mix := 1.0;
+    sp.ProcessBlock(@ins[0], @outs[0], n);
+
+    // mono-safety: out L+R == in L+R (=2*mono) every sample, to float epsilon.
+    monoDiff := 0;
+    for i := 0 to n-1 do
+      monoDiff := Max(monoDiff,
+        Abs((outs[i*2] + outs[i*2+1]) - (ins[i*2] + ins[i*2+1])));
+    Ok('mono sum preserved (mono-safe)', monoDiff < 1e-4, Format('maxdiff=%.2e', [monoDiff]));
+
+    // width created: the side signal (L-R) carries real energy vs the mid ref.
+    sideEnergy := 0; refEnergy := 0; pk := 0;
+    for i := 0 to n-1 do
+    begin
+      sideEnergy := sideEnergy + Sqr(outs[i*2] - outs[i*2+1]);
+      refEnergy  := refEnergy  + Sqr(ins[i*2] + ins[i*2+1]);
+      if Abs(outs[i*2])   > pk then pk := Abs(outs[i*2]);
+      if Abs(outs[i*2+1]) > pk then pk := Abs(outs[i*2+1]);
+    end;
+    Ok('width created (decorrelated L/R)',
+       (sideEnergy / (refEnergy + 1e-9) > 0.05) and (pk < 1.5),
+       Format('side/ref=%.3f peak=%.3f', [sideEnergy/(refEnergy+1e-9), pk]));
+
+    // Width=0 is a passthrough for a mono source (side vanishes -> out == in).
+    sp.Width := 0.0; sp.Reset;
+    sp.ProcessBlock(@ins[0], @outs[0], n);
+    passDiff := 0;
+    for i := 0 to n*2-1 do passDiff := Max(passDiff, Abs(outs[i] - ins[i]));
+    Ok('width=0 passthrough (mono src)', passDiff < 1e-6, Format('maxdiff=%.2e', [passDiff]));
+  finally
+    sp.Free;
+  end;
+end;
+
+// Filtered-noise residual (SMS/DDSP stochastic layer): off = silent when there
+// are no partials (the branch is gated, no RNG touched), on = bounded noise, and
+// the per-band gains shape the spectrum (HF-band gains -> more high-frequency
+// content, measured by normalized first-difference energy -- no ear needed).
+procedure TestResidual;
+const TSR = 48000;
+var
+  g: TSedaiAdditiveGenerator;
+  n: Integer;
+  eOff, eLo, eHi, dOff, dLo, dHi, pOff, pLo, pHi: Double;
+  loG, hiG: array[0..RESIDUAL_BANDS-1] of Single;
+  bi: Integer;
+
+  // Render `n` samples of the isolated residual; return total energy, and the
+  // first-difference energy + peak via out params. Fixed seed -> comparable runs.
+  function RenderEnergy(level: Single; const gains: array of Single;
+    out diffE, pk: Double): Double;
+  var j: Integer; e, d: Double; prev, s: Single;
+  begin
+    RandSeed := 9001;
+    g.SetResidual(level, gains);
+    g.NoteOn(69, 1.0);
+    e := 0; d := 0; pk := 0; prev := 0;
+    for j := 0 to n-1 do
+    begin
+      s := g.GenerateSample;
+      e := e + Sqr(s); d := d + Sqr(s - prev);
+      if Abs(s) > pk then pk := Abs(s);
+      prev := s;
+    end;
+    diffE := d; Result := e;
+  end;
+
+begin
+  WriteLn('== filtered-noise residual (SMS stochastic) ==');
+  n := TSR;
+  for bi := 0 to RESIDUAL_BANDS-1 do begin loG[bi] := 0; hiG[bi] := 0; end;
+  loG[0] := 1; loG[1] := 1;                                   // low bands (250/500 Hz)
+  hiG[RESIDUAL_BANDS-2] := 1; hiG[RESIDUAL_BANDS-1] := 1;     // high bands (4k/8k)
+
+  g := TSedaiAdditiveGenerator.Create;
+  try
+    g.SetSampleRate(TSR);
+    g.HarmonicCount := 1; g.SetHarmonicLevel(0, 0.0);   // no partials -> isolate residual
+    g.AmpEnvelope.AttackTime := 0; g.AmpEnvelope.DecayTime := 0;
+    g.AmpEnvelope.SustainLevel := 1; g.AmpEnvelope.ReleaseTime := 0;
+
+    eOff := RenderEnergy(0.0, loG, dOff, pOff);
+    Ok('residual off = silent (no partials)', eOff < 1e-9, Format('energy=%.2e', [eOff]));
+
+    eLo := RenderEnergy(0.2, loG, dLo, pLo);
+    eHi := RenderEnergy(0.2, hiG, dHi, pHi);
+    Ok('residual on adds bounded noise',
+       (eLo > 1e-6) and (eHi > 1e-6) and (pLo < 1.5) and (pHi < 1.5),
+       Format('eLo=%.4f eHi=%.4f pk=%.2f/%.2f', [eLo, eHi, pLo, pHi]));
+    Ok('band gains shape the spectrum (HF>LF)',
+       (dHi/(eHi+1e-12)) > (dLo/(eLo+1e-12)) * 1.5,
+       Format('hfRatio=%.3f lfRatio=%.3f', [dHi/(eHi+1e-12), dLo/(eLo+1e-12)]));
+  finally
+    g.Free;
   end;
 end;
 
@@ -1720,6 +1852,8 @@ begin
   TestMicroInstability;
   TestBandwidth;
   TestLivingPresetRoundTrip;
+  TestAutoSpace;
+  TestResidual;
 
   WriteLn;
   if Failures = 0 then

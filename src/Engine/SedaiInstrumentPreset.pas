@@ -435,6 +435,14 @@ begin
         if p.Additive.BandDepth <> 0 then
           sl.Add(Format('addband=%s,%s',
             [FloatToStr(p.Additive.BandDepth, fs), FloatToStr(p.Additive.BandCutoff, fs)]));
+        // Filtered-noise residual (SMS stochastic): 'addresidual=level,g0..gN'.
+        if p.Additive.ResidualLevel <> 0 then
+        begin
+          trkline := 'addresidual=' + FloatToStr(p.Additive.ResidualLevel, fs);
+          for tp := 0 to High(p.Additive.ResidualGains) do
+            trkline := trkline + ',' + FloatToStr(p.Additive.ResidualGains[tp], fs);
+          sl.Add(trkline);
+        end;
         // Per-harmonic amplitude tracks: one line per harmonic that has one,
         // 'addtrack=k,t0,v0,t1,v1,...' (variable number of breakpoint pairs).
         for op := 0 to High(p.Additive.Tracks) do
@@ -720,6 +728,18 @@ begin
         rest := v;
         cur.Additive.BandDepth := StrToFloatDef(NextTok, 0, fs);
         cur.Additive.BandCutoff := StrToFloatDef(NextTok, 0, fs);
+      end
+      else if k = 'addresidual' then
+      begin
+        cur.HasAdditiveParams := True;
+        rest := v;
+        cur.Additive.ResidualLevel := StrToFloatDef(NextTok, 0, fs);
+        tc := 0;
+        while (rest <> '') and (tc <= High(cur.Additive.ResidualGains)) do
+        begin
+          cur.Additive.ResidualGains[tc] := StrToFloatDef(NextTok, 0, fs);
+          Inc(tc);
+        end;
       end
       else if k = 'addtrack' then
       begin
