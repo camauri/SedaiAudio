@@ -23,7 +23,7 @@ uses
   SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine, SedaiInstrumentPreset,
   SedaiFMOperator, SedaiAdditiveGenerator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
-  SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace;
+  SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator;
 
 const
   SR    = 44100;
@@ -1822,6 +1822,92 @@ begin
   end;
 end;
 
+// Body resonator ("il tubo"): the instrument's modal bank as a decorrelator ->
+// coloured, ringing stereo width that leaves the on-axis (mono) spectrum EXACTLY
+// the dry partials (mono-safe by construction). Objective checks: mono-safety, the
+// sax bank is HF-weighted vs the guitar (family colour), the modes ring after a
+// transient (side tail), and Width=0 is a passthrough.
+procedure TestBodyResonator;
+const TSR = 48000;
+var
+  br: TSedaiBodyResonator;
+  ins, outs: array of Single;
+  i, n, m: Integer;
+  ph, monoDiff, passDiff: Double;
+  saxHF, guitarHF, saxSide, guitarSide, saxPk, guitarPk, tailE, headE: Double;
+
+  // Render body(kind) over a dual-mono noise input; return the side signal's
+  // normalized first-difference energy (an HF proxy), plus total side energy + peak.
+  function NoiseSideHF(kind: TBodyKind; out totSide, peak: Double): Double;
+  var j: Integer; s, prevS, x: Single; dE, e: Double;
+  begin
+    RandSeed := 1234;
+    br.LoadBody(kind); br.Width := 0.6; br.Mix := 1.0; br.Reset;
+    for j := 0 to n-1 do begin x := (Random*2-1)*0.4; ins[j*2] := x; ins[j*2+1] := x; end;
+    br.ProcessBlock(@ins[0], @outs[0], n);
+    dE := 0; e := 0; peak := 0; prevS := 0;
+    for j := 0 to n-1 do
+    begin
+      s := outs[j*2] - outs[j*2+1];
+      e := e + Sqr(s); dE := dE + Sqr(s - prevS); prevS := s;
+      if Abs(outs[j*2]) > peak then peak := Abs(outs[j*2]);
+      if Abs(outs[j*2+1]) > peak then peak := Abs(outs[j*2+1]);
+    end;
+    totSide := e;
+    if e > 1e-12 then Result := dE/e else Result := 0;
+  end;
+
+begin
+  WriteLn('== body resonator ("il tubo": radiation) ==');
+  n := TSR;
+  SetLength(ins, n*2); SetLength(outs, n*2);
+  br := TSedaiBodyResonator.Create;
+  try
+    br.SetSampleRate(TSR);
+
+    // mono-safety on a dual-mono sine (bodySax): on-axis spectrum untouched
+    br.LoadBody(bodySax); br.Width := 0.6; br.Mix := 1.0; br.Reset;
+    ph := 0;
+    for i := 0 to n-1 do begin ph := ph + 2*Pi*330/TSR; ins[i*2]:=0.4*Sin(ph); ins[i*2+1]:=0.4*Sin(ph); end;
+    br.ProcessBlock(@ins[0], @outs[0], n);
+    monoDiff := 0;
+    for i := 0 to n-1 do
+      monoDiff := Max(monoDiff, Abs((outs[i*2]+outs[i*2+1]) - (ins[i*2]+ins[i*2+1])));
+    Ok('mono sum preserved (on-axis untouched)', monoDiff < 1e-4, Format('maxdiff=%.2e',[monoDiff]));
+
+    // family colour: the sax modal bank is HF-weighted, the guitar is LF-weighted
+    saxHF := NoiseSideHF(bodySax, saxSide, saxPk);
+    guitarHF := NoiseSideHF(bodyGuitar, guitarSide, guitarPk);
+    Ok('body creates bounded width', (saxSide > 1e-3) and (saxPk < 1.5) and (guitarPk < 1.5),
+       Format('saxSide=%.3f pk=%.2f/%.2f',[saxSide, saxPk, guitarPk]));
+    Ok('sax body HF-weighted vs guitar', saxHF > guitarHF * 1.3,
+       Format('saxHF=%.3f guitarHF=%.3f',[saxHF, guitarHF]));
+
+    // transient ring: a single dual-mono impulse -> the modes ring in the side AFTER it
+    br.LoadBody(bodyViolin); br.Width := 0.6; br.Mix := 1.0; br.Reset;
+    m := Min(n, 4096);
+    for i := 0 to n-1 do begin ins[i*2]:=0; ins[i*2+1]:=0; end;
+    ins[0] := 0.8; ins[1] := 0.8;
+    br.ProcessBlock(@ins[0], @outs[0], m);
+    headE := 0; tailE := 0;
+    for i := 0 to m-1 do
+      if i < 8 then headE := headE + Sqr(outs[i*2]-outs[i*2+1])
+      else tailE := tailE + Sqr(outs[i*2]-outs[i*2+1]);
+    Ok('body rings on a transient (side tail)', tailE > 1e-4, Format('tailE=%.4f headE=%.4f',[tailE, headE]));
+
+    // Width=0 is a passthrough for a mono source
+    br.LoadBody(bodySax); br.Width := 0.0; br.Mix := 1.0; br.Reset;
+    ph := 0;
+    for i := 0 to n-1 do begin ph := ph + 2*Pi*330/TSR; ins[i*2]:=0.4*Sin(ph); ins[i*2+1]:=0.4*Sin(ph); end;
+    br.ProcessBlock(@ins[0], @outs[0], n);
+    passDiff := 0;
+    for i := 0 to n*2-1 do passDiff := Max(passDiff, Abs(outs[i]-ins[i]));
+    Ok('width=0 passthrough (mono src)', passDiff < 1e-6, Format('maxdiff=%.2e',[passDiff]));
+  finally
+    br.Free;
+  end;
+end;
+
 // ---------------------------------------------------------------------------
 
 begin
@@ -1854,6 +1940,7 @@ begin
   TestLivingPresetRoundTrip;
   TestAutoSpace;
   TestResidual;
+  TestBodyResonator;
 
   WriteLn;
   if Failures = 0 then
