@@ -21,7 +21,7 @@ uses
   SysUtils, Math, Classes,
   SedaiAudioTypes, SedaiAudioBuffer,
   SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine, SedaiInstrumentPreset,
-  SedaiFMOperator, SedaiAdditiveGenerator,
+  SedaiFMOperator, SedaiAdditiveGenerator, SedaiPartialGenerator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
   SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
   SedaiSpatialChain, SedaiConvolver;
@@ -1594,6 +1594,157 @@ begin
   end;
 end;
 
+// Free-partial engine (TSedaiPartialGenerator): the second-generation additive
+// with N free partials, each a (t,freq,amp) track and a continuous-phase
+// oscillator. Verifies: inert at 0 partials; a constant partial plays on pitch at
+// its track amplitude; a moving partial tracks the frequency sweep; a partial is
+// silent outside its born/death range; the analysis-f0 ratio transposes the whole
+// cluster; the sum stays bounded; NoteOff fades out (not a truncation).
+procedure TestPartialGenerator;
+const TSR = 48000;
+var
+  g: TSedaiPartialGenerator;
+  buf: array of Single;
+  i, n: Integer;
+  fEarly, fLate, fPlay: Single;
+  pkBefore, pkIn, pkAfter, pk, pkRel1, pkRel2, ampPk: Single;
+  ts, fs, as_: array[0..1] of Single;
+
+  // rising-edge zero-cross frequency over sample window [a,b]
+  function FreqIn(a, b: Integer): Single;
+  var k, edges: Integer;
+  begin
+    if a < 1 then a := 1;
+    if b > High(buf) then b := High(buf);
+    edges := 0;
+    for k := a to b do
+      if (buf[k-1] <= 0) and (buf[k] > 0) then Inc(edges);
+    if b > a then Result := edges / ((b - a) / TSR) else Result := 0;
+  end;
+
+  function PeakIn(a, b: Integer): Single;
+  var k: Integer;
+  begin
+    if a < 0 then a := 0;
+    if b > High(buf) then b := High(buf);
+    Result := 0;
+    for k := a to b do if Abs(buf[k]) > Result then Result := Abs(buf[k]);
+  end;
+
+  // one constant partial over [0,dur], set on generator g
+  procedure OneConstPartial(freq, amp, dur: Single);
+  begin
+    ts[0] := 0;    ts[1] := dur;
+    fs[0] := freq; fs[1] := freq;
+    as_[0] := amp; as_[1] := amp;
+    g.SetPartialCount(1);
+    g.SetPartial(0, ts, fs, as_);
+  end;
+
+begin
+  WriteLn('== free-partial engine ==');
+  g := TSedaiPartialGenerator.Create;
+  try
+    g.SetSampleRate(TSR);
+
+    // (1) inert at 0 partials -> silence
+    g.ClearPartials;
+    g.NoteOn(69, 1.0);
+    n := Round(0.2*TSR); SetLength(buf, n);
+    for i := 0 to n-1 do buf[i] := g.GenerateSample;
+    Ok('0 partials is silent', PeakIn(0, n-1) < 1e-7, Format('pk=%.2e', [PeakIn(0,n-1)]));
+
+    // (2) constant partial: on pitch (440 Hz) at its track amplitude (0.5)
+    OneConstPartial(440.0, 0.5, 1.0);
+    g.SetAnalysisF0(0);            // no transposition (play at recorded freq)
+    g.NoteOn(69, 1.0);
+    n := Round(1.0*TSR); SetLength(buf, n);
+    for i := 0 to n-1 do buf[i] := g.GenerateSample;
+    fEarly := FreqIn(Round(0.1*TSR), Round(0.9*TSR));
+    ampPk := PeakIn(Round(0.1*TSR), Round(0.9*TSR));
+    Ok('constant partial on pitch', Abs(fEarly - 440) < 2.0, Format('f=%.1f Hz', [fEarly]));
+    Ok('constant partial amplitude', Abs(ampPk - 0.5) < 0.02, Format('pk=%.3f', [ampPk]));
+
+    // (3) moving partial: frequency sweep 200 -> 800 Hz is tracked
+    ts[0] := 0.0;   ts[1] := 1.0;
+    fs[0] := 200.0; fs[1] := 800.0;
+    as_[0] := 0.5;  as_[1] := 0.5;
+    g.SetPartialCount(1);
+    g.SetPartial(0, ts, fs, as_);
+    g.NoteOn(69, 1.0);
+    n := Round(1.0*TSR); SetLength(buf, n);
+    for i := 0 to n-1 do buf[i] := g.GenerateSample;
+    fEarly := FreqIn(Round(0.05*TSR), Round(0.15*TSR));   // ~230 Hz region
+    fLate  := FreqIn(Round(0.85*TSR), Round(0.95*TSR));   // ~740 Hz region
+    Ok('moving partial tracks sweep',
+       (fEarly > 180) and (fEarly < 320) and (fLate > 680) and (fLate < 820)
+       and (fLate > fEarly + 300),
+       Format('early=%.0f late=%.0f', [fEarly, fLate]));
+
+    // (4) born/death: partial spanning [0.3,0.6] is silent before/after, audible in
+    ts[0] := 0.3;   ts[1] := 0.6;
+    fs[0] := 440.0; fs[1] := 440.0;
+    as_[0] := 0.5;  as_[1] := 0.5;
+    g.SetPartialCount(1);
+    g.SetPartial(0, ts, fs, as_);
+    g.NoteOn(69, 1.0);
+    n := Round(0.9*TSR); SetLength(buf, n);
+    for i := 0 to n-1 do buf[i] := g.GenerateSample;
+    pkBefore := PeakIn(0, Round(0.25*TSR));
+    pkIn     := PeakIn(Round(0.35*TSR), Round(0.55*TSR));
+    pkAfter  := PeakIn(Round(0.65*TSR), n-1);
+    Ok('partial born/death range',
+       (pkBefore < 1e-6) and (pkIn > 0.4) and (pkAfter < 1e-6),
+       Format('before=%.2e in=%.3f after=%.2e', [pkBefore, pkIn, pkAfter]));
+
+    // (5) transposition: analysis f0 = 440; play A5 (880 Hz) -> ratio 2 -> a 300 Hz
+    // partial should render at 600 Hz.
+    OneConstPartial(300.0, 0.5, 1.0);
+    g.SetAnalysisF0(440.0);        // A4 reference; A5 note gives ratio 2
+    g.NoteOn(81, 1.0);             // 880 Hz played
+    n := Round(0.5*TSR); SetLength(buf, n);
+    for i := 0 to n-1 do buf[i] := g.GenerateSample;
+    fPlay := FreqIn(Round(0.1*TSR), Round(0.4*TSR));
+    Ok('analysis-f0 transposes cluster', Abs(fPlay - 600) < 4.0, Format('f=%.1f Hz', [fPlay]));
+
+    // (6) sum bounded: 8 partials, no runaway / NaN
+    g.SetAnalysisF0(0);
+    g.SetPartialCount(8);
+    for i := 0 to 7 do
+    begin
+      ts[0] := 0.0; ts[1] := 1.0;
+      fs[0] := 200 + i*130; fs[1] := 200 + i*130;
+      as_[0] := 0.1; as_[1] := 0.1;
+      g.SetPartial(i, ts, fs, as_);
+    end;
+    g.NoteOn(69, 1.0);
+    n := Round(0.5*TSR); SetLength(buf, n);
+    for i := 0 to n-1 do buf[i] := g.GenerateSample;
+    pk := PeakIn(0, n-1);
+    Ok('summed partials bounded', (pk > 0.05) and (pk < 1.0) and (pk = pk),
+       Format('pk=%.3f', [pk]));
+
+    // (7) clean release: after NoteOff the output fades (decays), not truncated
+    OneConstPartial(440.0, 0.5, 5.0);   // long-lived partial so only release ends it
+    g.SetAnalysisF0(0);
+    g.SetRelease(0.12);
+    g.NoteOn(69, 1.0);
+    n := Round(0.2*TSR); SetLength(buf, n);
+    for i := 0 to n-1 do buf[i] := g.GenerateSample;    // sustain to 0.2 s
+    g.NoteOff;
+    n := Round(0.4*TSR); SetLength(buf, n);
+    for i := 0 to n-1 do buf[i] := g.GenerateSample;    // capture the release
+    pkRel1 := PeakIn(Round(0.00*TSR), Round(0.02*TSR));  // just after NoteOff
+    pkRel2 := PeakIn(Round(0.10*TSR), Round(0.12*TSR));  // ~one release-time later
+    pkAfter := PeakIn(Round(0.30*TSR), n-1);             // well past the fade
+    Ok('release fades out (no truncation)',
+       (pkRel1 > 0.4) and (pkRel2 < pkRel1 * 0.6) and (pkAfter < 1e-3),
+       Format('t0=%.3f tR=%.3f end=%.2e', [pkRel1, pkRel2, pkAfter]));
+  finally
+    g.Free;
+  end;
+end;
+
 // The LIVING additive preset (per-harmonic amplitude tracks + micro-instability
 // + breath + natural release + RMS-matched trim) survives a .safinst round-trip:
 // the naturalness layer is carried in the file, not just in the analyzer harness.
@@ -2112,6 +2263,7 @@ begin
   TestHarmonicTrack;
   TestMicroInstability;
   TestBandwidth;
+  TestPartialGenerator;
   TestLivingPresetRoundTrip;
   TestAutoSpace;
   TestResidual;
