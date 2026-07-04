@@ -17,7 +17,8 @@ uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiSignalNode,
   SedaiOscillator, SedaiEnvelope, SedaiLFO, SedaiFilter,
   SedaiFMOperator, SedaiWavetableGenerator, SedaiAdditiveGenerator,
-  SedaiSamplePlayer, SedaiKarplusGenerator, SedaiModulationMatrix;
+  SedaiPartialGenerator, SedaiSamplePlayer, SedaiKarplusGenerator,
+  SedaiModulationMatrix;
 
 const
   MAX_OSCILLATORS = 3;
@@ -29,7 +30,7 @@ type
   // a classic oscillator stack, an FM synth, or a wavetable generator. The rest
   // of the chain (envelopes, filter, amp, pan) is shared across all source types.
   TVoiceSourceType = (vstOscillators, vstFM, vstWavetable, vstAdditive, vstSample,
-    vstKarplus);
+    vstKarplus, vstPartial);
 
   // How the three oscillators combine in the vstOscillators source.
   TVoiceOscMode = (
@@ -48,6 +49,7 @@ type
     FFMSynth: TSedaiFMSynth;        // created on demand when SourceType = vstFM
     FWTGenerator: TSedaiWavetableGenerator;  // created on demand for vstWavetable
     FAdditive: TSedaiAdditiveGenerator;      // created on demand for vstAdditive
+    FPartial: TSedaiPartialGenerator;        // created on demand for vstPartial
     FSamplePlayer: TSedaiSamplePlayer;       // created on demand for vstSample
     FKarplus: TSedaiKarplusGenerator;        // created on demand for vstKarplus
     FNote: Byte;                  // MIDI note number
@@ -238,6 +240,7 @@ type
     function GetFMSynth: TSedaiFMSynth;
     function GetWavetableGenerator: TSedaiWavetableGenerator;
     function GetAdditiveGenerator: TSedaiAdditiveGenerator;
+    function GetPartialGenerator: TSedaiPartialGenerator;
     function GetSamplePlayer: TSedaiSamplePlayer;
     function GetKarplusGenerator: TSedaiKarplusGenerator;
 
@@ -316,6 +319,7 @@ begin
   FFMSynth := nil;
   FWTGenerator := nil;
   FAdditive := nil;
+  FPartial := nil;
   FSamplePlayer := nil;
   FKarplus := nil;
   FNote := 60;  // Middle C
@@ -411,6 +415,7 @@ begin
   FFMSynth.Free;        // nil-safe
   FWTGenerator.Free;    // nil-safe
   FAdditive.Free;       // nil-safe
+  FPartial.Free;        // nil-safe
   FSamplePlayer.Free;   // nil-safe (does not own the sample buffer)
   FKarplus.Free;        // nil-safe
   FModMatrix.Free;
@@ -441,6 +446,7 @@ begin
   if Assigned(FFMSynth) then FFMSynth.Reset;
   if Assigned(FWTGenerator) then FWTGenerator.Reset;
   if Assigned(FAdditive) then FAdditive.Kill;   // resets envelope + phases
+  if Assigned(FPartial) then FPartial.Kill;     // resets phases + release
   if Assigned(FSamplePlayer) then FSamplePlayer.Stop;
   if Assigned(FKarplus) then FKarplus.Reset;
   FModMatrix.Reset;          // clears source/dest state, keeps the routings
@@ -616,6 +622,10 @@ begin
   if (FSourceType = vstAdditive) and Assigned(FAdditive) then
     FAdditive.NoteOn(ANote, AVelocity);
 
+  // Free-partial source runs its own breakpoint tracks + clean release.
+  if (FSourceType = vstPartial) and Assigned(FPartial) then
+    FPartial.NoteOn(ANote, AVelocity);
+
   // Sample source: pitch from the current frequency, then (re)start playback.
   if (FSourceType = vstSample) and Assigned(FSamplePlayer) then
   begin
@@ -649,6 +659,9 @@ begin
 
   if (FSourceType = vstAdditive) and Assigned(FAdditive) then
     FAdditive.NoteOff;
+
+  if (FSourceType = vstPartial) and Assigned(FPartial) then
+    FPartial.NoteOff;
 
   if (FSourceType = vstKarplus) and Assigned(FKarplus) then
     FKarplus.NoteOff;
@@ -743,6 +756,17 @@ begin
       FAdditive.SetSampleRate(FSampleRate);
   end;
   Result := FAdditive;
+end;
+
+function TSedaiVoice.GetPartialGenerator: TSedaiPartialGenerator;
+begin
+  if not Assigned(FPartial) then
+  begin
+    FPartial := TSedaiPartialGenerator.Create;
+    if FSampleRate > 0 then
+      FPartial.SetSampleRate(FSampleRate);
+  end;
+  Result := FPartial;
 end;
 
 function TSedaiVoice.GetSamplePlayer: TSedaiSamplePlayer;
@@ -909,6 +933,23 @@ begin
           SourceOut := 0.0;
         Finished := (not Assigned(FAdditive)) or
                     ((not FAdditive.GateOpen) and (not FAdditive.Releasing));
+        UseAmpEnv := False;
+      end;
+    vstPartial:
+      begin
+        // Free-partial (McAulay-Quatieri) source: runs its own breakpoint
+        // amplitude tracks + clean release, so the shared amp envelope is not
+        // applied. Pitch is driven from the voice frequency; the generator
+        // transposes the whole partial cluster by FCurrentFrequency/AnalysisF0.
+        if Assigned(FPartial) then
+        begin
+          FPartial.Frequency := FCurrentFrequency * PitchFactor;
+          SourceOut := FPartial.GenerateSample;
+        end
+        else
+          SourceOut := 0.0;
+        Finished := (not Assigned(FPartial)) or
+                    ((not FPartial.GateOpen) and (not FPartial.Releasing));
         UseAmpEnv := False;
       end;
     vstSample:

@@ -21,13 +21,14 @@ interface
 uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer,
   SedaiOscillator, SedaiFilter, SedaiFMOperator, SedaiWavetableGenerator,
-  SedaiAdditiveGenerator, SedaiSamplePlayer, SedaiKarplusGenerator,
-  SedaiEnvelope, SedaiVoice, SedaiVoiceManager, SedaiModulationMatrix;
+  SedaiAdditiveGenerator, SedaiPartialGenerator, SedaiSamplePlayer,
+  SedaiKarplusGenerator, SedaiEnvelope, SedaiVoice, SedaiVoiceManager,
+  SedaiModulationMatrix;
 
 type
   // Which generator the part's voices use. Mirrors TVoiceSourceType but is the
   // public, instrument-level selector exposed by the Part.
-  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample, psKarplus, psSID);
+  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample, psKarplus, psSID, psPartial);
 
   // Optional "common layer" overrides applied on top of the preset's own values
   // (envelope / filter / output level). Each Override* flag gates one group; all
@@ -130,6 +131,27 @@ type
     Tracks: array[0..ADDITIVE_MAX_HARMONICS-1] of TAdditiveTrack;  // per-harmonic amp tracks
   end;
 
+  // One FREE partial's trajectory: parallel breakpoint arrays of (time in s,
+  // frequency in Hz, linear amplitude). "Free" = the frequency is arbitrary and
+  // time-varying, NOT locked to a k*f0 grid (contrast TAdditiveTrack, which is a
+  // per-harmonic amplitude track over the fixed harmonic series). This is the
+  // McAulay-Quatieri sinusoidal model, as captured e.g. from a SPEAR analysis.
+  TPartialTrack = record
+    T, F, A: array of Single;   // ascending in T; a segment needs >= 2 points
+  end;
+
+  // Full FREE-PARTIAL parameter block, driving TSedaiPartialGenerator. It is the
+  // "second-generation" additive: N partials with independent, drifting
+  // frequencies reproduce the inharmonic "flesh" (reed noise, air, drifting HF)
+  // that a pure harmonic additive discards. Empty (PartialCount 0) = inert/silent.
+  TPartialParams = record
+    PartialCount: Integer;      // number of active partials (= Length(Partials))
+    AnalysisF0: Single;         // reference f0 for transposition; 0 = play as recorded
+    Release: Single;            // clean-release fade time (s); 0 = immediate cut
+    OutputTrim: Single;         // voice output level (loudness matched upstream)
+    Partials: array of TPartialTrack;
+  end;
+
   // Full KARPLUS-STRONG parameter block — string damping/blend + the gating
   // amp envelope.
   TKarplusParams = record
@@ -225,6 +247,8 @@ type
     FWavetableParams: TWavetableParams;
     FHasAdditiveParams: Boolean;
     FAdditiveParams: TAdditiveParams;
+    FHasPartialParams: Boolean;
+    FPartialParams: TPartialParams;
     FHasKarplusParams: Boolean;
     FKarplusParams: TKarplusParams;
 
@@ -317,6 +341,8 @@ type
     procedure ClearWavetableParams;
     procedure SetAdditiveParams(const AParams: TAdditiveParams);
     procedure ClearAdditiveParams;
+    procedure SetPartialParams(const AParams: TPartialParams);
+    procedure ClearPartialParams;
     procedure SetKarplusParams(const AParams: TKarplusParams);
     procedure ClearKarplusParams;
 
@@ -372,6 +398,10 @@ procedure ConfigureWavetableVoiceFromParams(AVoice: TSedaiVoice; const AParams: 
 function ExplodeWavetableParams(const APresetKey: string): TWavetableParams;
 procedure ConfigureAdditiveVoiceFromParams(AVoice: TSedaiVoice; const AParams: TAdditiveParams);
 function ExplodeAdditiveParams(const APresetKey: string): TAdditiveParams;
+// Free-partial (McAulay-Quatieri) configurator: loads the partial cluster into
+// the voice's TSedaiPartialGenerator. There is no named-preset counterpart
+// (partials come from sample analysis, not built-ins), so no Explode.
+procedure ConfigurePartialVoiceFromParams(AVoice: TSedaiVoice; const AParams: TPartialParams);
 procedure ConfigureKarplusVoiceFromParams(AVoice: TSedaiVoice; const AParams: TKarplusParams);
 function ExplodeKarplusParams(const APresetKey: string): TKarplusParams;
 
@@ -842,6 +872,27 @@ begin
   end;
 end;
 
+// ---- FREE PARTIALS ----------------------------------------------------------
+
+procedure ConfigurePartialVoiceFromParams(AVoice: TSedaiVoice; const AParams: TPartialParams);
+var
+  PG: TSedaiPartialGenerator;
+  I, Count: Integer;
+begin
+  AVoice.SetSourceType(vstPartial);
+  PG := AVoice.GetPartialGenerator;
+  if PG = nil then Exit;
+  Count := Length(AParams.Partials);
+  PG.SetAnalysisF0(AParams.AnalysisF0);
+  PG.SetRelease(AParams.Release);
+  PG.SetPartialCount(Count);
+  for I := 0 to Count - 1 do
+    PG.SetPartial(I, AParams.Partials[I].T, AParams.Partials[I].F, AParams.Partials[I].A);
+  // Amplitude lives in the partial tracks (no ADSR on top); loudness is matched
+  // upstream via OutputTrim, exactly like the additive living path.
+  AVoice.OutputLevel := AParams.OutputTrim;
+end;
+
 // ---- KARPLUS-STRONG ---------------------------------------------------------
 
 procedure ConfigureKarplusVoiceFromParams(AVoice: TSedaiVoice; const AParams: TKarplusParams);
@@ -1206,6 +1257,11 @@ begin
         ConfigureAdditiveVoiceFromParams(AVoice, FAdditiveParams)
       else
         ConfigureAdditiveVoice(AVoice, FPreset);
+    psPartial:
+      // Free partials only come from a parameter block (sample analysis); with
+      // no block the voice stays inert (0 partials = silence), which is the
+      // documented opt-in behaviour of TSedaiPartialGenerator.
+      ConfigurePartialVoiceFromParams(AVoice, FPartialParams);
     psKarplus:
       if FHasKarplusParams then
         ConfigureKarplusVoiceFromParams(AVoice, FKarplusParams)
@@ -1380,6 +1436,22 @@ begin
   if not FHasAdditiveParams then Exit;
   FHasAdditiveParams := False;
   FAdditiveParams := Default(TAdditiveParams);   // NOT FillChar: Tracks[] is managed
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.SetPartialParams(const AParams: TPartialParams);
+begin
+  FPartialParams := AParams;
+  FPartialParams.PartialCount := Length(AParams.Partials);   // keep count authoritative
+  FHasPartialParams := True;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.ClearPartialParams;
+begin
+  if not FHasPartialParams then Exit;
+  FHasPartialParams := False;
+  FPartialParams := Default(TPartialParams);   // NOT FillChar: Partials[] is managed
   FManager.ConfigureAllVoices(@ApplyToVoice);
 end;
 

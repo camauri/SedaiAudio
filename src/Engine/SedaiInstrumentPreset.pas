@@ -53,6 +53,8 @@ type
     Wavetable: TWavetableParams;
     HasAdditiveParams: Boolean;
     Additive: TAdditiveParams;
+    HasPartialParams: Boolean;
+    Partial: TPartialParams;
     HasKarplusParams: Boolean;
     Karplus: TKarplusParams;
     Macros: TMacroArray;          // composer quick-controls authored on the preset
@@ -271,6 +273,10 @@ begin
     APart.SetAdditiveParams(FPresets[AIndex].Additive)
   else
     APart.ClearAdditiveParams;
+  if (FPresets[AIndex].Technique = psPartial) and FPresets[AIndex].HasPartialParams then
+    APart.SetPartialParams(FPresets[AIndex].Partial)
+  else
+    APart.ClearPartialParams;
   if (FPresets[AIndex].Technique = psKarplus) and FPresets[AIndex].HasKarplusParams then
     APart.SetKarplusParams(FPresets[AIndex].Karplus)
   else
@@ -305,6 +311,7 @@ begin
     psSample: Result := 'psSample';
     psKarplus: Result := 'psKarplus';
     psSID: Result := 'psSID';
+    psPartial: Result := 'psPartial';
   else
     Result := 'psClassic';
   end;
@@ -318,6 +325,7 @@ begin
   else if SameText(AName, 'psSample') then Result := psSample
   else if SameText(AName, 'psKarplus') then Result := psKarplus
   else if SameText(AName, 'psSID') then Result := psSID
+  else if SameText(AName, 'psPartial') then Result := psPartial
   else Result := psClassic;
 end;
 
@@ -455,6 +463,26 @@ begin
                 FloatToStr(p.Additive.Tracks[op].V[tp], fs);
             sl.Add(trkline);
           end;
+      end;
+      // Author side: full FREE-PARTIAL parameter block. Header (count / analysis
+      // f0 / release / trim) then one 'addpartial=k,t0,f0,a0,t1,f1,a1,...' line
+      // per partial (variable number of time/freq/amp triples).
+      if (p.Technique = psPartial) and p.HasPartialParams then
+      begin
+        sl.Add(Format('partialcount=%d', [Length(p.Partial.Partials)]));
+        sl.Add('partialf0=' + FloatToStr(p.Partial.AnalysisF0, fs));
+        sl.Add('partialrelease=' + FloatToStr(p.Partial.Release, fs));
+        sl.Add('partialtrim=' + FloatToStr(p.Partial.OutputTrim, fs));
+        for op := 0 to High(p.Partial.Partials) do
+        begin
+          trkline := Format('addpartial=%d', [op]);
+          for tp := 0 to High(p.Partial.Partials[op].T) do
+            trkline := trkline + ',' +
+              FloatToStr(p.Partial.Partials[op].T[tp], fs) + ',' +
+              FloatToStr(p.Partial.Partials[op].F[tp], fs) + ',' +
+              FloatToStr(p.Partial.Partials[op].A[tp], fs);
+          sl.Add(trkline);
+        end;
       end;
       // Author side: full KARPLUS parameter block.
       if (p.Technique = psKarplus) and p.HasKarplusParams then
@@ -760,6 +788,64 @@ begin
             SetLength(cur.Additive.Tracks[opIdx].V, tc + 1);
             cur.Additive.Tracks[opIdx].T[tc] := StrToFloatDef(ts, 0, fs);
             cur.Additive.Tracks[opIdx].V[tc] := StrToFloatDef(vs, 0, fs);
+            Inc(tc);
+          end;
+        end;
+      end
+      // --- FREE-PARTIAL block ---
+      else if k = 'partialcount' then
+      begin
+        cur.HasPartialParams := True;
+        tc := StrToIntDef(v, 0);            // NOT 'n': that is the preset counter
+        if tc < 0 then tc := 0;
+        SetLength(cur.Partial.Partials, tc);
+        cur.Partial.PartialCount := tc;
+      end
+      else if k = 'partialf0' then
+      begin
+        cur.HasPartialParams := True;
+        cur.Partial.AnalysisF0 := StrToFloatDef(v, 0, fs);
+      end
+      else if k = 'partialrelease' then
+      begin
+        cur.HasPartialParams := True;
+        cur.Partial.Release := StrToFloatDef(v, 0.12, fs);
+      end
+      else if k = 'partialtrim' then
+      begin
+        cur.HasPartialParams := True;
+        cur.Partial.OutputTrim := StrToFloatDef(v, 1.0, fs);
+      end
+      else if k = 'addpartial' then
+      begin
+        cur.HasPartialParams := True;
+        rest := v;
+        opIdx := StrToIntDef(NextTok, -1);
+        if opIdx >= 0 then
+        begin
+          // grow on demand so 'addpartial' is robust even without a partialcount
+          if opIdx > High(cur.Partial.Partials) then
+          begin
+            SetLength(cur.Partial.Partials, opIdx + 1);
+            cur.Partial.PartialCount := Length(cur.Partial.Partials);
+          end;
+          tc := 0;
+          SetLength(cur.Partial.Partials[opIdx].T, 0);
+          SetLength(cur.Partial.Partials[opIdx].F, 0);
+          SetLength(cur.Partial.Partials[opIdx].A, 0);
+          // breakpoints arrive as (t, freq, amp) triples
+          while rest <> '' do
+          begin
+            ts := NextTok;
+            if rest = '' then Break;   // need freq+amp to complete the triple
+            vs := NextTok;
+            if rest = '' then Break;
+            SetLength(cur.Partial.Partials[opIdx].T, tc + 1);
+            SetLength(cur.Partial.Partials[opIdx].F, tc + 1);
+            SetLength(cur.Partial.Partials[opIdx].A, tc + 1);
+            cur.Partial.Partials[opIdx].T[tc] := StrToFloatDef(ts, 0, fs);
+            cur.Partial.Partials[opIdx].F[tc] := StrToFloatDef(vs, 0, fs);
+            cur.Partial.Partials[opIdx].A[tc] := StrToFloatDef(NextTok, 0, fs);
             Inc(tc);
           end;
         end;

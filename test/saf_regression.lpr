@@ -1850,6 +1850,100 @@ begin
   end;
 end;
 
+// Free-partial preset .safinst round-trip: a psPartial preset carrying N free
+// partials (each a breakpoint track of time/freq/amp) survives save->load with
+// its trajectories intact, and drives an audible, bounded voice through a Part.
+procedure TestPartialPreset;
+const TSR = 48000;
+var
+  authored: TInstrumentPreset;
+  reg, reg2: TSedaiInstrumentRegistry;
+  ms: TMemoryStream;
+  idx, i, n: Integer;
+  gp: TPartialParams;
+  headerOk, p0Ok, p1Ok: Boolean;
+  part: TSAFPart;
+  buf: array of Single;
+  pk: Single;
+begin
+  WriteLn('== free-partial preset .safinst round-trip ==');
+  authored := Default(TInstrumentPreset);
+  authored.Name := 'RT Partial'; authored.Category := icWind;
+  authored.Technique := psPartial; authored.PresetKey := '';
+  authored.Polyphony := 4;
+  authored.Common.OverrideFilter := True; authored.Common.FilterEnabled := False;
+  authored.HasPartialParams := True;
+  authored.Partial.AnalysisF0 := 440.0;
+  authored.Partial.Release := 0.15;
+  authored.Partial.OutputTrim := 0.5;
+  SetLength(authored.Partial.Partials, 2);
+  // partial 0: steady fundamental at 440 Hz over [0, 1.0], 3 breakpoints.
+  SetLength(authored.Partial.Partials[0].T, 3);
+  SetLength(authored.Partial.Partials[0].F, 3);
+  SetLength(authored.Partial.Partials[0].A, 3);
+  authored.Partial.Partials[0].T[0] := 0.0;  authored.Partial.Partials[0].F[0] := 440.0; authored.Partial.Partials[0].A[0] := 0.0;
+  authored.Partial.Partials[0].T[1] := 0.05; authored.Partial.Partials[0].F[1] := 440.0; authored.Partial.Partials[0].A[1] := 0.6;
+  authored.Partial.Partials[0].T[2] := 1.0;  authored.Partial.Partials[0].F[2] := 442.0; authored.Partial.Partials[0].A[2] := 0.4;
+  // partial 1: an INHARMONIC upper partial, born late (0.1 s) and dying at 0.7 s.
+  SetLength(authored.Partial.Partials[1].T, 2);
+  SetLength(authored.Partial.Partials[1].F, 2);
+  SetLength(authored.Partial.Partials[1].A, 2);
+  authored.Partial.Partials[1].T[0] := 0.1; authored.Partial.Partials[1].F[0] := 973.0; authored.Partial.Partials[1].A[0] := 0.2;
+  authored.Partial.Partials[1].T[1] := 0.7; authored.Partial.Partials[1].F[1] := 981.0; authored.Partial.Partials[1].A[1] := 0.1;
+
+  ms := TMemoryStream.Create;
+  reg := TSedaiInstrumentRegistry.CreateEmpty;
+  reg2 := TSedaiInstrumentRegistry.CreateEmpty;
+  try
+    reg.AddPreset(authored);
+    reg.SaveToStream(ms, 'Partials');
+    ms.Position := 0;
+    reg2.LoadFromStream(ms);
+    idx := reg2.FindByName('RT Partial');
+    if idx >= 0 then gp := reg2.Get(idx).Partial else gp := Default(TPartialParams);
+
+    headerOk := (Length(gp.Partials) = 2)
+      and (Abs(gp.AnalysisF0 - 440.0) < 1e-3) and (Abs(gp.Release - 0.15) < 1e-4)
+      and (Abs(gp.OutputTrim - 0.5) < 1e-4);
+    p0Ok := (Length(gp.Partials) = 2) and (Length(gp.Partials[0].T) = 3)
+      and (Abs(gp.Partials[0].F[2] - 442.0) < 1e-3)
+      and (Abs(gp.Partials[0].A[1] - 0.6) < 1e-4)
+      and (Abs(gp.Partials[0].T[2] - 1.0) < 1e-4);
+    p1Ok := (Length(gp.Partials) = 2) and (Length(gp.Partials[1].T) = 2)
+      and (Abs(gp.Partials[1].T[0] - 0.1) < 1e-4)
+      and (Abs(gp.Partials[1].F[0] - 973.0) < 1e-3)
+      and (Abs(gp.Partials[1].A[1] - 0.1) < 1e-4);
+
+    Ok('partial preset header round-trip', (idx >= 0) and headerOk,
+       Format('n=%d f0=%.2f rel=%.3f trim=%.3f',
+         [Length(gp.Partials), gp.AnalysisF0, gp.Release, gp.OutputTrim]));
+    Ok('partial 0 track round-trip', (idx >= 0) and p0Ok,
+       Format('bp=%d f2=%.2f a1=%.3f', [Length(gp.Partials[0].T), gp.Partials[0].F[2], gp.Partials[0].A[1]]));
+    Ok('partial 1 (inharmonic, born/death) round-trip', (idx >= 0) and p1Ok,
+       Format('bp=%d t0=%.3f f0=%.2f', [Length(gp.Partials[1].T), gp.Partials[1].T[0], gp.Partials[1].F[0]]));
+
+    // Loads into a Part and renders audible + bounded. NoteOn(69) = 440 Hz, so
+    // the transposition ratio is 1 and the partials play at their recorded pitch.
+    part := TSAFPart.Create;
+    try
+      part.SetSampleRate(TSR);
+      if idx >= 0 then part.SetInstrument(psPartial, reg2.Get(idx).PresetKey);
+      part.SetPartialParams(gp);
+      n := 8192; SetLength(buf, n*2);
+      FillChar(buf[0], n*2*SizeOf(Single), 0);
+      part.NoteOn(69, 1.0);
+      part.RenderBlock(@buf[0], n);
+      pk := 0; for i := 0 to n*2-1 do if Abs(buf[i]) > pk then pk := Abs(buf[i]);
+      Ok('partial preset renders bounded', (idx >= 0) and (pk > 0.001) and (pk < 1.5),
+         Format('peak=%.3f', [pk]));
+    finally
+      part.Free;
+    end;
+  finally
+    reg.Free; reg2.Free; ms.Free;
+  end;
+end;
+
 // Auto-space widener: a dual-mono input becomes a decorrelated stereo image
 // while staying MONO-SAFE (the mono sum is preserved bit-for-bit up to float
 // rounding). Also: Width=0 is a passthrough for a mono source, and Width>0 makes
@@ -2265,6 +2359,7 @@ begin
   TestBandwidth;
   TestPartialGenerator;
   TestLivingPresetRoundTrip;
+  TestPartialPreset;
   TestAutoSpace;
   TestResidual;
   TestBodyResonator;
