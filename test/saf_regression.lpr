@@ -1669,6 +1669,24 @@ begin
     for i := Round(0.5*TSR) to n - 1 do
       if Abs(buf[i]) > pkSus then pkSus := Abs(buf[i]);
     Ok('reed note-off decays to silence', pkSus < 0.005, Format('tail peak=%.4f', [pkSus]));
+
+    // (6) CONICAL (faux-cone sax): STK Saxofony reed (slope +0.3) + breath noise;
+    // full harmonic series => 2*f0 is a STRONG harmonic (unlike the clarinet).
+    g.Kill;
+    g.SetReed(0.7, 0.3);
+    g.SetBreath(0.6, 0.2, 0, 5);
+    g.SetBoreType(rbConical, 0.2);
+    g.NoteOn(60, 1.0);
+    for i := 0 to n - 1 do buf[i] := g.GenerateSample;
+    pkSus := 0;
+    for i := Round(0.4*TSR) to Round(0.9*TSR) do
+      if Abs(buf[i]) > pkSus then pkSus := Abs(buf[i]);
+    Ok('reed conical self-oscillates + bounded', (pkSus > 0.01) and (pkSus < 1.0),
+       Format('peak=%.3f', [pkSus]));
+    e1 := MagAt(Round(0.4*TSR), Round(0.9*TSR), 523.25);   // 2*f0
+    e2 := MagAt(Round(0.4*TSR), Round(0.9*TSR), 261.63);   // f0
+    Ok('reed conical has even harmonics (2f0 present)', e1 > 0.2*e2,
+       Format('|2f0|=%.3f |f0|=%.3f', [e1, e2]));
   finally
     g.Free;
   end;
