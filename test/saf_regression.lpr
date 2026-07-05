@@ -21,7 +21,7 @@ uses
   SysUtils, Math, Classes,
   SedaiAudioTypes, SedaiAudioBuffer,
   SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine, SedaiInstrumentPreset,
-  SedaiFMOperator, SedaiAdditiveGenerator, SedaiPartialGenerator,
+  SedaiFMOperator, SedaiAdditiveGenerator, SedaiPartialGenerator, SedaiReedGenerator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
   SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
   SedaiSpatialChain, SedaiConvolver;
@@ -1594,6 +1594,86 @@ begin
   end;
 end;
 
+// Waveguide single-reed generator (TSedaiReedGenerator): a self-oscillating
+// physical model (nonlinear reed + bore feedback loop). Verifies: silent before
+// note-on; self-oscillates + bounded after; the self-oscillation frequency tracks
+// the played note (zero-cross count ~ f0); cylindrical bore is odd-harmonic
+// (near-zero energy at 2*f0); note-off decays to silence.
+procedure TestReedGenerator;
+const TSR = 48000;
+var
+  g: TSedaiReedGenerator;
+  buf: array of Single;
+  i, n, zc: Integer;
+  pkPre, pkSus, fEst, e1, e2: Single;
+
+  // magnitude at frequency f (Goertzel over the sustain window)
+  function MagAt(a, b: Integer; f: Single): Single;
+  var k: Integer; w, c, s, q0, q1, q2: Single;
+  begin
+    w := 2*Pi*f/TSR; c := 2*Cos(w); s := 0; q1 := 0; q2 := 0;
+    for k := a to b do begin q0 := c*q1 - q2 + buf[k]; q2 := q1; q1 := q0; end;
+    Result := Sqrt(q1*q1 + q2*q2 - c*q1*q2);
+  end;
+begin
+  WriteLn('== waveguide single-reed engine ==');
+  g := TSedaiReedGenerator.Create;
+  try
+    g.SetSampleRate(TSR);
+    g.SetReed(0.7, -0.44);
+    g.SetBreath(0.55, 0, 0, 5);
+    g.SetReflection(0.95);
+    g.SetBoreType(rbCylindrical, 0);
+
+    n := TSR;                          // 1 s
+    SetLength(buf, n);
+
+    // (1) silent before note-on
+    pkPre := 0;
+    for i := 0 to 99 do
+    begin
+      buf[i] := g.GenerateSample;
+      if Abs(buf[i]) > pkPre then pkPre := Abs(buf[i]);
+    end;
+    Ok('reed silent before note-on', pkPre = 0, Format('pk=%.4f', [pkPre]));
+
+    // render a full note
+    g.NoteOn(60, 1.0);                 // C4 = 261.63 Hz
+    for i := 0 to n - 1 do buf[i] := g.GenerateSample;
+
+    // (2) oscillates + bounded
+    pkSus := 0;
+    for i := Round(0.4*TSR) to Round(0.9*TSR) do
+      if Abs(buf[i]) > pkSus then pkSus := Abs(buf[i]);
+    Ok('reed self-oscillates + bounded', (pkSus > 0.01) and (pkSus < 1.0),
+       Format('peak=%.3f', [pkSus]));
+
+    // (3) frequency ~ the played note (zero crossings over 0.4..0.9s)
+    zc := 0;
+    for i := Round(0.4*TSR)+1 to Round(0.9*TSR) do
+      if (buf[i-1] <= 0) and (buf[i] > 0) then Inc(zc);
+    fEst := zc / 0.5;
+    Ok('reed pitch tracks note (C4~261.6)', (fEst > 250) and (fEst < 274),
+       Format('f~%.1f Hz', [fEst]));
+
+    // (4) cylindrical => odd harmonics: 2*f0 much weaker than 3*f0
+    e1 := MagAt(Round(0.4*TSR), Round(0.9*TSR), 523.25);   // 2*f0
+    e2 := MagAt(Round(0.4*TSR), Round(0.9*TSR), 784.88);   // 3*f0
+    Ok('reed cylindrical is odd-harmonic (2f0 << 3f0)', e1 < 0.25*e2,
+       Format('|2f0|=%.3f |3f0|=%.3f', [e1, e2]));
+
+    // (5) note-off decays to silence
+    g.NoteOff;
+    for i := 0 to n - 1 do buf[i] := g.GenerateSample;
+    pkSus := 0;
+    for i := Round(0.5*TSR) to n - 1 do
+      if Abs(buf[i]) > pkSus then pkSus := Abs(buf[i]);
+    Ok('reed note-off decays to silence', pkSus < 0.005, Format('tail peak=%.4f', [pkSus]));
+  finally
+    g.Free;
+  end;
+end;
+
 // Free-partial engine (TSedaiPartialGenerator): the second-generation additive
 // with N free partials, each a (t,freq,amp) track and a continuous-phase
 // oscillator. Verifies: inert at 0 partials; a constant partial plays on pitch at
@@ -2357,6 +2437,7 @@ begin
   TestHarmonicTrack;
   TestMicroInstability;
   TestBandwidth;
+  TestReedGenerator;
   TestPartialGenerator;
   TestLivingPresetRoundTrip;
   TestPartialPreset;
