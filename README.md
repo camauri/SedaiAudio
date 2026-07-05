@@ -213,8 +213,9 @@ TSAFEngine
 
 - **`TSedaiVoice`** is a *universal* voice: a single voice can be an oscillator stack,
   an FM synth, a wavetable generator, an additive generator, a sampler, a
-  Karplus-Strong string, a free-partial engine, or a waveguide reed
-  (`TVoiceSourceType` — eight source types), with a shared
+  Karplus-Strong string, a free-partial engine, a waveguide reed, a bowed
+  string, or a modal-percussion bank
+  (`TVoiceSourceType` — ten source types), with a shared
   envelope / filter / amp / pan chain and a per-voice **modulation matrix**
   (`TSedaiModulationMatrix`) routing envelopes / LFOs (unlimited) / velocity / key-track
   to pitch, cutoff and amplitude. Oscillators can be combined (mix / ring-mod / sync)
@@ -710,8 +711,9 @@ SAF ships ready-to-play instruments as **`.safinst`** text libraries under
 | Library | Contents | Technique | Licence |
 |---------|----------|-----------|---------|
 | `builtin.safinst` | 32 synth presets (classic, FM, wavetable, additive, Karplus, SID) | all | GPL-3.0 (SAF) |
-| `winds.safinst` | Clarinet, Soprano/Alto/Tenor Sax | waveguide-reed physical model | GPL-3.0 (SAF) |
-| `strings.safinst` | Violin, Viola, Cello | bowed-string physical model | GPL-3.0 (SAF) |
+| `winds.safinst` | Clarinet, Soprano/Alto/Tenor Sax | waveguide-reed physical model + formant body | GPL-3.0 (SAF) |
+| `strings.safinst` | Violin, Viola, Cello | bowed-string physical model + formant body | GPL-3.0 (SAF) |
+| `percussion.safinst` | Bell, Marimba, Tubular Bell, Woodblock, Tom | modal synthesis | GPL-3.0 (SAF) |
 | `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax | additive resynthesis | preset data CC0 (VCSL) |
 
 The `saf_play` demo is the runnable entry point — it loads these libraries, prints
@@ -719,7 +721,7 @@ the catalogue, plays a short phrase and renders a WAV, all offline (no audio dev
 
 ```
 ./build.ps1 -Target saf_play
-bin/x86_64-win64/saf_play.exe                                     # tour of all three libraries -> saf_play.wav
+bin/x86_64-win64/saf_play.exe                                     # tour of the shipped libraries -> saf_play.wav
 bin/x86_64-win64/saf_play.exe library/winds.safinst "Tenor Sax"  # one instrument
 ```
 
@@ -1498,7 +1500,7 @@ The following synthesis techniques are planned for future versions:
 | Technique | Description | Complexity | Status |
 |-----------|-------------|------------|--------|
 | **Free-Partial / sinusoidal model** | McAulay-Quatieri partials with arbitrary time-varying freq/amp; native STFT partial tracker (WAV→preset) | High | **Done** (`SedaiPartialGenerator`, `psPartial`) |
-| **Physical Modeling — winds & strings** | Self-oscillating single-reed waveguide (reed + bore) and bowed string (bow friction + string), MSW + commuted body/tube resonance | High | **Done** (`SedaiReedGenerator`/`psReed`, `SedaiBowedGenerator`/`psBowed`, `SedaiTubeResonator`); brass / modal percussion planned |
+| **Physical Modeling — winds, strings & percussion** | Self-oscillating single-reed waveguide (reed + bore), bowed string (bow friction + string) and struck modal percussion, MSW + commuted body/tube resonance + shared formant body | High | **Done** (`SedaiReedGenerator`/`psReed`, `SedaiBowedGenerator`/`psBowed`, `SedaiModalGenerator`/`psModal`, `SedaiFormantBody`, `SedaiTubeResonator`); brass (lip reed) planned |
 | **IFFT Synthesis** | Inverse Fast Fourier Transform for spectral manipulation and resynthesis | Medium-High | Planned |
 | **Granular Synthesis** | Time-stretching and pitch-shifting through micro-sound grains | Medium | Planned |
 
@@ -1551,10 +1553,10 @@ Mathematical simulation of physical instrument behavior for realistic sounds.
 **Implementation Steps:**
 1. Karplus-Strong base algorithm (plucked string) — **done** (`SedaiKarplusGenerator`)
 2. Digital waveguide for tubes (bidirectional delay lines) — **done** for winds (`SedaiReedGenerator` bore)
-3. Excitation models — **done** for breath/reed (nonlinear reed table) and bow (stick-slip friction); hammer impact planned
-4. Body resonance filters (formant / impulse response) — **done** (`SedaiBodyResonator`, `SedaiConvolver`, `SedaiTubeResonator`)
+3. Excitation models — **done** for breath/reed (nonlinear reed table), bow (stick-slip friction) and struck/modal (decaying resonator bank, `SedaiModalGenerator`); lip-reed (brass) planned
+4. Body resonance filters (formant / impulse response) — **done** (`SedaiBodyResonator`, `SedaiFormantBody`, `SedaiConvolver`, `SedaiTubeResonator`)
 
-Remaining: brass (lip reed), modal percussion.
+Remaining: brass (lip reed) — the STK-style lip-oscillator did not track pitch reliably and is deferred to a future pass.
 
 **Use Cases:** Realistic guitar, wind instruments, custom impossible instruments
 
