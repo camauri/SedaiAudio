@@ -2083,6 +2083,7 @@ begin
   authored.Reed.VibDepth := 0.05;
   authored.Reed.VibRate := 5.5;
   authored.Reed.ReflMag := 0.95;
+  authored.Reed.Brightness := 0.6;
   authored.Reed.OutputTrim := 0.8;
 
   ms := TMemoryStream.Create;
@@ -2100,7 +2101,7 @@ begin
       and (Abs(gp.BlowPosition - 0.2) < 1e-4) and (Abs(gp.ReedSlope - 0.3) < 1e-4)
       and (Abs(gp.Pressure - 0.6) < 1e-4) and (Abs(gp.Noise - 0.2) < 1e-4)
       and (Abs(gp.VibRate - 5.5) < 1e-3) and (Abs(gp.ReflMag - 0.95) < 1e-4)
-      and (Abs(gp.OutputTrim - 0.8) < 1e-4);
+      and (Abs(gp.Brightness - 0.6) < 1e-4) and (Abs(gp.OutputTrim - 0.8) < 1e-4);
     Ok('reed preset params round-trip', (idx >= 0) and paramsOk,
        Format('bore=%d pos=%.2f slope=%.2f press=%.2f trim=%.2f',
          [Ord(gp.BoreType), gp.BlowPosition, gp.ReedSlope, gp.Pressure, gp.OutputTrim]));

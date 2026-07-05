@@ -65,6 +65,9 @@ type
     FPressCoeff: Single;
     FVelGain: Single;          // velocity -> output loudness (reed self-osc level
                                // is ~pressure-set, so velocity scales the output)
+    FToneState: Single;        // dynamic-brightness one-pole low-pass state
+    FToneCoeff: Single;        // one-pole coeff (velocity -> cutoff): soft=darker
+    FBrightness: Single;       // 0..1 depth of the velocity->tone effect
     FNoiseGain: Single;
     FVibratoGain: Single;
     FVibratoRate: Single;
@@ -86,6 +89,7 @@ type
   private
     procedure UpdateBoreDelay;
     procedure RecalcPressCoeff;
+    procedure UpdateToneCoeff;
     procedure ClearDelays;
     function NoiseSample: Single;
     function DelayTick(var AD: TReedDelay; AInput: Single): Single;
@@ -106,6 +110,9 @@ type
     procedure SetReed(AOffset, ASlope: Single);
     procedure SetBreath(APressure, ANoise, AVibDepth, AVibRateHz: Single);
     procedure SetReflection(ACoeffMag: Single);
+    // Dynamic brightness: how much the played velocity opens the tone (0 = off /
+    // flat, 1 = soft notes darkened by a ~1.8 kHz low-pass, loud notes fully open).
+    procedure SetBrightness(ADepth: Single);
     // Bore geometry. rbCylindrical (odd harmonics) or rbConical (faux cone; the
     // ABlowPosition 0..1 = the reed's position along the bore, which fills in the
     // even harmonics; ~0.2 is sax-like, avoid 0 and 0.5).
@@ -144,6 +151,9 @@ begin
   FBlowPosition := 0.2;
   FMaxPressure := 0.55;
   FVelGain := 1.0;
+  FBrightness := 0.0;
+  FToneState := 0.0;
+  FToneCoeff := 0.0;
   FNoiseGain := 0.0;
   FVibratoGain := 0.0;
   FVibratoRate := 5.0;
@@ -186,6 +196,18 @@ procedure TSedaiReedGenerator.SetFrequency(AValue: Single);
 begin
   inherited SetFrequency(AValue);
   UpdateBoreDelay;
+end;
+
+// One-pole low-pass coeff from velocity: cutoff opens with velocity, scaled by
+// FBrightness. cutoff = 16 kHz - FBrightness*(1-vel)*(16k-1.8k). a = exp(-2*pi*fc/SR).
+procedure TSedaiReedGenerator.UpdateToneCoeff;
+var fc: Single;
+begin
+  if (FSampleRate <= 0) or (FBrightness <= 0) then begin FToneCoeff := 0; Exit; end;
+  fc := 16000 - FBrightness * (1 - FVelocity) * (16000 - 1800);
+  if fc < 200 then fc := 200;
+  if fc > FSampleRate * 0.49 then fc := FSampleRate * 0.49;
+  FToneCoeff := Exp(-2 * Pi * fc / FSampleRate);
 end;
 
 procedure TSedaiReedGenerator.RecalcPressCoeff;
@@ -232,6 +254,7 @@ begin
   FD0.wr := 0; FD1.wr := 0;
   FD0.last := 0; FD1.last := 0;
   FFilterX1 := 0;
+  FToneState := 0;
 end;
 
 function TSedaiReedGenerator.NoiseSample: Single;
@@ -285,6 +308,10 @@ begin
   FNote := ANote;
   FVelocity := EnsureRange(AVelocity, 0, 1);
   FVelGain := 0.3 + 0.7 * FVelocity;   // velocity -> output loudness
+  // velocity -> brightness: soft notes get a lower low-pass cutoff (darker),
+  // loud notes open up. cutoff 1.8 kHz (pp) .. ~14 kHz (ff); FBrightness scales
+  // the effect (0 = off, flat response).
+  UpdateToneCoeff;
   FGateOpen := True;
   FReleasing := False;
   FFrequency := 440 * Power(2, (ANote - 69) / 12);
@@ -358,6 +385,13 @@ begin
     DelayTick(FD0, breath + pressDiff * reedRefl);
     Result := FOutputGain * boreOut * FAmplitude * FVelGain;
   end;
+
+  // dynamic-brightness one-pole low-pass (velocity-opened tone; off when depth 0)
+  if FToneCoeff > 0 then
+  begin
+    FToneState := (1 - FToneCoeff) * Result + FToneCoeff * FToneState;
+    Result := FToneState;
+  end;
 end;
 
 procedure TSedaiReedGenerator.SetReed(AOffset, ASlope: Single);
@@ -378,6 +412,12 @@ procedure TSedaiReedGenerator.SetReflection(ACoeffMag: Single);
 begin
   ACoeffMag := EnsureRange(ACoeffMag, 0.5, 0.999);
   FReflCoeff := -ACoeffMag;
+end;
+
+procedure TSedaiReedGenerator.SetBrightness(ADepth: Single);
+begin
+  FBrightness := EnsureRange(ADepth, 0, 1);
+  UpdateToneCoeff;
 end;
 
 procedure TSedaiReedGenerator.SetBoreType(AType: TReedBoreType; ABlowPosition: Single);

@@ -166,6 +166,7 @@ type
     VibDepth: Single;          // vibrato depth
     VibRate: Single;           // vibrato rate (Hz)
     ReflMag: Single;           // bell reflection magnitude (0.5..0.999)
+    Brightness: Single;        // velocity->tone depth (0 = flat)
     OutputTrim: Single;        // voice output level
   end;
 
@@ -930,6 +931,7 @@ begin
   RG.SetReed(AParams.ReedOffset, AParams.ReedSlope);
   RG.SetBreath(AParams.Pressure, AParams.Noise, AParams.VibDepth, AParams.VibRate);
   if AParams.ReflMag > 0 then RG.SetReflection(AParams.ReflMag);
+  RG.SetBrightness(AParams.Brightness);
   AVoice.OutputLevel := AParams.OutputTrim;
 end;
 
