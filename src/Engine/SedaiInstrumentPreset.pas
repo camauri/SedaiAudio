@@ -23,7 +23,7 @@ interface
 
 uses
   Classes, SysUtils, SedaiPart, SedaiFMOperator, SedaiReedGenerator,
-  SedaiFormantBody, SedaiAudioTypes, SedaiVoice, SedaiFilter;   // + TReedBoreType / TFormantBodyKind for .safinst blocks
+  SedaiFormantBody, SedaiModalGenerator, SedaiAudioTypes, SedaiVoice, SedaiFilter;   // + TReedBoreType / TFormantBodyKind / TModalKind for .safinst blocks
 
 type
   // Composer-facing role of a sound. The PRIMARY browse axis (with character
@@ -59,6 +59,8 @@ type
     Reed: TReedParams;
     HasBowedParams: Boolean;
     Bowed: TBowedParams;
+    HasModalParams: Boolean;
+    Modal: TModalParams;
     HasKarplusParams: Boolean;
     Karplus: TKarplusParams;
     Macros: TMacroArray;          // composer quick-controls authored on the preset
@@ -289,6 +291,10 @@ begin
     APart.SetBowedParams(FPresets[AIndex].Bowed)
   else
     APart.ClearBowedParams;
+  if (FPresets[AIndex].Technique = psModal) and FPresets[AIndex].HasModalParams then
+    APart.SetModalParams(FPresets[AIndex].Modal)
+  else
+    APart.ClearModalParams;
   if (FPresets[AIndex].Technique = psKarplus) and FPresets[AIndex].HasKarplusParams then
     APart.SetKarplusParams(FPresets[AIndex].Karplus)
   else
@@ -326,6 +332,7 @@ begin
     psPartial: Result := 'psPartial';
     psReed: Result := 'psReed';
     psBowed: Result := 'psBowed';
+    psModal: Result := 'psModal';
   else
     Result := 'psClassic';
   end;
@@ -342,6 +349,7 @@ begin
   else if SameText(AName, 'psPartial') then Result := psPartial
   else if SameText(AName, 'psReed') then Result := psReed
   else if SameText(AName, 'psBowed') then Result := psBowed
+  else if SameText(AName, 'psModal') then Result := psModal
   else Result := psClassic;
 end;
 
@@ -518,6 +526,9 @@ begin
            FloatToStr(p.Bowed.VibRate, fs), FloatToStr(p.Bowed.AttackTime, fs),
            Ord(p.Bowed.BodyKind), FloatToStr(p.Bowed.BodyMix, fs),
            FloatToStr(p.Bowed.OutputTrim, fs)]));
+      // Author side: MODAL percussion block ('modal=kind,trim').
+      if (p.Technique = psModal) and p.HasModalParams then
+        sl.Add(Format('modal=%d,%s', [Ord(p.Modal.Kind), FloatToStr(p.Modal.OutputTrim, fs)]));
       // Author side: full KARPLUS parameter block.
       if (p.Technique = psKarplus) and p.HasKarplusParams then
       begin
@@ -916,6 +927,14 @@ begin
         cur.Bowed.BodyKind := TFormantBodyKind(StrToIntDef(NextTok, 0));
         cur.Bowed.BodyMix := StrToFloatDef(NextTok, 0, fs);
         cur.Bowed.OutputTrim := StrToFloatDef(NextTok, 1.0, fs);
+      end
+      // --- MODAL PERCUSSION block ---
+      else if k = 'modal' then
+      begin
+        cur.HasModalParams := True;
+        rest := v;
+        cur.Modal.Kind := TModalKind(StrToIntDef(NextTok, 0));
+        cur.Modal.OutputTrim := StrToFloatDef(NextTok, 1.0, fs);
       end
       // --- KARPLUS block ---
       else if k = 'ksdamp' then

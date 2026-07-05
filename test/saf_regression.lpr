@@ -2466,6 +2466,64 @@ begin
   end;
 end;
 
+// Modal-percussion preset .safinst round-trip: a psModal preset survives save->
+// load with its kind intact, and drives an audible struck voice.
+procedure TestModalPreset;
+const TSR = 48000;
+var
+  authored: TInstrumentPreset;
+  reg, reg2: TSedaiInstrumentRegistry;
+  ms: TMemoryStream;
+  idx, i, n: Integer;
+  gp: TModalParams;
+  part: TSAFPart;
+  buf: array of Single;
+  pk: Single;
+begin
+  WriteLn('== modal preset .safinst round-trip ==');
+  authored := Default(TInstrumentPreset);
+  authored.Name := 'RT Bell'; authored.Category := icBells;
+  authored.Technique := psModal; authored.PresetKey := '';
+  authored.Polyphony := 6;
+  authored.HasModalParams := True;
+  authored.Modal.Kind := mkTubular;
+  authored.Modal.OutputTrim := 0.5;
+
+  ms := TMemoryStream.Create;
+  reg := TSedaiInstrumentRegistry.CreateEmpty;
+  reg2 := TSedaiInstrumentRegistry.CreateEmpty;
+  try
+    reg.AddPreset(authored);
+    reg.SaveToStream(ms, 'Modal');
+    ms.Position := 0;
+    reg2.LoadFromStream(ms);
+    idx := reg2.FindByName('RT Bell');
+    if idx >= 0 then gp := reg2.Get(idx).Modal else gp := Default(TModalParams);
+
+    Ok('modal preset params round-trip',
+       (idx >= 0) and (gp.Kind = mkTubular) and (Abs(gp.OutputTrim - 0.5) < 1e-4),
+       Format('kind=%d trim=%.2f', [Ord(gp.Kind), gp.OutputTrim]));
+
+    part := TSAFPart.Create;
+    try
+      part.SetSampleRate(TSR);
+      if idx >= 0 then part.SetInstrument(psModal, reg2.Get(idx).PresetKey);
+      part.SetModalParams(gp);
+      n := 24000; SetLength(buf, n*2);
+      FillChar(buf[0], n*2*SizeOf(Single), 0);
+      part.NoteOn(60, 1.0);
+      part.RenderBlock(@buf[0], n);
+      pk := 0; for i := 0 to n*2-1 do if Abs(buf[i]) > pk then pk := Abs(buf[i]);
+      Ok('modal preset renders struck + bounded',
+         (idx >= 0) and (pk > 0.001) and (pk < 1.5), Format('peak=%.3f', [pk]));
+    finally
+      part.Free;
+    end;
+  finally
+    reg.Free; reg2.Free; ms.Free;
+  end;
+end;
+
 // Auto-space widener: a dual-mono input becomes a decorrelated stereo image
 // while staying MONO-SAFE (the mono sum is preserved bit-for-bit up to float
 // rounding). Also: Width=0 is a passthrough for a mono source, and Width>0 makes
@@ -2887,6 +2945,7 @@ begin
   TestPartialPreset;
   TestReedPreset;
   TestBowedPreset;
+  TestModalPreset;
   TestFormantBody;
   TestTubeResonator;
   TestAutoSpace;

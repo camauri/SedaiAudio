@@ -22,13 +22,14 @@ uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer,
   SedaiOscillator, SedaiFilter, SedaiFMOperator, SedaiWavetableGenerator,
   SedaiAdditiveGenerator, SedaiPartialGenerator, SedaiReedGenerator,
-  SedaiBowedGenerator, SedaiFormantBody, SedaiSamplePlayer, SedaiKarplusGenerator,
-  SedaiEnvelope, SedaiVoice, SedaiVoiceManager, SedaiModulationMatrix;
+  SedaiBowedGenerator, SedaiModalGenerator, SedaiFormantBody, SedaiSamplePlayer,
+  SedaiKarplusGenerator, SedaiEnvelope, SedaiVoice, SedaiVoiceManager,
+  SedaiModulationMatrix;
 
 type
   // Which generator the part's voices use. Mirrors TVoiceSourceType but is the
   // public, instrument-level selector exposed by the Part.
-  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample, psKarplus, psSID, psPartial, psReed, psBowed);
+  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample, psKarplus, psSID, psPartial, psReed, psBowed, psModal);
 
   // Optional "common layer" overrides applied on top of the preset's own values
   // (envelope / filter / output level). Each Override* flag gates one group; all
@@ -186,6 +187,13 @@ type
     OutputTrim: Single;        // voice output level
   end;
 
+  // Full MODAL-PERCUSSION parameter block, driving TSedaiModalGenerator (struck
+  // idiophone: bell / marimba / tubular / woodblock / tom).
+  TModalParams = record
+    Kind: TModalKind;
+    OutputTrim: Single;
+  end;
+
   // Full KARPLUS-STRONG parameter block — string damping/blend + the gating
   // amp envelope.
   TKarplusParams = record
@@ -287,6 +295,8 @@ type
     FReedParams: TReedParams;
     FHasBowedParams: Boolean;
     FBowedParams: TBowedParams;
+    FHasModalParams: Boolean;
+    FModalParams: TModalParams;
     FHasKarplusParams: Boolean;
     FKarplusParams: TKarplusParams;
 
@@ -385,6 +395,8 @@ type
     procedure ClearReedParams;
     procedure SetBowedParams(const AParams: TBowedParams);
     procedure ClearBowedParams;
+    procedure SetModalParams(const AParams: TModalParams);
+    procedure ClearModalParams;
     procedure SetKarplusParams(const AParams: TKarplusParams);
     procedure ClearKarplusParams;
 
@@ -450,6 +462,8 @@ procedure ConfigureReedVoiceFromParams(AVoice: TSedaiVoice; const AParams: TReed
 // Bowed-string configurator: loads the physical-model bow/string parameters into
 // the voice's TSedaiBowedGenerator. No named-preset counterpart, so no Explode.
 procedure ConfigureBowedVoiceFromParams(AVoice: TSedaiVoice; const AParams: TBowedParams);
+// Modal-percussion configurator: sets the voice's TSedaiModalGenerator kind.
+procedure ConfigureModalVoiceFromParams(AVoice: TSedaiVoice; const AParams: TModalParams);
 procedure ConfigureKarplusVoiceFromParams(AVoice: TSedaiVoice; const AParams: TKarplusParams);
 function ExplodeKarplusParams(const APresetKey: string): TKarplusParams;
 
@@ -975,6 +989,19 @@ begin
   AVoice.OutputLevel := AParams.OutputTrim;
 end;
 
+// ---- MODAL PERCUSSION -------------------------------------------------------
+
+procedure ConfigureModalVoiceFromParams(AVoice: TSedaiVoice; const AParams: TModalParams);
+var
+  MG: TSedaiModalGenerator;
+begin
+  AVoice.SetSourceType(vstModal);
+  MG := AVoice.GetModalGenerator;
+  if MG = nil then Exit;
+  MG.SetKind(AParams.Kind);
+  if AParams.OutputTrim > 0 then AVoice.OutputLevel := AParams.OutputTrim;
+end;
+
 // ---- KARPLUS-STRONG ---------------------------------------------------------
 
 procedure ConfigureKarplusVoiceFromParams(AVoice: TSedaiVoice; const AParams: TKarplusParams);
@@ -1351,6 +1378,9 @@ begin
     psBowed:
       // Physical-model bowed string from a parameter block.
       ConfigureBowedVoiceFromParams(AVoice, FBowedParams);
+    psModal:
+      // Modal struck percussion from a parameter block.
+      ConfigureModalVoiceFromParams(AVoice, FModalParams);
     psKarplus:
       if FHasKarplusParams then
         ConfigureKarplusVoiceFromParams(AVoice, FKarplusParams)
@@ -1571,6 +1601,21 @@ begin
   if not FHasBowedParams then Exit;
   FHasBowedParams := False;
   FillChar(FBowedParams, SizeOf(FBowedParams), 0);   // plain record, no managed fields
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.SetModalParams(const AParams: TModalParams);
+begin
+  FModalParams := AParams;
+  FHasModalParams := True;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.ClearModalParams;
+begin
+  if not FHasModalParams then Exit;
+  FHasModalParams := False;
+  FillChar(FModalParams, SizeOf(FModalParams), 0);
   FManager.ConfigureAllVoices(@ApplyToVoice);
 end;
 

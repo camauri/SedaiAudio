@@ -17,7 +17,7 @@ uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiSignalNode,
   SedaiOscillator, SedaiEnvelope, SedaiLFO, SedaiFilter,
   SedaiFMOperator, SedaiWavetableGenerator, SedaiAdditiveGenerator,
-  SedaiPartialGenerator, SedaiReedGenerator, SedaiBowedGenerator,
+  SedaiPartialGenerator, SedaiReedGenerator, SedaiBowedGenerator, SedaiModalGenerator,
   SedaiSamplePlayer, SedaiKarplusGenerator, SedaiModulationMatrix;
 
 const
@@ -30,7 +30,7 @@ type
   // a classic oscillator stack, an FM synth, or a wavetable generator. The rest
   // of the chain (envelopes, filter, amp, pan) is shared across all source types.
   TVoiceSourceType = (vstOscillators, vstFM, vstWavetable, vstAdditive, vstSample,
-    vstKarplus, vstPartial, vstReed, vstBowed);
+    vstKarplus, vstPartial, vstReed, vstBowed, vstModal);
 
   // How the three oscillators combine in the vstOscillators source.
   TVoiceOscMode = (
@@ -52,6 +52,7 @@ type
     FPartial: TSedaiPartialGenerator;        // created on demand for vstPartial
     FReed: TSedaiReedGenerator;              // created on demand for vstReed
     FBowed: TSedaiBowedGenerator;            // created on demand for vstBowed
+    FModal: TSedaiModalGenerator;            // created on demand for vstModal
     FSamplePlayer: TSedaiSamplePlayer;       // created on demand for vstSample
     FKarplus: TSedaiKarplusGenerator;        // created on demand for vstKarplus
     FNote: Byte;                  // MIDI note number
@@ -245,6 +246,7 @@ type
     function GetPartialGenerator: TSedaiPartialGenerator;
     function GetReedGenerator: TSedaiReedGenerator;
     function GetBowedGenerator: TSedaiBowedGenerator;
+    function GetModalGenerator: TSedaiModalGenerator;
     function GetSamplePlayer: TSedaiSamplePlayer;
     function GetKarplusGenerator: TSedaiKarplusGenerator;
 
@@ -326,6 +328,7 @@ begin
   FPartial := nil;
   FReed := nil;
   FBowed := nil;
+  FModal := nil;
   FSamplePlayer := nil;
   FKarplus := nil;
   FNote := 60;  // Middle C
@@ -424,6 +427,7 @@ begin
   FPartial.Free;        // nil-safe
   FReed.Free;           // nil-safe
   FBowed.Free;          // nil-safe
+  FModal.Free;          // nil-safe
   FSamplePlayer.Free;   // nil-safe (does not own the sample buffer)
   FKarplus.Free;        // nil-safe
   FModMatrix.Free;
@@ -457,6 +461,7 @@ begin
   if Assigned(FPartial) then FPartial.Kill;     // resets phases + release
   if Assigned(FReed) then FReed.Kill;           // clears bore + breath
   if Assigned(FBowed) then FBowed.Kill;         // clears string + bow
+  if Assigned(FModal) then FModal.Kill;         // clears resonators
   if Assigned(FSamplePlayer) then FSamplePlayer.Stop;
   if Assigned(FKarplus) then FKarplus.Reset;
   FModMatrix.Reset;          // clears source/dest state, keeps the routings
@@ -651,6 +656,13 @@ begin
     if FCurrentFrequency > 0 then FBowed.Frequency := FCurrentFrequency;
   end;
 
+  // Modal percussion: strike the resonators (retuned to the exact Hz).
+  if (FSourceType = vstModal) and Assigned(FModal) then
+  begin
+    FModal.NoteOn(ANote, AVelocity);
+    if FCurrentFrequency > 0 then FModal.Frequency := FCurrentFrequency;
+  end;
+
   // Sample source: pitch from the current frequency, then (re)start playback.
   if (FSourceType = vstSample) and Assigned(FSamplePlayer) then
   begin
@@ -693,6 +705,9 @@ begin
 
   if (FSourceType = vstBowed) and Assigned(FBowed) then
     FBowed.NoteOff;
+
+  if (FSourceType = vstModal) and Assigned(FModal) then
+    FModal.NoteOff;
 
   if (FSourceType = vstKarplus) and Assigned(FKarplus) then
     FKarplus.NoteOff;
@@ -820,6 +835,17 @@ begin
       FBowed.SetSampleRate(FSampleRate);
   end;
   Result := FBowed;
+end;
+
+function TSedaiVoice.GetModalGenerator: TSedaiModalGenerator;
+begin
+  if not Assigned(FModal) then
+  begin
+    FModal := TSedaiModalGenerator.Create;
+    if FSampleRate > 0 then
+      FModal.SetSampleRate(FSampleRate);
+  end;
+  Result := FModal;
 end;
 
 function TSedaiVoice.GetSamplePlayer: TSedaiSamplePlayer;
@@ -1033,6 +1059,17 @@ begin
           SourceOut := 0.0;
         Finished := (not Assigned(FBowed)) or
                     ((not FBowed.GateOpen) and (not FBowed.Releasing));
+        UseAmpEnv := False;
+      end;
+    vstModal:
+      begin
+        // Struck percussion: rings out on its own. GateOpen stays True until every
+        // mode has decayed, so Finished follows it (release only adds damping).
+        if Assigned(FModal) then
+          SourceOut := FModal.GenerateSample
+        else
+          SourceOut := 0.0;
+        Finished := (not Assigned(FModal)) or (not FModal.GateOpen);
         UseAmpEnv := False;
       end;
     vstSample:
