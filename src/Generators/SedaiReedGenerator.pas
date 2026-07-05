@@ -63,6 +63,7 @@ type
     FMaxPressure: Single;
     FPressure: Single;
     FPressCoeff: Single;
+    FAttackTime: Single;       // breath ramp time constant (s), rise + release
     FVelGain: Single;          // velocity -> output loudness (reed self-osc level
                                // is ~pressure-set, so velocity scales the output)
     FToneState: Single;        // dynamic-brightness one-pole low-pass state
@@ -109,6 +110,9 @@ type
 
     procedure SetReed(AOffset, ASlope: Single);
     procedure SetBreath(APressure, ANoise, AVibDepth, AVibRateHz: Single);
+    // Breath ramp time (s): a slow blow-in (soft attack) vs a quick chiff. Governs
+    // both the rise on note-on and the fall on note-off. Default ~0.02 s.
+    procedure SetAttack(ASeconds: Single);
     procedure SetReflection(ACoeffMag: Single);
     // Dynamic brightness: how much the played velocity opens the tone (0 = off /
     // flat, 1 = soft notes darkened by a ~1.8 kHz low-pass, loud notes fully open).
@@ -150,6 +154,7 @@ begin
   FBoreType := rbCylindrical;
   FBlowPosition := 0.2;
   FMaxPressure := 0.55;
+  FAttackTime := REED_ATTACK_S;
   FVelGain := 1.0;
   FBrightness := 0.0;
   FToneState := 0.0;
@@ -212,8 +217,8 @@ end;
 
 procedure TSedaiReedGenerator.RecalcPressCoeff;
 begin
-  if FSampleRate > 0 then
-    FPressCoeff := Exp(-1.0 / (REED_ATTACK_S * FSampleRate))
+  if (FSampleRate > 0) and (FAttackTime > 0) then
+    FPressCoeff := Exp(-1.0 / (FAttackTime * FSampleRate))
   else
     FPressCoeff := 0.0;
 end;
@@ -406,6 +411,12 @@ begin
   FNoiseGain := Max(0, ANoise);
   FVibratoGain := Max(0, AVibDepth);
   if AVibRateHz > 0 then FVibratoRate := AVibRateHz;
+end;
+
+procedure TSedaiReedGenerator.SetAttack(ASeconds: Single);
+begin
+  FAttackTime := Max(0.0, ASeconds);
+  RecalcPressCoeff;
 end;
 
 procedure TSedaiReedGenerator.SetReflection(ACoeffMag: Single);

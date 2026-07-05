@@ -1697,6 +1697,17 @@ begin
     e1 := 0; for i := Round(0.4*TSR) to Round(0.9*TSR) do e1 := e1 + buf[i]*buf[i];   // soft energy
     Ok('reed velocity scales loudness (soft < loud, still sounds)',
        (e1 > 0) and (e1 < 0.7 * e2), Format('soft/loud=%.2f', [e1/Max(e2,1e-9)]));
+
+    // (8) attack shaping: a slow blow-in keeps the first 150 ms much quieter than
+    // a fast attack does (the breath ramps past the oscillation threshold later).
+    g.SetAttack(0.005); g.Kill; g.NoteOn(60, 1.0);
+    for i := 0 to n - 1 do buf[i] := g.GenerateSample;
+    e2 := 0; for i := 0 to Round(0.15*TSR) do e2 := e2 + buf[i]*buf[i];   // fast-attack early energy
+    g.SetAttack(0.30); g.Kill; g.NoteOn(60, 1.0);
+    for i := 0 to n - 1 do buf[i] := g.GenerateSample;
+    e1 := 0; for i := 0 to Round(0.15*TSR) do e1 := e1 + buf[i]*buf[i];   // slow-attack early energy
+    Ok('reed attack shaping (slow blow-in delays onset)', e1 < 0.2 * e2,
+       Format('slow/fast early=%.3f', [e1/Max(e2,1e-9)]));
   finally
     g.Free;
   end;
@@ -2084,6 +2095,7 @@ begin
   authored.Reed.VibRate := 5.5;
   authored.Reed.ReflMag := 0.95;
   authored.Reed.Brightness := 0.6;
+  authored.Reed.AttackTime := 0.08;
   authored.Reed.OutputTrim := 0.8;
 
   ms := TMemoryStream.Create;
@@ -2101,7 +2113,8 @@ begin
       and (Abs(gp.BlowPosition - 0.2) < 1e-4) and (Abs(gp.ReedSlope - 0.3) < 1e-4)
       and (Abs(gp.Pressure - 0.6) < 1e-4) and (Abs(gp.Noise - 0.2) < 1e-4)
       and (Abs(gp.VibRate - 5.5) < 1e-3) and (Abs(gp.ReflMag - 0.95) < 1e-4)
-      and (Abs(gp.Brightness - 0.6) < 1e-4) and (Abs(gp.OutputTrim - 0.8) < 1e-4);
+      and (Abs(gp.Brightness - 0.6) < 1e-4) and (Abs(gp.AttackTime - 0.08) < 1e-4)
+      and (Abs(gp.OutputTrim - 0.8) < 1e-4);
     Ok('reed preset params round-trip', (idx >= 0) and paramsOk,
        Format('bore=%d pos=%.2f slope=%.2f press=%.2f trim=%.2f',
          [Ord(gp.BoreType), gp.BlowPosition, gp.ReedSlope, gp.Pressure, gp.OutputTrim]));

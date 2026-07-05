@@ -167,6 +167,7 @@ type
     VibRate: Single;           // vibrato rate (Hz)
     ReflMag: Single;           // bell reflection magnitude (0.5..0.999)
     Brightness: Single;        // velocity->tone depth (0 = flat)
+    AttackTime: Single;        // breath ramp time (s); 0 => default
     OutputTrim: Single;        // voice output level
   end;
 
@@ -932,6 +933,7 @@ begin
   RG.SetBreath(AParams.Pressure, AParams.Noise, AParams.VibDepth, AParams.VibRate);
   if AParams.ReflMag > 0 then RG.SetReflection(AParams.ReflMag);
   RG.SetBrightness(AParams.Brightness);
+  if AParams.AttackTime > 0 then RG.SetAttack(AParams.AttackTime);
   AVoice.OutputLevel := AParams.OutputTrim;
 end;
 
