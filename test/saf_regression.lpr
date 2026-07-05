@@ -22,6 +22,7 @@ uses
   SedaiAudioTypes, SedaiAudioBuffer,
   SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine, SedaiInstrumentPreset,
   SedaiFMOperator, SedaiAdditiveGenerator, SedaiPartialGenerator, SedaiReedGenerator,
+  SedaiBowedGenerator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
   SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
   SedaiSpatialChain, SedaiConvolver, SedaiTubeResonator;
@@ -1713,6 +1714,84 @@ begin
   end;
 end;
 
+// Bowed-string generator (TSedaiBowedGenerator): a self-oscillating physical model
+// (nonlinear bow friction + string waveguide). Verifies: silent before note-on;
+// self-oscillates + bounded after; the pitch tracks the note; the spectrum is a
+// full harmonic series (Helmholtz sawtooth => 2*f0 is a strong harmonic, not ~0
+// like the clarinet); note-off decays to silence.
+procedure TestBowedGenerator;
+const TSR = 48000;
+var
+  g: TSedaiBowedGenerator;
+  buf: array of Single;
+  i, n, zc: Integer;
+  pkPre, pkSus, fEst, e1, e2: Single;
+
+  function MagAt(a, b: Integer; f: Single): Single;
+  var k: Integer; w, c, q0, q1, q2: Single;
+  begin
+    w := 2*Pi*f/TSR; c := 2*Cos(w); q1 := 0; q2 := 0;
+    for k := a to b do begin q0 := c*q1 - q2 + buf[k]; q2 := q1; q1 := q0; end;
+    Result := Sqrt(q1*q1 + q2*q2 - c*q1*q2);
+  end;
+begin
+  WriteLn('== bowed-string engine ==');
+  g := TSedaiBowedGenerator.Create;
+  try
+    g.SetSampleRate(TSR);
+    g.SetBow(0.25, 0.127, 3.0);
+    n := TSR;                          // 1 s
+    SetLength(buf, n);
+
+    // (1) silent before note-on
+    pkPre := 0;
+    for i := 0 to 99 do
+    begin
+      buf[i] := g.GenerateSample;
+      if Abs(buf[i]) > pkPre then pkPre := Abs(buf[i]);
+    end;
+    Ok('bowed silent before note-on', pkPre = 0, Format('pk=%.4f', [pkPre]));
+
+    g.NoteOn(57, 1.0);                 // A3 = 220 Hz
+    for i := 0 to n - 1 do buf[i] := g.GenerateSample;
+
+    // (2) oscillates + bounded
+    pkSus := 0;
+    for i := Round(0.4*TSR) to Round(0.9*TSR) do
+      if Abs(buf[i]) > pkSus then pkSus := Abs(buf[i]);
+    Ok('bowed self-oscillates + bounded', (pkSus > 0.01) and (pkSus < 1.0),
+       Format('peak=%.3f', [pkSus]));
+
+    // (3) pitch ~ the played note: energy concentrates at f0=220 (a sawtooth has
+    // ripple, so zero-crossing counting is unreliable; use a Goertzel probe vs a
+    // non-harmonic bin).
+    e1 := MagAt(Round(0.4*TSR), Round(0.9*TSR), 220.0);   // f0
+    e2 := MagAt(Round(0.4*TSR), Round(0.9*TSR), 200.0);   // non-harmonic nearby
+    fEst := e1;
+    Ok('bowed pitch tracks note (energy at A3=220)', e1 > 3 * e2,
+       Format('|220|=%.1f |200|=%.1f', [e1, e2]));
+
+    // (4) full harmonic series (Helmholtz): 2*f0 is strong (unlike the clarinet)
+    e1 := MagAt(Round(0.4*TSR), Round(0.9*TSR), 220.0);   // f0
+    e2 := MagAt(Round(0.4*TSR), Round(0.9*TSR), 440.0);   // 2*f0
+    Ok('bowed has full harmonic series (2f0 strong)', e2 > 0.2 * e1,
+       Format('|f0|=%.3f |2f0|=%.3f', [e1, e2]));
+
+    // (5) note-off decays: the unbowed string rings out and drops well below the
+    // bowed level (the loop loss damps it).
+    g.NoteOff;
+    for i := 0 to n - 1 do buf[i] := g.GenerateSample;
+    e2 := 0;                                    // late-tail energy
+    for i := Round(0.7*TSR) to n - 1 do e2 := e2 + buf[i]*buf[i];
+    pkSus := 0;
+    for i := Round(0.7*TSR) to n - 1 do
+      if Abs(buf[i]) > pkSus then pkSus := Abs(buf[i]);
+    Ok('bowed note-off decays', pkSus < 0.06, Format('tail peak=%.4f', [pkSus]));
+  finally
+    g.Free;
+  end;
+end;
+
 // Free-partial engine (TSedaiPartialGenerator): the second-generation additive
 // with N free partials, each a (t,freq,amp) track and a continuous-phase
 // oscillator. Verifies: inert at 0 partials; a constant partial plays on pitch at
@@ -2620,6 +2699,7 @@ begin
   TestMicroInstability;
   TestBandwidth;
   TestReedGenerator;
+  TestBowedGenerator;
   TestPartialGenerator;
   TestLivingPresetRoundTrip;
   TestPartialPreset;
