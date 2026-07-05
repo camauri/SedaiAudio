@@ -184,7 +184,13 @@ begin
     FPressCoeff := 0.0;
 end;
 
-// half-wavelength delay, minus the reflection-filter phase delay
+// Half-period delay; inverting loop => modes at (2n-1)f0 (odd harmonics, the
+// validated cylindrical clarinet). NOTE: rbConical currently uses this same
+// (cylindrical) resonator — a true cone (all harmonics) is NOT just a delay/sign
+// change: both a non-inverting+full-period loop AND an in-loop lowpass were tried
+// and MEASURED to fail (the former oscillates at DC/wrong mode, the latter only
+// darkens). A cone needs a first-order HIGHPASS throat reflectance (Scavone) that
+// gives all harmonics while killing the DC latch. Deferred until that lands.
 procedure TSedaiReedGenerator.UpdateBoreDelay;
 var
   d: Single;
@@ -302,20 +308,11 @@ begin
 
   boreOut := FBoreLastOut;
 
-  // bell reflection: one-zero lowpass y = 0.5(x + x1), scaled by FReflCoeff
+  // Bell reflection: one-zero lowpass y = 0.5(x + x1) (radiation HF loss) scaled
+  // by FReflCoeff (inverting => zero loop gain at DC, no latch; gives odd
+  // harmonics). rbConical shares this for now (see UpdateBoreDelay TODO).
   reflected := FReflCoeff * 0.5 * (boreOut + FFilterX1);
   FFilterX1 := boreOut;
-
-  // Throat low-pass (provisional). MEASURED: this darkens/rounds the odd-harmonic
-  // tone; it does NOT create the even harmonics a true cone has (no in-loop filter
-  // can add a resonator mode at 2*f0 that a closed-open cylinder lacks). A real
-  // sax/oboe cone needs a conical scattering junction (Scavone) — TODO. Kept as a
-  // timbral control for now; even-harmonic validation deferred.
-  if (FBoreType = rbConical) and (FConicity > 0) then
-  begin
-    FThroatState := 0.995 * FThroatState + (1 - 0.995) * reflected;
-    reflected := reflected + FConicity * FThroatState;
-  end;
 
   pressDiff := reflected - breath;
 
