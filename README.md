@@ -26,8 +26,8 @@ Sedai Audio Foundation provides a comprehensive audio synthesis framework follow
 
 ### Key Features
 
-- **Synthesis Engines**: a single *universal voice* (`TSedaiVoice`) can be any of eight source types — Classic/Subtractive, FM (DX7-style), Wavetable, Additive, Sample (sampler), Karplus-Strong (plucked-string physical model), **Free-Partial** (McAulay-Quatieri sinusoidal model, note-transposable, WAV→preset analysis) and **Waveguide-Reed** (self-oscillating clarinet/sax physical model). The Part/Instrument engine adds a ninth technique, SID-flavoured oscillators, for **9 techniques** in the `.safinst` preset system; the high-level facade (`Play*` API) covers five of them. SID Evo (`SedaiSIDEvo`, the reSID-accurate chip) is a standalone unit
-- **Physical Modelling**: plucked string (Karplus-Strong), self-oscillating single-reed waveguide (nonlinear reed + bore, MSW/Smith-STK re-derivation), and a commuted tube/body resonator
+- **Synthesis Engines**: a single *universal voice* (`TSedaiVoice`) can be any of nine source types — Classic/Subtractive, FM (DX7-style), Wavetable, Additive, Sample (sampler), Karplus-Strong (plucked-string physical model), **Free-Partial** (McAulay-Quatieri sinusoidal model, note-transposable, WAV→preset analysis), **Waveguide-Reed** (self-oscillating clarinet/sax physical model) and **Bowed-String** (self-oscillating violin/cello physical model). The Part/Instrument engine adds SID-flavoured oscillators, for **10 techniques** in the `.safinst` preset system; the high-level facade (`Play*` API) covers five of them. SID Evo (`SedaiSIDEvo`, the reSID-accurate chip) is a standalone unit
+- **Physical Modelling**: plucked string (Karplus-Strong), self-oscillating single-reed waveguide (nonlinear reed + bore, MSW/Smith-STK re-derivation), bowed string (nonlinear bow friction + string waveguide), and a commuted tube/body resonator
 - **Professional Mixer**: Channels, aux buses, group buses, master bus with metering
 - **Audio Effects**: Delay, Reverb, Chorus, Flanger, Phaser, Distortion, Compressor, Limiter, EQ; plus auto-space (mono-safe stereo widener), body resonator, short-FIR convolver, tube resonator
 - **Advanced Filters**: 6 filter types, multi-pole cascading (12/24/48 dB/oct)
@@ -285,6 +285,7 @@ TSAFEngine
 | **SedaiPartialGenerator** | Free-partial (McAulay-Quatieri) synthesis — N partials with time-varying freq/amp tracks |
 | **SedaiKarplusGenerator** | Karplus-Strong physical modelling (plucked string / percussion) |
 | **SedaiReedGenerator** | Waveguide single-reed physical model (self-oscillating clarinet / sax) |
+| **SedaiBowedGenerator** | Bowed-string physical model (self-oscillating violin / cello) |
 
 #### Modulators
 
@@ -526,6 +527,18 @@ sample, producing genuine reed articulation.
 
 Shipped as ready instruments in `library/winds.safinst` (Clarinet, Soprano/Alto/Tenor Sax).
 
+### Bowed-String Synthesis (physical model)
+
+A **self-oscillating** bowed string (`SedaiBowedGenerator`, `vstBowed`): a
+digital-waveguide string driven by a nonlinear **bow-friction** junction in the same
+MSW loop (re-derived from the Smith / STK `Bowed` model). Two delay lines (neck /
+bridge) split by bow position, both ends inverting (a fixed string) → a **full
+harmonic series**; a stick-slip bow table pumps energy into the string, producing the
+**Helmholtz sawtooth** (~1/n harmonics) of a real bowed string; a small loop loss
+damps it when unbowed. Controls: bow velocity (loudness/brightness), bow position, bow
+force/grip, vibrato, attack. Shipped in `library/strings.safinst` (Violin, Viola,
+Cello). A body/formant colour is added downstream (`SedaiBodyResonator` / `SedaiTubeResonator`).
+
 ### SID Evo Synthesis
 
 A Commodore 64 SID emulator with extended capabilities. The classic emulation path is a
@@ -698,6 +711,7 @@ SAF ships ready-to-play instruments as **`.safinst`** text libraries under
 |---------|----------|-----------|---------|
 | `builtin.safinst` | 32 synth presets (classic, FM, wavetable, additive, Karplus, SID) | all | GPL-3.0 (SAF) |
 | `winds.safinst` | Clarinet, Soprano/Alto/Tenor Sax | waveguide-reed physical model | GPL-3.0 (SAF) |
+| `strings.safinst` | Violin, Viola, Cello | bowed-string physical model | GPL-3.0 (SAF) |
 | `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax | additive resynthesis | preset data CC0 (VCSL) |
 
 The `saf_play` demo is the runnable entry point — it loads these libraries, prints
@@ -1440,7 +1454,7 @@ not global functions:
 | **Total Lines** | ~30,000+ lines of Pascal code |
 | **Source Units** | 50+ units (.pas files) |
 | **Demo Programs** | 10+ programs (.lpr files) |
-| **Synthesis Engines** | 9 (Classic, FM, Wavetable, Additive, Free-Partial, Sample, Karplus-Strong, Waveguide-Reed, SID) + SID Evo (reSID) |
+| **Synthesis Engines** | 10 (Classic, FM, Wavetable, Additive, Free-Partial, Sample, Karplus-Strong, Waveguide-Reed, Bowed-String, SID) + SID Evo (reSID) |
 | **Audio Effects** | Delay, Reverb, Chorus, Flanger, Phaser, Distortion, Compressor, Limiter, EQ + auto-space, body resonator, convolver, tube resonator |
 | **Filter Types** | 6 (LP, HP, BP, Notch, Allpass, Peaking) |
 | **Filter Slopes** | 3 (12dB, 24dB, 48dB per octave) |
@@ -1484,7 +1498,7 @@ The following synthesis techniques are planned for future versions:
 | Technique | Description | Complexity | Status |
 |-----------|-------------|------------|--------|
 | **Free-Partial / sinusoidal model** | McAulay-Quatieri partials with arbitrary time-varying freq/amp; native STFT partial tracker (WAV→preset) | High | **Done** (`SedaiPartialGenerator`, `psPartial`) |
-| **Physical Modeling — winds** | Self-oscillating single-reed waveguide (nonlinear reed + bore, MSW) + commuted body/tube resonance | High | **Done** (`SedaiReedGenerator`, `psReed`; `SedaiTubeResonator`); bowed strings / brass / modal percussion planned |
+| **Physical Modeling — winds & strings** | Self-oscillating single-reed waveguide (reed + bore) and bowed string (bow friction + string), MSW + commuted body/tube resonance | High | **Done** (`SedaiReedGenerator`/`psReed`, `SedaiBowedGenerator`/`psBowed`, `SedaiTubeResonator`); brass / modal percussion planned |
 | **IFFT Synthesis** | Inverse Fast Fourier Transform for spectral manipulation and resynthesis | Medium-High | Planned |
 | **Granular Synthesis** | Time-stretching and pitch-shifting through micro-sound grains | Medium | Planned |
 
@@ -1537,10 +1551,10 @@ Mathematical simulation of physical instrument behavior for realistic sounds.
 **Implementation Steps:**
 1. Karplus-Strong base algorithm (plucked string) — **done** (`SedaiKarplusGenerator`)
 2. Digital waveguide for tubes (bidirectional delay lines) — **done** for winds (`SedaiReedGenerator` bore)
-3. Excitation models — **done** for breath/reed (nonlinear reed table); bow friction / hammer impact planned
+3. Excitation models — **done** for breath/reed (nonlinear reed table) and bow (stick-slip friction); hammer impact planned
 4. Body resonance filters (formant / impulse response) — **done** (`SedaiBodyResonator`, `SedaiConvolver`, `SedaiTubeResonator`)
 
-Remaining: bowed strings, brass (lip reed), modal percussion.
+Remaining: brass (lip reed), modal percussion.
 
 **Use Cases:** Realistic guitar, wind instruments, custom impossible instruments
 
