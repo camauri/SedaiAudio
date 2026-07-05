@@ -17,8 +17,8 @@ uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiSignalNode,
   SedaiOscillator, SedaiEnvelope, SedaiLFO, SedaiFilter,
   SedaiFMOperator, SedaiWavetableGenerator, SedaiAdditiveGenerator,
-  SedaiPartialGenerator, SedaiReedGenerator, SedaiSamplePlayer,
-  SedaiKarplusGenerator, SedaiModulationMatrix;
+  SedaiPartialGenerator, SedaiReedGenerator, SedaiBowedGenerator,
+  SedaiSamplePlayer, SedaiKarplusGenerator, SedaiModulationMatrix;
 
 const
   MAX_OSCILLATORS = 3;
@@ -30,7 +30,7 @@ type
   // a classic oscillator stack, an FM synth, or a wavetable generator. The rest
   // of the chain (envelopes, filter, amp, pan) is shared across all source types.
   TVoiceSourceType = (vstOscillators, vstFM, vstWavetable, vstAdditive, vstSample,
-    vstKarplus, vstPartial, vstReed);
+    vstKarplus, vstPartial, vstReed, vstBowed);
 
   // How the three oscillators combine in the vstOscillators source.
   TVoiceOscMode = (
@@ -51,6 +51,7 @@ type
     FAdditive: TSedaiAdditiveGenerator;      // created on demand for vstAdditive
     FPartial: TSedaiPartialGenerator;        // created on demand for vstPartial
     FReed: TSedaiReedGenerator;              // created on demand for vstReed
+    FBowed: TSedaiBowedGenerator;            // created on demand for vstBowed
     FSamplePlayer: TSedaiSamplePlayer;       // created on demand for vstSample
     FKarplus: TSedaiKarplusGenerator;        // created on demand for vstKarplus
     FNote: Byte;                  // MIDI note number
@@ -243,6 +244,7 @@ type
     function GetAdditiveGenerator: TSedaiAdditiveGenerator;
     function GetPartialGenerator: TSedaiPartialGenerator;
     function GetReedGenerator: TSedaiReedGenerator;
+    function GetBowedGenerator: TSedaiBowedGenerator;
     function GetSamplePlayer: TSedaiSamplePlayer;
     function GetKarplusGenerator: TSedaiKarplusGenerator;
 
@@ -323,6 +325,7 @@ begin
   FAdditive := nil;
   FPartial := nil;
   FReed := nil;
+  FBowed := nil;
   FSamplePlayer := nil;
   FKarplus := nil;
   FNote := 60;  // Middle C
@@ -420,6 +423,7 @@ begin
   FAdditive.Free;       // nil-safe
   FPartial.Free;        // nil-safe
   FReed.Free;           // nil-safe
+  FBowed.Free;          // nil-safe
   FSamplePlayer.Free;   // nil-safe (does not own the sample buffer)
   FKarplus.Free;        // nil-safe
   FModMatrix.Free;
@@ -452,6 +456,7 @@ begin
   if Assigned(FAdditive) then FAdditive.Kill;   // resets envelope + phases
   if Assigned(FPartial) then FPartial.Kill;     // resets phases + release
   if Assigned(FReed) then FReed.Kill;           // clears bore + breath
+  if Assigned(FBowed) then FBowed.Kill;         // clears string + bow
   if Assigned(FSamplePlayer) then FSamplePlayer.Stop;
   if Assigned(FKarplus) then FKarplus.Reset;
   FModMatrix.Reset;          // clears source/dest state, keeps the routings
@@ -639,6 +644,13 @@ begin
     if FCurrentFrequency > 0 then FReed.Frequency := FCurrentFrequency;
   end;
 
+  // Bowed string self-oscillates; retune to the voice's exact current Hz.
+  if (FSourceType = vstBowed) and Assigned(FBowed) then
+  begin
+    FBowed.NoteOn(ANote, AVelocity);
+    if FCurrentFrequency > 0 then FBowed.Frequency := FCurrentFrequency;
+  end;
+
   // Sample source: pitch from the current frequency, then (re)start playback.
   if (FSourceType = vstSample) and Assigned(FSamplePlayer) then
   begin
@@ -678,6 +690,9 @@ begin
 
   if (FSourceType = vstReed) and Assigned(FReed) then
     FReed.NoteOff;
+
+  if (FSourceType = vstBowed) and Assigned(FBowed) then
+    FBowed.NoteOff;
 
   if (FSourceType = vstKarplus) and Assigned(FKarplus) then
     FKarplus.NoteOff;
@@ -794,6 +809,17 @@ begin
       FReed.SetSampleRate(FSampleRate);
   end;
   Result := FReed;
+end;
+
+function TSedaiVoice.GetBowedGenerator: TSedaiBowedGenerator;
+begin
+  if not Assigned(FBowed) then
+  begin
+    FBowed := TSedaiBowedGenerator.Create;
+    if FSampleRate > 0 then
+      FBowed.SetSampleRate(FSampleRate);
+  end;
+  Result := FBowed;
 end;
 
 function TSedaiVoice.GetSamplePlayer: TSedaiSamplePlayer;
@@ -993,6 +1019,20 @@ begin
           SourceOut := 0.0;
         Finished := (not Assigned(FReed)) or
                     ((not FReed.GateOpen) and (not FReed.Releasing));
+        UseAmpEnv := False;
+      end;
+    vstBowed:
+      begin
+        // Self-oscillating bowed string: its own bow envelope shapes the note.
+        if Assigned(FBowed) then
+        begin
+          FBowed.Frequency := FCurrentFrequency * PitchFactor;
+          SourceOut := FBowed.GenerateSample;
+        end
+        else
+          SourceOut := 0.0;
+        Finished := (not Assigned(FBowed)) or
+                    ((not FBowed.GateOpen) and (not FBowed.Releasing));
         UseAmpEnv := False;
       end;
     vstSample:

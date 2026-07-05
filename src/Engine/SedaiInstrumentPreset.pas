@@ -57,6 +57,8 @@ type
     Partial: TPartialParams;
     HasReedParams: Boolean;
     Reed: TReedParams;
+    HasBowedParams: Boolean;
+    Bowed: TBowedParams;
     HasKarplusParams: Boolean;
     Karplus: TKarplusParams;
     Macros: TMacroArray;          // composer quick-controls authored on the preset
@@ -283,6 +285,10 @@ begin
     APart.SetReedParams(FPresets[AIndex].Reed)
   else
     APart.ClearReedParams;
+  if (FPresets[AIndex].Technique = psBowed) and FPresets[AIndex].HasBowedParams then
+    APart.SetBowedParams(FPresets[AIndex].Bowed)
+  else
+    APart.ClearBowedParams;
   if (FPresets[AIndex].Technique = psKarplus) and FPresets[AIndex].HasKarplusParams then
     APart.SetKarplusParams(FPresets[AIndex].Karplus)
   else
@@ -319,6 +325,7 @@ begin
     psSID: Result := 'psSID';
     psPartial: Result := 'psPartial';
     psReed: Result := 'psReed';
+    psBowed: Result := 'psBowed';
   else
     Result := 'psClassic';
   end;
@@ -334,6 +341,7 @@ begin
   else if SameText(AName, 'psSID') then Result := psSID
   else if SameText(AName, 'psPartial') then Result := psPartial
   else if SameText(AName, 'psReed') then Result := psReed
+  else if SameText(AName, 'psBowed') then Result := psBowed
   else Result := psClassic;
 end;
 
@@ -502,6 +510,13 @@ begin
            FloatToStr(p.Reed.VibRate, fs), FloatToStr(p.Reed.ReflMag, fs),
            FloatToStr(p.Reed.Brightness, fs), FloatToStr(p.Reed.AttackTime, fs),
            FloatToStr(p.Reed.OutputTrim, fs)]));
+      // Author side: full BOWED-STRING parameter block (one line).
+      if (p.Technique = psBowed) and p.HasBowedParams then
+        sl.Add(Format('bowed=%s,%s,%s,%s,%s,%s,%s',
+          [FloatToStr(p.Bowed.MaxVelocity, fs), FloatToStr(p.Bowed.BowPosition, fs),
+           FloatToStr(p.Bowed.BowForce, fs), FloatToStr(p.Bowed.VibDepth, fs),
+           FloatToStr(p.Bowed.VibRate, fs), FloatToStr(p.Bowed.AttackTime, fs),
+           FloatToStr(p.Bowed.OutputTrim, fs)]));
       // Author side: full KARPLUS parameter block.
       if (p.Technique = psKarplus) and p.HasKarplusParams then
       begin
@@ -885,6 +900,19 @@ begin
         cur.Reed.Brightness := StrToFloatDef(NextTok, 0, fs);
         cur.Reed.AttackTime := StrToFloatDef(NextTok, 0, fs);
         cur.Reed.OutputTrim := StrToFloatDef(NextTok, 1.0, fs);
+      end
+      // --- BOWED-STRING block ---
+      else if k = 'bowed' then
+      begin
+        cur.HasBowedParams := True;
+        rest := v;
+        cur.Bowed.MaxVelocity := StrToFloatDef(NextTok, 0.25, fs);
+        cur.Bowed.BowPosition := StrToFloatDef(NextTok, 0.127, fs);
+        cur.Bowed.BowForce := StrToFloatDef(NextTok, 3.0, fs);
+        cur.Bowed.VibDepth := StrToFloatDef(NextTok, 0, fs);
+        cur.Bowed.VibRate := StrToFloatDef(NextTok, 6, fs);
+        cur.Bowed.AttackTime := StrToFloatDef(NextTok, 0, fs);
+        cur.Bowed.OutputTrim := StrToFloatDef(NextTok, 1.0, fs);
       end
       // --- KARPLUS block ---
       else if k = 'ksdamp' then

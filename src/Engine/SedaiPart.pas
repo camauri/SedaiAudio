@@ -22,13 +22,13 @@ uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer,
   SedaiOscillator, SedaiFilter, SedaiFMOperator, SedaiWavetableGenerator,
   SedaiAdditiveGenerator, SedaiPartialGenerator, SedaiReedGenerator,
-  SedaiSamplePlayer, SedaiKarplusGenerator, SedaiEnvelope, SedaiVoice,
-  SedaiVoiceManager, SedaiModulationMatrix;
+  SedaiBowedGenerator, SedaiSamplePlayer, SedaiKarplusGenerator, SedaiEnvelope,
+  SedaiVoice, SedaiVoiceManager, SedaiModulationMatrix;
 
 type
   // Which generator the part's voices use. Mirrors TVoiceSourceType but is the
   // public, instrument-level selector exposed by the Part.
-  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample, psKarplus, psSID, psPartial, psReed);
+  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample, psKarplus, psSID, psPartial, psReed, psBowed);
 
   // Optional "common layer" overrides applied on top of the preset's own values
   // (envelope / filter / output level). Each Override* flag gates one group; all
@@ -171,6 +171,19 @@ type
     OutputTrim: Single;        // voice output level
   end;
 
+  // Full BOWED-STRING parameter block, driving TSedaiBowedGenerator (a physical
+  // model, self-oscillating). Violin/cello class; the Helmholtz sawtooth is the
+  // raw string signal, coloured downstream by an optional body/formant filter.
+  TBowedParams = record
+    MaxVelocity: Single;       // steady bow velocity (loudness/brightness ~0.15..0.4)
+    BowPosition: Single;       // 0..1 along the string (betaRatio; ~0.08..0.2)
+    BowForce: Single;          // bow-table slope / grip (~2..5)
+    VibDepth: Single;          // vibrato depth
+    VibRate: Single;           // vibrato rate (Hz)
+    AttackTime: Single;        // bow ramp time (s); 0 => default
+    OutputTrim: Single;        // voice output level
+  end;
+
   // Full KARPLUS-STRONG parameter block — string damping/blend + the gating
   // amp envelope.
   TKarplusParams = record
@@ -270,6 +283,8 @@ type
     FPartialParams: TPartialParams;
     FHasReedParams: Boolean;
     FReedParams: TReedParams;
+    FHasBowedParams: Boolean;
+    FBowedParams: TBowedParams;
     FHasKarplusParams: Boolean;
     FKarplusParams: TKarplusParams;
 
@@ -366,6 +381,8 @@ type
     procedure ClearPartialParams;
     procedure SetReedParams(const AParams: TReedParams);
     procedure ClearReedParams;
+    procedure SetBowedParams(const AParams: TBowedParams);
+    procedure ClearBowedParams;
     procedure SetKarplusParams(const AParams: TKarplusParams);
     procedure ClearKarplusParams;
 
@@ -428,6 +445,9 @@ procedure ConfigurePartialVoiceFromParams(AVoice: TSedaiVoice; const AParams: TP
 // Waveguide-reed configurator: loads the physical-model reed parameters into the
 // voice's TSedaiReedGenerator. No named-preset counterpart, so no Explode.
 procedure ConfigureReedVoiceFromParams(AVoice: TSedaiVoice; const AParams: TReedParams);
+// Bowed-string configurator: loads the physical-model bow/string parameters into
+// the voice's TSedaiBowedGenerator. No named-preset counterpart, so no Explode.
+procedure ConfigureBowedVoiceFromParams(AVoice: TSedaiVoice; const AParams: TBowedParams);
 procedure ConfigureKarplusVoiceFromParams(AVoice: TSedaiVoice; const AParams: TKarplusParams);
 function ExplodeKarplusParams(const APresetKey: string): TKarplusParams;
 
@@ -937,6 +957,21 @@ begin
   AVoice.OutputLevel := AParams.OutputTrim;
 end;
 
+// ---- BOWED STRING -----------------------------------------------------------
+
+procedure ConfigureBowedVoiceFromParams(AVoice: TSedaiVoice; const AParams: TBowedParams);
+var
+  BG: TSedaiBowedGenerator;
+begin
+  AVoice.SetSourceType(vstBowed);
+  BG := AVoice.GetBowedGenerator;
+  if BG = nil then Exit;
+  BG.SetBow(AParams.MaxVelocity, AParams.BowPosition, AParams.BowForce);
+  BG.SetVibrato(AParams.VibDepth, AParams.VibRate);
+  if AParams.AttackTime > 0 then BG.SetAttack(AParams.AttackTime);
+  AVoice.OutputLevel := AParams.OutputTrim;
+end;
+
 // ---- KARPLUS-STRONG ---------------------------------------------------------
 
 procedure ConfigureKarplusVoiceFromParams(AVoice: TSedaiVoice; const AParams: TKarplusParams);
@@ -1310,6 +1345,9 @@ begin
       // Physical-model reed comes from a parameter block; with no block the
       // breath pressure is 0 => silent (opt-in), like the partial source.
       ConfigureReedVoiceFromParams(AVoice, FReedParams);
+    psBowed:
+      // Physical-model bowed string from a parameter block.
+      ConfigureBowedVoiceFromParams(AVoice, FBowedParams);
     psKarplus:
       if FHasKarplusParams then
         ConfigureKarplusVoiceFromParams(AVoice, FKarplusParams)
@@ -1515,6 +1553,21 @@ begin
   if not FHasReedParams then Exit;
   FHasReedParams := False;
   FillChar(FReedParams, SizeOf(FReedParams), 0);   // plain record, no managed fields
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.SetBowedParams(const AParams: TBowedParams);
+begin
+  FBowedParams := AParams;
+  FHasBowedParams := True;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.ClearBowedParams;
+begin
+  if not FHasBowedParams then Exit;
+  FHasBowedParams := False;
+  FillChar(FBowedParams, SizeOf(FBowedParams), 0);   // plain record, no managed fields
   FManager.ConfigureAllVoices(@ApplyToVoice);
 end;
 

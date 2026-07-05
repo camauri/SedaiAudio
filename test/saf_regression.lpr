@@ -2285,6 +2285,74 @@ begin
   end;
 end;
 
+// Bowed-string preset .safinst round-trip: a psBowed preset survives save->load
+// with its parameters intact, and drives an audible, self-oscillating voice.
+procedure TestBowedPreset;
+const TSR = 48000;
+var
+  authored: TInstrumentPreset;
+  reg, reg2: TSedaiInstrumentRegistry;
+  ms: TMemoryStream;
+  idx, i, n: Integer;
+  gp: TBowedParams;
+  paramsOk: Boolean;
+  part: TSAFPart;
+  buf: array of Single;
+  pk: Single;
+begin
+  WriteLn('== bowed-string preset .safinst round-trip ==');
+  authored := Default(TInstrumentPreset);
+  authored.Name := 'RT Violin'; authored.Category := icStrings;
+  authored.Technique := psBowed; authored.PresetKey := '';
+  authored.Polyphony := 4;
+  authored.HasBowedParams := True;
+  authored.Bowed.MaxVelocity := 0.25;
+  authored.Bowed.BowPosition := 0.13;
+  authored.Bowed.BowForce := 3.0;
+  authored.Bowed.VibDepth := 0.03;
+  authored.Bowed.VibRate := 6.0;
+  authored.Bowed.AttackTime := 0.06;
+  authored.Bowed.OutputTrim := 0.8;
+
+  ms := TMemoryStream.Create;
+  reg := TSedaiInstrumentRegistry.CreateEmpty;
+  reg2 := TSedaiInstrumentRegistry.CreateEmpty;
+  try
+    reg.AddPreset(authored);
+    reg.SaveToStream(ms, 'Bowed');
+    ms.Position := 0;
+    reg2.LoadFromStream(ms);
+    idx := reg2.FindByName('RT Violin');
+    if idx >= 0 then gp := reg2.Get(idx).Bowed else gp := Default(TBowedParams);
+
+    paramsOk := (Abs(gp.MaxVelocity - 0.25) < 1e-4) and (Abs(gp.BowPosition - 0.13) < 1e-4)
+      and (Abs(gp.BowForce - 3.0) < 1e-4) and (Abs(gp.VibDepth - 0.03) < 1e-4)
+      and (Abs(gp.VibRate - 6.0) < 1e-3) and (Abs(gp.AttackTime - 0.06) < 1e-4)
+      and (Abs(gp.OutputTrim - 0.8) < 1e-4);
+    Ok('bowed preset params round-trip', (idx >= 0) and paramsOk,
+       Format('vel=%.2f pos=%.2f force=%.1f trim=%.2f',
+         [gp.MaxVelocity, gp.BowPosition, gp.BowForce, gp.OutputTrim]));
+
+    part := TSAFPart.Create;
+    try
+      part.SetSampleRate(TSR);
+      if idx >= 0 then part.SetInstrument(psBowed, reg2.Get(idx).PresetKey);
+      part.SetBowedParams(gp);
+      n := 24000; SetLength(buf, n*2);
+      FillChar(buf[0], n*2*SizeOf(Single), 0);
+      part.NoteOn(57, 1.0);
+      part.RenderBlock(@buf[0], n);
+      pk := 0; for i := 0 to n*2-1 do if Abs(buf[i]) > pk then pk := Abs(buf[i]);
+      Ok('bowed preset renders self-oscillating + bounded',
+         (idx >= 0) and (pk > 0.001) and (pk < 1.5), Format('peak=%.3f', [pk]));
+    finally
+      part.Free;
+    end;
+  finally
+    reg.Free; reg2.Free; ms.Free;
+  end;
+end;
+
 // Auto-space widener: a dual-mono input becomes a decorrelated stereo image
 // while staying MONO-SAFE (the mono sum is preserved bit-for-bit up to float
 // rounding). Also: Width=0 is a passthrough for a mono source, and Width>0 makes
@@ -2704,6 +2772,7 @@ begin
   TestLivingPresetRoundTrip;
   TestPartialPreset;
   TestReedPreset;
+  TestBowedPreset;
   TestTubeResonator;
   TestAutoSpace;
   TestResidual;
