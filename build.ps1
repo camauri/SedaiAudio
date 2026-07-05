@@ -84,7 +84,10 @@
 param(
     [switch]$Help,
     [switch]$LibOnly,
-    [switch]$TestOnly,
+    [switch]$TestOnly,   # build ONLY the QA test suite
+    [switch]$Tests,      # add the QA test suite to the product build
+    [switch]$Demos,      # force-build the demos (no prompt)
+    [switch]$SkipDemos,  # force-skip the demos (no prompt)
     [switch]$Clean,
     [switch]$CleanOnly,
     [switch]$Debug,
@@ -134,9 +137,13 @@ if ($Help) {
     Write-Host ""
     Write-Host "OPTIONS:" -ForegroundColor Yellow
     Write-Host "    -Help           Show this help message"
-    Write-Host "    -LibOnly        Build only library (no tests)"
-    Write-Host "    -TestOnly       Build only test programs"
-    Write-Host "    -Target <name>  Build a specific target by name"
+    Write-Host "    (no options)    Build tools + ask whether to build the demos"
+    Write-Host "    -LibOnly        Build only the library units"
+    Write-Host "    -TestOnly       Build only the QA test suite"
+    Write-Host "    -Tests          Also build the QA test suite (alongside tools)"
+    Write-Host "    -Demos          Build the demos (no prompt)"
+    Write-Host "    -SkipDemos      Do not build the demos (no prompt)"
+    Write-Host "    -Target <name>  Build one specific target (tools/demos/tests)"
     Write-Host "    -Clean          Clean build artifacts before building"
     Write-Host "    -CleanOnly      Only clean, do not build"
     Write-Host "    -Debug          Build with debug info instead of release"
@@ -661,54 +668,57 @@ $failed = 0
 
 # Define all build targets
 # Build targets using the new modular architecture
+# Kind: 'tool' = user-facing app (built by default), 'demo' = example (built by
+# default only after the interactive prompt / -Demos), 'test' = QA suite (built
+# only with -Tests / -TestOnly).
 $allTargets = @{
-    'test_saf_main' = @{
-        Source = 'TestSAFMain.lpr'
-        SourceDir = (Join-Path $ProjectRoot 'test')
-        Output = 'TestSAFMain.exe'
-        IsTest = $true
-    }
-    'demo_synth' = @{
-        Source = 'demo_synth.lpr'
-        SourceDir = (Join-Path $ProjectRoot 'test')
-        Output = 'demo_synth.exe'
-        IsTest = $true
-    }
     'sng_player' = @{
         Source = 'sng_player.lpr'
         SourceDir = (Join-Path $ProjectRoot 'test')
         Output = 'sng_player.exe'
-        IsTest = $true
+        Kind = 'tool'
     }
     'sng_dump' = @{
         Source = 'sng_dump.lpr'
         SourceDir = (Join-Path $ProjectRoot 'test')
         Output = 'sng_dump.exe'
-        IsTest = $true
-    }
-    'audiotest' = @{
-        Source = 'audiotest.lpr'
-        SourceDir = (Join-Path $ProjectRoot 'test')
-        Output = 'audiotest.exe'
-        IsTest = $true
-    }
-    'sedaisid_test' = @{
-        Source = 'sedaisid_test.lpr'
-        SourceDir = (Join-Path $ProjectRoot 'test')
-        Output = 'sedaisid_test.exe'
-        IsTest = $true
-    }
-    'saf_regression' = @{
-        Source = 'saf_regression.lpr'
-        SourceDir = (Join-Path $ProjectRoot 'test')
-        Output = 'saf_regression.exe'
-        IsTest = $true
+        Kind = 'tool'
     }
     'saf_play' = @{
         Source = 'saf_play.lpr'
         SourceDir = (Join-Path $ProjectRoot 'test')
         Output = 'saf_play.exe'
-        IsTest = $true
+        Kind = 'demo'
+    }
+    'demo_synth' = @{
+        Source = 'demo_synth.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'test')
+        Output = 'demo_synth.exe'
+        Kind = 'demo'
+    }
+    'test_saf_main' = @{
+        Source = 'TestSAFMain.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'test')
+        Output = 'TestSAFMain.exe'
+        Kind = 'test'
+    }
+    'audiotest' = @{
+        Source = 'audiotest.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'test')
+        Output = 'audiotest.exe'
+        Kind = 'test'
+    }
+    'sedaisid_test' = @{
+        Source = 'sedaisid_test.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'test')
+        Output = 'sedaisid_test.exe'
+        Kind = 'test'
+    }
+    'saf_regression' = @{
+        Source = 'saf_regression.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'test')
+        Output = 'saf_regression.exe'
+        Kind = 'test'
     }
 }
 
@@ -790,34 +800,57 @@ elseif ($Target) {
     if ($result) { $success++ } else { $failed++ }
     Write-Host ""
 }
+elseif ($LibOnly) {
+    # LibOnly - just compile library units by building audiotest (which pulls in all units)
+    Write-Host "Building Library..." -ForegroundColor Cyan
+    Write-Host "===================" -ForegroundColor Cyan
+
+    $targetInfo = $allTargets['audiotest']
+    $binPath = Join-Path $BinDir $platformDir
+    $outputPath = Join-Path $binPath $targetInfo.Output
+
+    $result = Build-Target -SourceFile $targetInfo.Source -SourceDir $targetInfo.SourceDir `
+        -OutputPath $outputPath -FPC $fpc -PlatformDir $platformDir `
+        -TargetCPU $CPU -TargetOS $OS -IsDebug $Debug `
+        -UseAvxCp $useAvxCp -UseAvxOp $useAvxOp -UseAvxCf $useAvxCf
+
+    if ($result) { $success++ } else { $failed++ }
+    Write-Host ""
+}
 else {
-    # Build all tests (unless lib-only)
-    if (-not $LibOnly) {
-        Write-Host "Building Tests..." -ForegroundColor Cyan
-        Write-Host "=================" -ForegroundColor Cyan
-
-        foreach ($key in $allTargets.Keys | Sort-Object) {
-            $targetInfo = $allTargets[$key]
-            if ($targetInfo.IsTest) {
-                $binPath = Join-Path $BinDir $platformDir
-                $outputPath = Join-Path $binPath $targetInfo.Output
-
-                $result = Build-Target -SourceFile $targetInfo.Source -SourceDir $targetInfo.SourceDir `
-                    -OutputPath $outputPath -FPC $fpc -PlatformDir $platformDir `
-                    -TargetCPU $CPU -TargetOS $OS -IsDebug $Debug `
-                    -UseAvxCp $useAvxCp -UseAvxOp $useAvxOp -UseAvxCf $useAvxCf
-
-                if ($result) { $success++ } else { $failed++ }
-            }
-        }
-        Write-Host ""
+    # Decide which KINDs of target to build:
+    #   tools  -> always (unless -TestOnly)
+    #   tests  -> only with -Tests or -TestOnly
+    #   demos  -> -Demos forces on, -SkipDemos forces off; with NO parameters at
+    #            all we ask interactively; with any other parameter, off.
+    $buildTools = -not $TestOnly
+    $buildTests = ($Tests -or $TestOnly)
+    if     ($Demos)     { $buildDemos = $true }
+    elseif ($SkipDemos) { $buildDemos = $false }
+    elseif ($TestOnly)  { $buildDemos = $false }
+    elseif ($PSBoundParameters.Count -eq 0) {
+        # Interactive (bare invocation) only. In a non-interactive shell / CI,
+        # Read-Host is unavailable -> default to skipping the demos.
+        try { $ans = Read-Host "Build the demo programs (saf_play, demo_synth)? [y/N]" }
+        catch { $ans = 'n' }
+        $buildDemos = ($ans -match '^(y|yes)$')
     }
-    else {
-        # LibOnly - just compile library units by building audiotest (which pulls in all units)
-        Write-Host "Building Library..." -ForegroundColor Cyan
-        Write-Host "===================" -ForegroundColor Cyan
+    else { $buildDemos = $false }
 
-        $targetInfo = $allTargets['audiotest']
+    if ($TestOnly) { Write-Host "Building Tests..." -ForegroundColor Cyan }
+    else           { Write-Host "Building..." -ForegroundColor Cyan }
+    Write-Host "===================" -ForegroundColor Cyan
+
+    foreach ($key in $allTargets.Keys | Sort-Object) {
+        $targetInfo = $allTargets[$key]
+        switch ($targetInfo.Kind) {
+            'tool'  { $doBuild = $buildTools }
+            'test'  { $doBuild = $buildTests }
+            'demo'  { $doBuild = $buildDemos }
+            default { $doBuild = $false }
+        }
+        if (-not $doBuild) { continue }
+
         $binPath = Join-Path $BinDir $platformDir
         $outputPath = Join-Path $binPath $targetInfo.Output
 
@@ -827,8 +860,8 @@ else {
             -UseAvxCp $useAvxCp -UseAvxOp $useAvxOp -UseAvxCf $useAvxCf
 
         if ($result) { $success++ } else { $failed++ }
-        Write-Host ""
     }
+    Write-Host ""
 }
 
 # Summary
