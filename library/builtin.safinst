@@ -1,0 +1,226 @@
+; SAF instrument library (.safinst) v1
+@library SAF Built-in
+@preset
+name=Sine
+category=Synth
+tags=soft clean sine
+technique=psClassic
+key=sine
+poly=8
+@preset
+name=Square
+category=Synth
+tags=hollow retro square
+technique=psClassic
+key=square
+poly=8
+@preset
+name=Saw
+category=Synth
+tags=bright classic saw
+technique=psClassic
+key=saw
+poly=8
+@preset
+name=Triangle
+category=Synth
+tags=soft mellow triangle
+technique=psClassic
+key=triangle
+poly=8
+@preset
+name=Pulse
+category=Synth
+tags=thin retro pulse
+technique=psClassic
+key=pulse
+poly=8
+@preset
+name=Noise
+category=FX
+tags=noise percussive
+technique=psClassic
+key=noise
+poly=6
+@preset
+name=Classic Lead
+category=Lead
+tags=bright lead
+technique=psClassic
+key=lead
+poly=6
+@preset
+name=Classic Bass
+category=Bass
+tags=warm sub bass
+technique=psClassic
+key=bass
+poly=6
+@preset
+name=Classic Pad
+category=Pad
+tags=warm soft evolving
+technique=psClassic
+key=pad
+poly=12
+@preset
+name=FM E-Piano
+category=Keys
+tags=warm electric
+technique=psFM
+key=epiano
+poly=16
+@preset
+name=FM Brass
+category=Brass
+tags=bright
+technique=psFM
+key=brass
+poly=8
+@preset
+name=FM Bell
+category=Bells
+tags=metallic bright
+technique=psFM
+key=bell
+poly=12
+@preset
+name=FM Organ
+category=Organ
+tags=clean
+technique=psFM
+key=organ
+poly=12
+@preset
+name=FM Bass
+category=Bass
+tags=punchy
+technique=psFM
+key=bass
+poly=6
+@preset
+name=PWM
+category=Lead
+tags=moving hollow
+technique=psWavetable
+key=pwm
+poly=6
+@preset
+name=SuperSaw
+category=Lead
+tags=wide big bright
+technique=psWavetable
+key=supersaw
+poly=6
+@preset
+name=Drawbar Organ
+category=Organ
+tags=clean drawbar
+technique=psAdditive
+key=organ
+poly=12
+@preset
+name=Glass Bell
+category=Bells
+tags=metallic clean
+technique=psAdditive
+key=bell
+poly=12
+@preset
+name=Strings
+category=Strings
+tags=warm ensemble
+technique=psAdditive
+key=strings
+poly=12
+@preset
+name=Choir
+category=Pad
+tags=vocal warm evolving
+technique=psAdditive
+key=choir
+poly=12
+@preset
+name=Brass Section
+category=Brass
+tags=bright section
+technique=psAdditive
+key=brass
+poly=8
+@preset
+name=Flute
+category=Wind
+tags=soft breathy
+technique=psAdditive
+key=flute
+poly=6
+@preset
+name=Guitar
+category=Plucked
+tags=plucked bright
+technique=psKarplus
+key=guitar
+poly=12
+@preset
+name=Plucked Bass
+category=Bass
+tags=plucked round
+technique=psKarplus
+key=bass
+poly=6
+@preset
+name=Harp
+category=Plucked
+tags=bright singing
+technique=psKarplus
+key=harp
+poly=12
+@preset
+name=Muted Pluck
+category=Plucked
+tags=short staccato
+technique=psKarplus
+key=mute
+poly=12
+@preset
+name=Karplus Drum
+category=Drums
+tags=percussive
+technique=psKarplus
+key=drum
+poly=8
+@preset
+name=SID Lead
+category=Lead
+tags=bright retro chip
+technique=psSID
+key=lead
+poly=6
+@preset
+name=SID Pulse
+category=Lead
+tags=thin retro chip
+technique=psSID
+key=pulse
+poly=6
+@preset
+name=SID Bass
+category=Bass
+tags=punchy retro chip
+technique=psSID
+key=bass
+poly=6
+@preset
+name=SID Triangle
+category=Synth
+tags=soft retro chip
+technique=psSID
+key=triangle
+poly=8
+@preset
+name=SID Noise
+category=Drums
+tags=noise retro chip
+technique=psSID
+key=noise
+poly=8

@@ -9,13 +9,19 @@ preset to a `TSAFPart`.
 
 | File | Contents | Technique | Licence |
 |------|----------|-----------|---------|
+| `builtin.safinst` | 32 synth presets: classic (9), FM (5), wavetable (2), additive (6), Karplus (5), SID (5) | all techniques | GPL-3.0 (SAF original) |
 | `winds.safinst` | Clarinet, Soprano/Alto/Tenor Sax | `psReed` (waveguide physical model) | GPL-3.0 (SAF original) |
 | `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax (×2 registers) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 
-*(more libraries — free-partial high-fidelity instruments, classic/FM synths, SID
-— land here as they are curated.)*
+*(more libraries — free-partial high-fidelity instruments, more sampled-derived
+families — land here as they are curated.)*
 
 ## Licensing & attribution
+
+- **`builtin.safinst`** — SAF's out-of-the-box synth palette across every
+  synthesis technique the engine offers (subtractive, FM, wavetable, additive,
+  Karplus-Strong, SID-flavoured). All SAF-original, no external data. Licence
+  GPL-3.0, same as SAF.
 
 - **`winds.safinst`** — physically-modelled reed instruments generated entirely
   by SAF's `TSedaiReedGenerator` (a re-derivation of the McIntyre–Schumacher–
