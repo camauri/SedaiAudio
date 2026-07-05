@@ -1687,6 +1687,16 @@ begin
     e2 := MagAt(Round(0.4*TSR), Round(0.9*TSR), 261.63);   // f0
     Ok('reed conical has even harmonics (2f0 present)', e1 > 0.2*e2,
        Format('|2f0|=%.3f |f0|=%.3f', [e1, e2]));
+
+    // (7) velocity scales loudness (soft note quieter, but still oscillating)
+    g.Kill; g.NoteOn(60, 1.0);
+    for i := 0 to n - 1 do buf[i] := g.GenerateSample;
+    e2 := 0; for i := Round(0.4*TSR) to Round(0.9*TSR) do e2 := e2 + buf[i]*buf[i];   // loud energy
+    g.Kill; g.NoteOn(60, 0.4);
+    for i := 0 to n - 1 do buf[i] := g.GenerateSample;
+    e1 := 0; for i := Round(0.4*TSR) to Round(0.9*TSR) do e1 := e1 + buf[i]*buf[i];   // soft energy
+    Ok('reed velocity scales loudness (soft < loud, still sounds)',
+       (e1 > 0) and (e1 < 0.7 * e2), Format('soft/loud=%.2f', [e1/Max(e2,1e-9)]));
   finally
     g.Free;
   end;

@@ -63,6 +63,8 @@ type
     FMaxPressure: Single;
     FPressure: Single;
     FPressCoeff: Single;
+    FVelGain: Single;          // velocity -> output loudness (reed self-osc level
+                               // is ~pressure-set, so velocity scales the output)
     FNoiseGain: Single;
     FVibratoGain: Single;
     FVibratoRate: Single;
@@ -141,6 +143,7 @@ begin
   FBoreType := rbCylindrical;
   FBlowPosition := 0.2;
   FMaxPressure := 0.55;
+  FVelGain := 1.0;
   FNoiseGain := 0.0;
   FVibratoGain := 0.0;
   FVibratoRate := 5.0;
@@ -259,7 +262,11 @@ end;
 function TSedaiReedGenerator.BreathNow: Single;
 var target, b: Single;
 begin
-  if FGateOpen then target := FMaxPressure * (0.6 + 0.4 * FVelocity)
+  // Breath pressure is held at the (robust, well-above-threshold) configured
+  // value so every velocity oscillates cleanly; velocity controls LOUDNESS via
+  // FVelGain on the output (the reed self-osc level is ~constant above threshold,
+  // so scaling pressure near the edge would just make soft notes drop out).
+  if FGateOpen then target := FMaxPressure
   else target := 0;
   FPressure := target + (FPressure - target) * FPressCoeff;
   b := FPressure;
@@ -277,6 +284,7 @@ procedure TSedaiReedGenerator.NoteOn(ANote: Integer; AVelocity: Single);
 begin
   FNote := ANote;
   FVelocity := EnsureRange(AVelocity, 0, 1);
+  FVelGain := 0.3 + 0.7 * FVelocity;   // velocity -> output loudness
   FGateOpen := True;
   FReleasing := False;
   FFrequency := 440 * Power(2, (ANote - 69) / 12);
@@ -335,7 +343,7 @@ begin
     else if reedRefl < -1.0 then reedRefl := -1.0;
     DelayTick(FD1, temp);
     DelayTick(FD0, breath - pressDiff * reedRefl - temp);
-    Result := FOutputGain * junction * FAmplitude;
+    Result := FOutputGain * junction * FAmplitude * FVelGain;
   end
   else
   begin
@@ -348,7 +356,7 @@ begin
     if reedRefl > 1.0 then reedRefl := 1.0
     else if reedRefl < -1.0 then reedRefl := -1.0;
     DelayTick(FD0, breath + pressDiff * reedRefl);
-    Result := FOutputGain * boreOut * FAmplitude;
+    Result := FOutputGain * boreOut * FAmplitude * FVelGain;
   end;
 end;
 
