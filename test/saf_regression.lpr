@@ -24,7 +24,7 @@ uses
   SedaiFMOperator, SedaiAdditiveGenerator, SedaiPartialGenerator, SedaiReedGenerator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
   SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
-  SedaiSpatialChain, SedaiConvolver;
+  SedaiSpatialChain, SedaiConvolver, SedaiTubeResonator;
 
 const
   SR    = 44100;
@@ -2063,6 +2063,72 @@ begin
   end;
 end;
 
+// Tube resonator (commuted "il tubo" body filter): a note-tuned waveguide comb.
+// Verifies: inert at resonance/mix 0 (bit passthrough); with resonance it rings
+// at the tuned frequency (comb peak at f0 >> between-harmonic bin); stays bounded.
+procedure TestTubeResonator;
+const TSR = 48000;
+var
+  t: TSedaiTubeResonator;
+  x, y: array of Single;
+  i, n: Integer;
+  pk, magF0, magMid, d: Single;
+  rng: Cardinal;
+  passOk: Boolean;
+
+  function MagAt(const b: array of Single; a0, b0: Integer; f: Single): Single;
+  var k: Integer; w, c, q0, q1, q2: Single;
+  begin
+    w := 2*Pi*f/TSR; c := 2*Cos(w); q1 := 0; q2 := 0;
+    for k := a0 to b0 do begin q0 := c*q1 - q2 + b[k]; q2 := q1; q1 := q0; end;
+    Result := Sqrt(q1*q1 + q2*q2 - c*q1*q2);
+  end;
+begin
+  WriteLn('== tube resonator (commuted body) ==');
+  n := TSR;                          // 1 s
+  SetLength(x, n); SetLength(y, n);
+  rng := 99991;
+  for i := 0 to n-1 do
+  begin
+    rng := rng xor (rng shl 13); rng := rng xor (rng shr 17); rng := rng xor (rng shl 5);
+    x[i] := 0.2 * ((rng / 2147483648.0) - 1.0);   // low-level white noise excitation
+  end;
+
+  t := TSedaiTubeResonator.Create;
+  try
+    t.SetSampleRate(TSR);
+    t.SetFrequency(261.63);          // C4
+    t.SetMode(tmFull);
+
+    // (1) inert when resonance/mix = 0 -> exact passthrough
+    t.SetResonance(0); t.SetMix(0); t.Reset;
+    passOk := True;
+    for i := 0 to 999 do
+    begin
+      y[i] := t.ProcessSample(x[i]);
+      if y[i] <> x[i] then passOk := False;
+    end;
+    Ok('tube inert at resonance/mix 0 (passthrough)', passOk, '');
+
+    // (2) with resonance, the comb rings at f0: energy at f0 >> a between-harmonic
+    // frequency (1.5*f0), and the output stays bounded.
+    t.SetResonance(0.9); t.SetMix(0.6); t.Reset;
+    pk := 0;
+    for i := 0 to n-1 do
+    begin
+      y[i] := t.ProcessSample(x[i]);
+      if Abs(y[i]) > pk then pk := Abs(y[i]);
+    end;
+    magF0  := MagAt(y, Round(0.4*TSR), Round(0.9*TSR), 261.63);
+    magMid := MagAt(y, Round(0.4*TSR), Round(0.9*TSR), 392.44);   // 1.5*f0 (between harmonics)
+    Ok('tube rings at the tuned f0 (comb peak >> between)', magF0 > 3.0 * magMid,
+       Format('|f0|=%.2f |1.5f0|=%.2f', [magF0, magMid]));
+    Ok('tube output bounded', (pk > 0) and (pk < 4.0), Format('peak=%.3f', [pk]));
+  finally
+    t.Free;
+  end;
+end;
+
 // Waveguide-reed preset .safinst round-trip: a psReed preset (physical-model sax
 // config) survives save->load with its parameters intact, and drives an audible,
 // bounded, self-oscillating voice through a Part.
@@ -2558,6 +2624,7 @@ begin
   TestLivingPresetRoundTrip;
   TestPartialPreset;
   TestReedPreset;
+  TestTubeResonator;
   TestAutoSpace;
   TestResidual;
   TestBodyResonator;
