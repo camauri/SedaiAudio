@@ -12,6 +12,7 @@ preset to a `TSAFPart`.
 | `builtin.safinst` | 32 synth presets: classic (9), FM (5), wavetable (2), additive (6), Karplus (5), SID (5) | all techniques | GPL-3.0 (SAF original) |
 | `winds.safinst` | Clarinet, Soprano/Alto/Tenor Sax | `psReed` (waveguide physical model) | GPL-3.0 (SAF original) |
 | `strings.safinst` | Violin, Viola, Cello | `psBowed` (bowed-string physical model) | GPL-3.0 (SAF original) |
+| `percussion.safinst` | Bell, Marimba, Tubular Bells, Woodblock, Tom | `psModal` (modal struck synthesis) | GPL-3.0 (SAF original) |
 | `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax (×2 registers) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 
 *(more libraries — free-partial high-fidelity instruments, more sampled-derived
@@ -28,6 +29,10 @@ families — land here as they are curated.)*
   `TSedaiBowedGenerator` (a re-derivation of the McIntyre–Schumacher–Woodhouse
   bowed-string / Smith & STK `Bowed` algorithm; re-implemented in Free Pascal, no
   STK code or dependency). No sampled audio. Licence: GPL-3.0.
+
+- **`percussion.safinst`** — struck idiophones synthesised by SAF's
+  `TSedaiModalGenerator` (modal synthesis: a bank of decaying resonators at each
+  instrument's signature mode frequencies). No sampled audio. Licence: GPL-3.0.
 
 - **`winds.safinst`** — physically-modelled reed instruments generated entirely
   by SAF's `TSedaiReedGenerator` (a re-derivation of the McIntyre–Schumacher–
