@@ -33,7 +33,7 @@ interface
 
 uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiSignalNode,
-  SedaiOscillator;
+  SedaiOscillator, SedaiFormantBody;
 
 type
   TReedBoreType = (rbCylindrical, rbConical);
@@ -69,6 +69,7 @@ type
     FToneState: Single;        // dynamic-brightness one-pole low-pass state
     FToneCoeff: Single;        // one-pole coeff (velocity -> cutoff): soft=darker
     FBrightness: Single;       // 0..1 depth of the velocity->tone effect
+    FBody: TSedaiFormantBody;  // instrument body colour (sax/clarinet formants)
     FNoiseGain: Single;
     FVibratoGain: Single;
     FVibratoRate: Single;
@@ -117,6 +118,8 @@ type
     // Dynamic brightness: how much the played velocity opens the tone (0 = off /
     // flat, 1 = soft notes darkened by a ~1.8 kHz low-pass, loud notes fully open).
     procedure SetBrightness(ADepth: Single);
+    // Instrument body colour (formant filter) on the reed output: sax/clarinet/none.
+    procedure SetBody(AKind: TFormantBodyKind; AMix: Single);
     // Bore geometry. rbCylindrical (odd harmonics) or rbConical (faux cone; the
     // ABlowPosition 0..1 = the reed's position along the bore, which fills in the
     // even harmonics; ~0.2 is sax-like, avoid 0 and 0.5).
@@ -171,11 +174,13 @@ begin
   FReleasing := False;
   FFrequency := 261.63;
   FAmplitude := 1.0;
+  FBody := TSedaiFormantBody.Create;
   SampleRateChanged;
 end;
 
 destructor TSedaiReedGenerator.Destroy;
 begin
+  FBody.Free;
   SetLength(FD0.buf, 0);
   SetLength(FD1.buf, 0);
   inherited Destroy;
@@ -195,6 +200,7 @@ begin
   FD1.len := Length(FD1.buf);
   RecalcPressCoeff;
   UpdateBoreDelay;
+  if Assigned(FBody) then FBody.SetSampleRate(FSampleRate);
 end;
 
 procedure TSedaiReedGenerator.SetFrequency(AValue: Single);
@@ -260,6 +266,7 @@ begin
   FD0.last := 0; FD1.last := 0;
   FFilterX1 := 0;
   FToneState := 0;
+  if Assigned(FBody) then FBody.Reset;
 end;
 
 function TSedaiReedGenerator.NoiseSample: Single;
@@ -375,7 +382,7 @@ begin
     else if reedRefl < -1.0 then reedRefl := -1.0;
     DelayTick(FD1, temp);
     DelayTick(FD0, breath - pressDiff * reedRefl - temp);
-    Result := FOutputGain * junction * FAmplitude * FVelGain;
+    Result := FOutputGain * FBody.ProcessSample(junction) * FAmplitude * FVelGain;
   end
   else
   begin
@@ -388,7 +395,7 @@ begin
     if reedRefl > 1.0 then reedRefl := 1.0
     else if reedRefl < -1.0 then reedRefl := -1.0;
     DelayTick(FD0, breath + pressDiff * reedRefl);
-    Result := FOutputGain * boreOut * FAmplitude * FVelGain;
+    Result := FOutputGain * FBody.ProcessSample(boreOut) * FAmplitude * FVelGain;
   end;
 
   // dynamic-brightness one-pole low-pass (velocity-opened tone; off when depth 0)
@@ -429,6 +436,12 @@ procedure TSedaiReedGenerator.SetBrightness(ADepth: Single);
 begin
   FBrightness := EnsureRange(ADepth, 0, 1);
   UpdateToneCoeff;
+end;
+
+procedure TSedaiReedGenerator.SetBody(AKind: TFormantBodyKind; AMix: Single);
+begin
+  FBody.SetBody(AKind);
+  FBody.SetMix(AMix);
 end;
 
 procedure TSedaiReedGenerator.SetBoreType(AType: TReedBoreType; ABlowPosition: Single);

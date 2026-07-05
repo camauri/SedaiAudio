@@ -169,6 +169,8 @@ type
     ReflMag: Single;           // bell reflection magnitude (0.5..0.999)
     Brightness: Single;        // velocity->tone depth (0 = flat)
     AttackTime: Single;        // breath ramp time (s); 0 => default
+    BodyKind: TFormantBodyKind;// instrument body (sax/clarinet/none)
+    BodyMix: Single;           // body colour amount (0 = raw reed)
     OutputTrim: Single;        // voice output level
   end;
 
@@ -970,6 +972,7 @@ begin
   if AParams.ReflMag > 0 then RG.SetReflection(AParams.ReflMag);
   RG.SetBrightness(AParams.Brightness);
   if AParams.AttackTime > 0 then RG.SetAttack(AParams.AttackTime);
+  RG.SetBody(AParams.BodyKind, AParams.BodyMix);
   AVoice.OutputLevel := AParams.OutputTrim;
 end;
 

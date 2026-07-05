@@ -28,7 +28,7 @@ uses
   Classes, SysUtils, Math;
 
 type
-  TFormantBodyKind = (fbNone, fbViolin, fbViola, fbCello);
+  TFormantBodyKind = (fbNone, fbViolin, fbViola, fbCello, fbSax, fbClarinet);
 
   { TSedaiFormantBody }
   TSedaiFormantBody = class
@@ -111,6 +111,21 @@ begin
         M(4, 500, 3.5, 0.50);
         M(5, 1200, 2.2, 0.65);  // broad
         M(6, 2000, 2.5, 0.30);
+      end;
+    fbSax:                       // conical-bore + bell: broad ~1.4 kHz "sax formant"
+      begin
+        SetLength(FModes, 4);
+        M(0, 800, 2.5, 0.70);
+        M(1, 1400, 2.0, 1.00);  // the characteristic sax formant (broad)
+        M(2, 2200, 2.5, 0.55);
+        M(3, 3200, 3.0, 0.30);
+      end;
+    fbClarinet:                  // cylindrical bore: gentler, a ~1.5/3 kHz emphasis
+      begin
+        SetLength(FModes, 3);
+        M(0, 600, 3.0, 0.60);
+        M(1, 1500, 2.5, 0.90);
+        M(2, 3000, 3.0, 0.45);
       end;
   else
     SetLength(FModes, 0);

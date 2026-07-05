@@ -510,13 +510,14 @@ begin
       end;
       // Author side: full WAVEGUIDE-REED parameter block (one line, all params).
       if (p.Technique = psReed) and p.HasReedParams then
-        sl.Add(Format('reed=%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s',
+        sl.Add(Format('reed=%d,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%s,%s',
           [Ord(p.Reed.BoreType),
            FloatToStr(p.Reed.BlowPosition, fs), FloatToStr(p.Reed.ReedOffset, fs),
            FloatToStr(p.Reed.ReedSlope, fs), FloatToStr(p.Reed.Pressure, fs),
            FloatToStr(p.Reed.Noise, fs), FloatToStr(p.Reed.VibDepth, fs),
            FloatToStr(p.Reed.VibRate, fs), FloatToStr(p.Reed.ReflMag, fs),
            FloatToStr(p.Reed.Brightness, fs), FloatToStr(p.Reed.AttackTime, fs),
+           Ord(p.Reed.BodyKind), FloatToStr(p.Reed.BodyMix, fs),
            FloatToStr(p.Reed.OutputTrim, fs)]));
       // Author side: full BOWED-STRING parameter block (one line).
       if (p.Technique = psBowed) and p.HasBowedParams then
@@ -911,6 +912,8 @@ begin
         cur.Reed.ReflMag := StrToFloatDef(NextTok, 0.95, fs);
         cur.Reed.Brightness := StrToFloatDef(NextTok, 0, fs);
         cur.Reed.AttackTime := StrToFloatDef(NextTok, 0, fs);
+        cur.Reed.BodyKind := TFormantBodyKind(StrToIntDef(NextTok, 0));
+        cur.Reed.BodyMix := StrToFloatDef(NextTok, 0, fs);
         cur.Reed.OutputTrim := StrToFloatDef(NextTok, 1.0, fs);
       end
       // --- BOWED-STRING block ---
