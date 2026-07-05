@@ -39,7 +39,19 @@ families — land here as they are curated.)*
   (GPL/AGPL) binds the code, not the preset data; each data source is credited on
   principle.
 
-## Playing a preset (sketch)
+## Quick start
+
+The `saf_play` demo (`test/saf_play.lpr`) is the runnable entry point — it loads
+these libraries, prints the catalogue, plays a short phrase and renders a WAV, all
+offline (no audio device):
+
+```
+./build.ps1 -Target saf_play
+bin/x86_64-win64/saf_play.exe                                   # tour of all three libraries -> saf_play.wav
+bin/x86_64-win64/saf_play.exe library/winds.safinst "Tenor Sax" out.wav   # one instrument
+```
+
+The whole usage flow, in code:
 
 ```pascal
 reg := TSedaiInstrumentRegistry.CreateEmpty;
@@ -49,5 +61,5 @@ try reg.LoadFromStream(fs); finally fs.Free; end;
 part := TSAFPart.Create;
 part.SetSampleRate(48000);
 reg.ApplyToPartByName('Tenor Sax', part);   // configures the voice pool
-part.NoteOn(60, 1.0);                         // then RenderBlock(...)
+part.NoteOn(60, 1.0);                         // then RenderBlock(@buf, frames)
 ```

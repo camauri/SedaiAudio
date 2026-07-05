@@ -704,6 +704,12 @@ $allTargets = @{
         Output = 'saf_regression.exe'
         IsTest = $true
     }
+    'saf_play' = @{
+        Source = 'saf_play.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'test')
+        Output = 'saf_play.exe'
+        IsTest = $true
+    }
 }
 
 # Adjust extension based on OS
