@@ -26,16 +26,17 @@ Sedai Audio Foundation provides a comprehensive audio synthesis framework follow
 
 ### Key Features
 
-- **Synthesis Engines**: a single *universal voice* (`TSedaiVoice`) can be any of six source types — Classic/Subtractive, FM (DX7-style), Wavetable, Additive, Sample (sampler) and Karplus-Strong (physical-modelling pluck) — all exposed through the high-level facade (`Play*` API) and the Part/Instrument engine; SID Evo (`SedaiSIDEvo`) is a standalone unit
+- **Synthesis Engines**: a single *universal voice* (`TSedaiVoice`) can be any of eight source types — Classic/Subtractive, FM (DX7-style), Wavetable, Additive, Sample (sampler), Karplus-Strong (plucked-string physical model), **Free-Partial** (McAulay-Quatieri sinusoidal model, note-transposable, WAV→preset analysis) and **Waveguide-Reed** (self-oscillating clarinet/sax physical model). The Part/Instrument engine adds a ninth technique, SID-flavoured oscillators, for **9 techniques** in the `.safinst` preset system; the high-level facade (`Play*` API) covers five of them. SID Evo (`SedaiSIDEvo`, the reSID-accurate chip) is a standalone unit
+- **Physical Modelling**: plucked string (Karplus-Strong), self-oscillating single-reed waveguide (nonlinear reed + bore, MSW/Smith-STK re-derivation), and a commuted tube/body resonator
 - **Professional Mixer**: Channels, aux buses, group buses, master bus with metering
-- **Audio Effects**: Delay, Reverb, Chorus, Flanger, Phaser, Distortion, Compressor, Limiter, EQ
+- **Audio Effects**: Delay, Reverb, Chorus, Flanger, Phaser, Distortion, Compressor, Limiter, EQ; plus auto-space (mono-safe stereo widener), body resonator, short-FIR convolver, tube resonator
 - **Advanced Filters**: 6 filter types, multi-pole cascading (12/24/48 dB/oct)
 - **DAW Foundation**: Transport-driven render, audio + MIDI tracks (MIDI tracks play through a per-track instrument), clips, automation, audio recording, working undo/redo, and project save/load (native `.safproj` text format, with a format-dispatch seam for SMF / Dawproject / etc.)
 - **Real-time MIDI Playback**: Standard MIDI file support with 16-channel polyphony
 - **GoatTracker Player**: Native playback of GoatTracker v2 .sng files with full command support
-- **Audio File I/O**: WAV read/write (8/16/24/32-bit PCM, 32/64-bit float) with professional dithering; AIFF/AIFC read + write (big-endian PCM, pure-Pascal); FLAC read (pure-Pascal decoder)
-- **40+ Built-in Presets**: Ready-to-use sounds for all synthesis types
-- **Cross-Platform**: Works on Linux and Windows via SDL2
+- **Audio File I/O**: WAV read/write (8/16/24/32-bit PCM, 32/64-bit float) with professional dithering; AIFF/AIFC read + write (big-endian PCM); FLAC read **and write** (pure-Pascal, lossless); OGG Vorbis and MP3 read (pure-Pascal decoders)
+- **Instrument content**: 40+ built-in synth presets, plus a **shipped instrument library** (`library/*.safinst` — built-in synths, physically-modelled winds, and additive instruments resynthesised from CC0 samples)
+- **Cross-Platform**: Works on Linux and Windows via SDL2 (offline rendering needs no audio device)
 
 ---
 
@@ -183,8 +184,12 @@ The library follows a modular, layered architecture designed for maximum flexibi
 
 The library provides a set of composable effect processors, all derived from
 the `TSedaiEffect` base class in `src/Effects/`: `TSedaiReverb`, `TSedaiDelay`,
-`TSedaiChorus`, `TSedaiFlanger`, `TSedaiPhaser`. You chain them by passing the
-audio buffer through each processor in turn.
+`TSedaiChorus`, `TSedaiFlanger`, `TSedaiPhaser`, plus the spatial/timbral set
+`TSedaiAutoSpace` (mono-safe stereo widener), `TSedaiBodyResonator` (modal body /
+radiation) and `TSedaiConvolver` (short stereo FIR). You chain them by passing the
+audio buffer through each processor in turn. `TSedaiTubeResonator` (the commuted
+tube/body filter) is a per-voice component — note-tuned, so it lives in the voice
+rather than as an insert.
 
 > **Note:** an earlier design (see `ARCHITECTURE_PROPOSAL.md`, kept as a
 > historical document) proposed a DAG-based `TSedaiEffectGraph` and a
@@ -207,8 +212,9 @@ TSAFEngine
 ```
 
 - **`TSedaiVoice`** is a *universal* voice: a single voice can be an oscillator stack,
-  an FM synth, a wavetable generator, an additive generator, a sampler, or a
-  Karplus-Strong string (`TVoiceSourceType` — six source types), with a shared
+  an FM synth, a wavetable generator, an additive generator, a sampler, a
+  Karplus-Strong string, a free-partial engine, or a waveguide reed
+  (`TVoiceSourceType` — eight source types), with a shared
   envelope / filter / amp / pan chain and a per-voice **modulation matrix**
   (`TSedaiModulationMatrix`) routing envelopes / LFOs (unlimited) / velocity / key-track
   to pitch, cutoff and amplitude. Oscillators can be combined (mix / ring-mod / sync)
@@ -276,7 +282,9 @@ TSAFEngine
 | **SedaiSamplePlayer** | Sample playback (loop modes, pitch, interpolation) |
 | **SedaiFMOperator** | FM synthesis (6-operator DX7-style, algorithms) |
 | **SedaiAdditiveGenerator** | Additive synthesis (up to 64 harmonics, 10 presets) |
+| **SedaiPartialGenerator** | Free-partial (McAulay-Quatieri) synthesis — N partials with time-varying freq/amp tracks |
 | **SedaiKarplusGenerator** | Karplus-Strong physical modelling (plucked string / percussion) |
+| **SedaiReedGenerator** | Waveguide single-reed physical model (self-oscillating clarinet / sax) |
 
 #### Modulators
 
@@ -484,6 +492,40 @@ with damping and blend controls and an energy follower for natural note endings.
 
 - Facade: `PlayKarplus` / `PlayKarplusAdv` / `PlayPluck` (guitar) / `PlayKarplusBass`
 
+### Free-Partial Synthesis (second-generation additive)
+
+A **McAulay-Quatieri sinusoidal model** (`SedaiPartialGenerator`, `vstPartial`):
+instead of harmonics locked to `k·f0`, it renders N **free partials**, each with its
+own breakpoint track of `(time, frequency, amplitude)` and a continuous-phase
+oscillator. Frequencies are arbitrary and time-varying, so it reproduces the
+**inharmonic "flesh"** (reed noise, air, drifting HF) that a pure harmonic additive
+discards. Partials are born/die at their first/last breakpoint; a clean exponential
+release avoids the "metallic tail" of a hard cut; `SetAnalysisF0` transposes the whole
+cluster so a preset plays across the keyboard while preserving its inharmonicity.
+
+Partials come from analysis: SAF has an in-house **native partial tracker** (STFT →
+spectral peak picking with parabolic interpolation → McAulay-Quatieri peak matching)
+that turns any WAV into a `psPartial` `.safinst` preset — no external tool needed. On
+a tenor-sax sample it matches/beats SPEAR (the additive gold standard) objectively.
+
+### Waveguide-Reed Synthesis (single-reed physical model)
+
+A **self-oscillating** wind instrument (`SedaiReedGenerator`, `vstReed`): a nonlinear
+reed driving a digital-waveguide bore in the McIntyre-Schumacher-Woodhouse feedback
+loop (re-derived from the Smith / STK clarinet and Saxofony algorithms by Cook &
+Scavone — re-implemented in Free Pascal, no STK code or dependency). Unlike the summing
+engines, the reed's pressure-controlled nonlinearity shapes the waveform sample by
+sample, producing genuine reed articulation.
+
+- **Cylindrical bore** (clarinet): odd harmonics; **conical / faux-cone** (sax): full
+  harmonic series via a blow-position between two delay lines.
+- Expressive: velocity → loudness + brightness, configurable breath attack, vibrato,
+  breath noise. Validated objectively (pitch within ~cent across the range, stable).
+- A companion **commuted tube/body resonator** (`SedaiTubeResonator`) can lend the
+  resonant "body" of a bore to an otherwise body-less partial/additive source.
+
+Shipped as ready instruments in `library/winds.safinst` (Clarinet, Soprano/Alto/Tenor Sax).
+
 ### SID Evo Synthesis
 
 A Commodore 64 SID emulator with extended capabilities. The classic emulation path is a
@@ -643,6 +685,44 @@ begin
   SIDEvo.Free;
 end.
 ```
+
+---
+
+## Instrument Library
+
+SAF ships ready-to-play instruments as **`.safinst`** text libraries under
+[`library/`](library/). Each library holds one or more presets; load it with
+`TSedaiInstrumentRegistry` and apply a preset to a `TSAFPart`.
+
+| Library | Contents | Technique | Licence |
+|---------|----------|-----------|---------|
+| `builtin.safinst` | 32 synth presets (classic, FM, wavetable, additive, Karplus, SID) | all | GPL-3.0 (SAF) |
+| `winds.safinst` | Clarinet, Soprano/Alto/Tenor Sax | waveguide-reed physical model | GPL-3.0 (SAF) |
+| `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax | additive resynthesis | preset data CC0 (VCSL) |
+
+The `saf_play` demo is the runnable entry point — it loads these libraries, prints
+the catalogue, plays a short phrase and renders a WAV, all offline (no audio device):
+
+```
+./build.ps1 -Target saf_play
+bin/x86_64-win64/saf_play.exe                                     # tour of all three libraries -> saf_play.wav
+bin/x86_64-win64/saf_play.exe library/winds.safinst "Tenor Sax"  # one instrument
+```
+
+The whole flow, in code:
+
+```pascal
+reg := TSedaiInstrumentRegistry.CreateEmpty;
+fs  := TFileStream.Create('library/winds.safinst', fmOpenRead);
+try reg.LoadFromStream(fs); finally fs.Free; end;
+
+part := TSAFPart.Create;
+part.SetSampleRate(48000);
+reg.ApplyToPartByName('Tenor Sax', part);   // configures the voice pool
+part.NoteOn(60, 1.0);                         // then part.RenderBlock(@buf, frames)
+```
+
+See [`library/README.md`](library/README.md) for the licensing / attribution detail.
 
 ---
 
@@ -952,67 +1032,50 @@ If you prefer manual installation:
 
 The project includes cross-platform build scripts that support custom compiler paths.
 
-#### Linux
+#### Windows (PowerShell) — primary
 
-```bash
-# Make script executable (first time only)
-chmod +x build.sh
-
-# Build with system FPC
-./build.sh
-
-# Build with custom FPC path
-./build.sh --fpc /path/to/fpc
-
-# Build only demos
-./build.sh --demos-only
-
-# Clean build artifacts
-./build.sh --clean
-
-# Show help
-./build.sh --help
-```
-
-#### Windows (PowerShell)
+A plain build produces the user-facing **tools**, and *asks* whether to also build
+the **demos**; the **QA test suite** is built only on request. Targets are grouped by
+kind so a normal build isn't a pile of test executables.
 
 ```powershell
-# Build with system FPC
-.\build.ps1
-
-# Build with custom FPC path
-.\build.ps1 -FpcPath "C:\FPC\3.2.2\bin\i386-win32\fpc.exe"
-
-# Build specific target
-.\build.ps1 -Target sng_player
-
-# Clean build artifacts
-.\build.ps1 -Clean
-
-# Build with debug symbols
-.\build.ps1 -Debug
-
-# Show help
+.\build.ps1                 # tools + ask whether to build the demos
+.\build.ps1 -Demos          # tools + demos (no prompt)
+.\build.ps1 -SkipDemos      # tools only (no prompt)
+.\build.ps1 -Tests          # tools + the QA test suite
+.\build.ps1 -TestOnly       # only the QA test suite
+.\build.ps1 -Target sng_player   # just one target (any parameter suppresses the prompt)
+.\build.ps1 -LibOnly        # compile the library units only
+.\build.ps1 -Clean          # clean artifacts before building
+.\build.ps1 -Debug          # debug symbols instead of release
+.\build.ps1 -FpcPath "C:\FPC\3.2.2\bin\x86_64-win64\fpc.exe"
 .\build.ps1 -Help
 ```
 
+#### Linux / macOS
+
+> `build.sh` is currently a **stub / placeholder**. On Linux/macOS, invoke FPC
+> directly (e.g. `fpc -MObjFPC -Sh -Fusrc/... test/saf_play.lpr`) until the native
+> build script is implemented.
+
 ### Build Targets
 
-| Target | Description |
-|--------|-------------|
-| `test_saf_main` | Main SAF API test (Classic, FM, Wavetable synthesis) |
-| `demo_synth` | Synth demo |
-| `sng_player` | GoatTracker .sng player |
-| `sng_dump` | Per-frame SID register dump tool (for diagnostics / reference comparison) |
-| `audiotest` | Audio backend test |
-| `sedaisid_test` | SedaiSIDEvo verification / regression test |
-| `saf_regression` | Headless integrated render-path regression suite (engine→mixer→master, all 6 sources, signal-graph cycle detection) |
+| Target | Kind | Description |
+|--------|------|-------------|
+| `sng_player` | tool | GoatTracker `.sng` player |
+| `sng_dump` | tool | `.sng` structure / SID register dump (diagnostics) |
+| `saf_play` | demo | Entry-point demo: load a library, play a phrase, render a WAV |
+| `demo_synth` | demo | Interactive SDL2 synth demo (older global `Play*` API) |
+| `test_saf_main` | test | Main SAF API test (Classic/FM/Wavetable) |
+| `audiotest` | test | Audio backend / render path test |
+| `sedaisid_test` | test | SedaiSIDEvo verification / regression |
+| `saf_regression` | test | Headless render-path regression suite (engine→mixer→master, every source type, cycle detection) |
 
 ### Building a single target
 
 ```powershell
-.\build.ps1 -Target sng_player          # build just one target
-.\build.ps1 -Target sng_player -Clean   # clean then build
+.\build.ps1 -Target saf_play           # build just one target
+.\build.ps1 -Target saf_play -Clean    # clean then build
 ```
 
 Sources live under `test/` (`*.lpr`); the build script resolves each target to
@@ -1021,6 +1084,15 @@ its source file and emits the executable into `bin/<cpu>-<os>/`.
 ---
 
 ## Demo Programs
+
+### saf_play
+
+The entry-point demo: loads the shipped `.safinst` libraries, prints the instrument
+catalogue, plays a short phrase and renders it to a WAV — all offline (no audio
+device). With no arguments it renders a *tour* of all three libraries; given a
+library and instrument name it plays that one. The code doubles as a compact,
+readable example of the `TSedaiInstrumentRegistry` + `TSAFPart` API. See
+[Instrument Library](#instrument-library).
 
 ### audiotest
 
@@ -1066,7 +1138,7 @@ emulator state (accumulators, envelopes, output) against a reference dump.
 
 Headless integrated regression suite for the synth/DAW engine — runs offline (no audio
 device, no prompts), rendering through the Part/Instrument engine and asserting invariants
-(engine→mixer→master path, all six voice source types, master-bus bounding, polyphony cap,
+(engine→mixer→master path, every voice source type, master-bus bounding, polyphony cap,
 signal-graph cycle detection). Exit code = number of failures (0 = all green), so it can be
 wired into CI alongside `sedaisid_test`.
 
@@ -1132,6 +1204,12 @@ SNG register dump tool for debugging and comparison with VICE/VSID.
 ---
 
 ## Quick Start
+
+The examples below use the high-level real-time facade (`SedaiAudioFoundation`,
+SDL2 audio, the `Play*` API covering classic/FM/wavetable/additive/Karplus). For
+loading **shipped instruments** and rendering **offline** (all nine techniques,
+no audio device), use the registry + Part API shown under
+[Instrument Library](#instrument-library) — that is the modern entry point.
 
 ### Basic Usage
 
@@ -1362,8 +1440,8 @@ not global functions:
 | **Total Lines** | ~30,000+ lines of Pascal code |
 | **Source Units** | 50+ units (.pas files) |
 | **Demo Programs** | 10+ programs (.lpr files) |
-| **Synthesis Engines** | 7 (Classic, FM, Wavetable, Additive, Sample, Karplus-Strong, SID Evo) |
-| **Audio Effects** | 9 (Delay, Reverb, Chorus, Flanger, Phaser, Distortion, Compressor, Limiter, EQ) |
+| **Synthesis Engines** | 9 (Classic, FM, Wavetable, Additive, Free-Partial, Sample, Karplus-Strong, Waveguide-Reed, SID) + SID Evo (reSID) |
+| **Audio Effects** | Delay, Reverb, Chorus, Flanger, Phaser, Distortion, Compressor, Limiter, EQ + auto-space, body resonator, convolver, tube resonator |
 | **Filter Types** | 6 (LP, HP, BP, Notch, Allpass, Peaking) |
 | **Filter Slopes** | 3 (12dB, 24dB, 48dB per octave) |
 | **Dependencies** | SDL2 only |
@@ -1405,9 +1483,10 @@ The following synthesis techniques are planned for future versions:
 
 | Technique | Description | Complexity | Status |
 |-----------|-------------|------------|--------|
+| **Free-Partial / sinusoidal model** | McAulay-Quatieri partials with arbitrary time-varying freq/amp; native STFT partial tracker (WAV→preset) | High | **Done** (`SedaiPartialGenerator`, `psPartial`) |
+| **Physical Modeling — winds** | Self-oscillating single-reed waveguide (nonlinear reed + bore, MSW) + commuted body/tube resonance | High | **Done** (`SedaiReedGenerator`, `psReed`; `SedaiTubeResonator`); bowed strings / brass / modal percussion planned |
 | **IFFT Synthesis** | Inverse Fast Fourier Transform for spectral manipulation and resynthesis | Medium-High | Planned |
 | **Granular Synthesis** | Time-stretching and pitch-shifting through micro-sound grains | Medium | Planned |
-| **Physical Modeling** | Realistic instrument simulation using mathematical models of physical systems | High | Karplus-Strong done; waveguides/excitation models planned |
 
 #### IFFT Synthesis - Implementation Details
 
@@ -1456,12 +1535,14 @@ Mathematical simulation of physical instrument behavior for realistic sounds.
 - Numerical stability at all parameter ranges
 
 **Implementation Steps:**
-1. Karplus-Strong base algorithm (plucked string)
-2. Digital waveguide for strings and tubes (bidirectional delay lines)
-3. Excitation models (bow friction, breath pressure, hammer impact)
-4. Body resonance filters (formant-based or impulse response)
+1. Karplus-Strong base algorithm (plucked string) — **done** (`SedaiKarplusGenerator`)
+2. Digital waveguide for tubes (bidirectional delay lines) — **done** for winds (`SedaiReedGenerator` bore)
+3. Excitation models — **done** for breath/reed (nonlinear reed table); bow friction / hammer impact planned
+4. Body resonance filters (formant / impulse response) — **done** (`SedaiBodyResonator`, `SedaiConvolver`, `SedaiTubeResonator`)
 
-**Use Cases:** Realistic guitar, piano, wind instruments, custom impossible instruments
+Remaining: bowed strings, brass (lip reed), modal percussion.
+
+**Use Cases:** Realistic guitar, wind instruments, custom impossible instruments
 
 ### Short-Term Improvements
 
