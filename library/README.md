@@ -10,9 +10,10 @@ preset to a `TSAFPart`.
 | File | Contents | Technique | Licence |
 |------|----------|-----------|---------|
 | `winds.safinst` | Clarinet, Soprano/Alto/Tenor Sax | `psReed` (waveguide physical model) | GPL-3.0 (SAF original) |
+| `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax (×2 registers) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 
-*(more libraries — additive/partial from CC0 samples, classic/FM synths, SID —
-land here as they are curated.)*
+*(more libraries — free-partial high-fidelity instruments, classic/FM synths, SID
+— land here as they are curated.)*
 
 ## Licensing & attribution
 
@@ -22,10 +23,15 @@ land here as they are curated.)*
   and Gary Scavone; re-implemented in Free Pascal, no STK code or dependency).
   No sampled audio. Licence: GPL-3.0, same as SAF.
 
-- Preset libraries **derived from external sample sets** (e.g. VCSL, CC0) will
-  carry their own attribution here and keep the source's data licence; SAF's rule
-  is that a code licence (GPL/AGPL) binds the code, not the preset data, and each
-  data source is credited on principle — see the project's attribution policy.
+- **`vcsl.safinst`** — additive presets resynthesised from single-note samples of
+  the **Versilian Community Sample Library (VCSL)** by Versilian Studios, released
+  under **CC0 (public domain)**. SAF's analysis pipeline extracts a per-harmonic
+  additive model (levels + amplitude tracks) from each sample; the resulting preset
+  *data* is a derived analysis of CC0 audio and is likewise CC0. No sample audio is
+  shipped — only the additive parameters. Credit: Versilian Studios, VCSL. Each
+  preset's `desc=` field names its source sample. SAF's rule: a code licence
+  (GPL/AGPL) binds the code, not the preset data; each data source is credited on
+  principle.
 
 ## Playing a preset (sketch)
 
