@@ -22,8 +22,8 @@ uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer,
   SedaiOscillator, SedaiFilter, SedaiFMOperator, SedaiWavetableGenerator,
   SedaiAdditiveGenerator, SedaiPartialGenerator, SedaiReedGenerator,
-  SedaiBowedGenerator, SedaiSamplePlayer, SedaiKarplusGenerator, SedaiEnvelope,
-  SedaiVoice, SedaiVoiceManager, SedaiModulationMatrix;
+  SedaiBowedGenerator, SedaiFormantBody, SedaiSamplePlayer, SedaiKarplusGenerator,
+  SedaiEnvelope, SedaiVoice, SedaiVoiceManager, SedaiModulationMatrix;
 
 type
   // Which generator the part's voices use. Mirrors TVoiceSourceType but is the
@@ -181,6 +181,8 @@ type
     VibDepth: Single;          // vibrato depth
     VibRate: Single;           // vibrato rate (Hz)
     AttackTime: Single;        // bow ramp time (s); 0 => default
+    BodyKind: TFormantBodyKind;// instrument body (violin/viola/cello/none)
+    BodyMix: Single;           // body colour amount (0 = raw string)
     OutputTrim: Single;        // voice output level
   end;
 
@@ -969,6 +971,7 @@ begin
   BG.SetBow(AParams.MaxVelocity, AParams.BowPosition, AParams.BowForce);
   BG.SetVibrato(AParams.VibDepth, AParams.VibRate);
   if AParams.AttackTime > 0 then BG.SetAttack(AParams.AttackTime);
+  BG.SetBody(AParams.BodyKind, AParams.BodyMix);
   AVoice.OutputLevel := AParams.OutputTrim;
 end;
 

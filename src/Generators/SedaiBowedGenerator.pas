@@ -36,7 +36,7 @@ interface
 
 uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiSignalNode,
-  SedaiOscillator;
+  SedaiOscillator, SedaiFormantBody;
 
 type
   TBowDelay = record
@@ -65,6 +65,8 @@ type
     FAttackTime: Single;
 
     FVibratoGain, FVibratoRate, FVibratoPhase: Single;
+
+    FBody: TSedaiFormantBody;      // instrument body colour (violin/cello formants)
 
     FOutputGain: Single;
 
@@ -96,6 +98,10 @@ type
     // (0.05..0.4; avoid 0 and simple fractions), and bow "force"/grip (table slope,
     // ~2..5; higher = grippier/brighter).
     procedure SetBow(AMaxVelocity, APosition, AForce: Single);
+    // Instrument body colour: a modal formant filter on the string output. Kind =
+    // violin/viola/cello/none; mix = dry..wet (0 = raw string). Without a body the
+    // raw Helmholtz sawtooth sounds synthetic.
+    procedure SetBody(AKind: TFormantBodyKind; AMix: Single);
     procedure SetVibrato(ADepth, ARateHz: Single);
     procedure SetAttack(ASeconds: Single);
     procedure SetOutputGain(AGain: Single);
@@ -133,11 +139,13 @@ begin
   FReleasing := False;
   FFrequency := 220.0;
   FAmplitude := 1.0;
+  FBody := TSedaiFormantBody.Create;
   SampleRateChanged;
 end;
 
 destructor TSedaiBowedGenerator.Destroy;
 begin
+  FBody.Free;
   SetLength(FNeck.buf, 0);
   SetLength(FBridge.buf, 0);
   inherited Destroy;
@@ -156,6 +164,7 @@ begin
   RecalcVelCoeff;
   UpdateStringFilter;
   UpdateDelays;
+  if Assigned(FBody) then FBody.SetSampleRate(FSampleRate);
 end;
 
 procedure TSedaiBowedGenerator.RecalcVelCoeff;
@@ -200,6 +209,7 @@ begin
   FNeck.wr := 0; FBridge.wr := 0;
   FNeck.last := 0; FBridge.last := 0;
   FStrY1 := 0;
+  if Assigned(FBody) then FBody.Reset;
 end;
 
 function TSedaiBowedGenerator.DelayTick(var AD: TBowDelay; AInput: Single): Single;
@@ -305,7 +315,8 @@ begin
   DelayTick(FNeck, bridgeRefl + newVel);
   DelayTick(FBridge, nutRefl + newVel);
 
-  Result := FOutputGain * FBridge.last * FAmplitude;
+  // colour the raw string with the instrument body (bypass when body = none)
+  Result := FOutputGain * FBody.ProcessSample(FBridge.last) * FAmplitude;
 end;
 
 procedure TSedaiBowedGenerator.SetBow(AMaxVelocity, APosition, AForce: Single);
@@ -314,6 +325,12 @@ begin
   FBowPosition := EnsureRange(APosition, 0.02, 0.5);
   FBowSlope := Max(0.5, AForce);
   UpdateDelays;
+end;
+
+procedure TSedaiBowedGenerator.SetBody(AKind: TFormantBodyKind; AMix: Single);
+begin
+  FBody.SetBody(AKind);
+  FBody.SetMix(AMix);
 end;
 
 procedure TSedaiBowedGenerator.SetVibrato(ADepth, ARateHz: Single);

@@ -25,7 +25,7 @@ uses
   SedaiBowedGenerator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
   SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
-  SedaiSpatialChain, SedaiConvolver, SedaiTubeResonator;
+  SedaiSpatialChain, SedaiConvolver, SedaiTubeResonator, SedaiFormantBody;
 
 const
   SR    = 44100;
@@ -2285,6 +2285,60 @@ begin
   end;
 end;
 
+// Formant body (instrument body colour): a parallel resonant-biquad bank.
+// Verifies: inert at kind none / mix 0 (passthrough); with a violin body it
+// boosts energy at a signature mode (280 Hz) vs an off-mode bin; stays bounded.
+procedure TestFormantBody;
+const TSR = 48000;
+var
+  b: TSedaiFormantBody;
+  x, y: array of Single;
+  i, n: Integer;
+  pk, magOn, magOff, d: Single;
+  rng: Cardinal;
+  passOk: Boolean;
+
+  function MagAt(const s: array of Single; a0, b0: Integer; f: Single): Single;
+  var k: Integer; w, c, q0, q1, q2: Single;
+  begin
+    w := 2*Pi*f/TSR; c := 2*Cos(w); q1 := 0; q2 := 0;
+    for k := a0 to b0 do begin q0 := c*q1 - q2 + s[k]; q2 := q1; q1 := q0; end;
+    Result := Sqrt(q1*q1 + q2*q2 - c*q1*q2);
+  end;
+begin
+  WriteLn('== formant body (instrument body colour) ==');
+  n := TSR div 2; SetLength(x, n); SetLength(y, n);
+  rng := 13579;
+  for i := 0 to n-1 do
+  begin
+    rng := rng xor (rng shl 13); rng := rng xor (rng shr 17); rng := rng xor (rng shl 5);
+    x[i] := 0.2 * ((rng / 2147483648.0) - 1.0);   // white-noise excitation
+  end;
+
+  b := TSedaiFormantBody.Create;
+  try
+    b.SetSampleRate(TSR);
+
+    // (1) inert at none / mix 0
+    b.SetBody(fbNone); b.SetMix(0);
+    passOk := True;
+    for i := 0 to 999 do begin y[i] := b.ProcessSample(x[i]); if y[i] <> x[i] then passOk := False; end;
+    Ok('formant body inert at none/mix 0', passOk, '');
+
+    // (2) violin body boosts a signature mode (280 Hz) vs an off-mode bin (1500 Hz)
+    b.SetBody(fbViolin); b.SetMix(0.9); b.Reset;
+    pk := 0;
+    for i := 0 to n-1 do begin y[i] := b.ProcessSample(x[i]); if Abs(y[i]) > pk then pk := Abs(y[i]); end;
+    magOn  := MagAt(y, 0, n-1, 280.0);
+    magOff := MagAt(y, 0, n-1, 1500.0);
+    Ok('formant body resonates at a body mode (280 Hz)', magOn > 2.0 * magOff,
+       Format('|280|=%.2f |1500|=%.2f', [magOn, magOff]));
+    Ok('formant body bounded', (pk > 0) and (pk < 4.0), Format('peak=%.3f', [pk]));
+  finally
+    b.Free;
+  end;
+end;
+
 // Bowed-string preset .safinst round-trip: a psBowed preset survives save->load
 // with its parameters intact, and drives an audible, self-oscillating voice.
 procedure TestBowedPreset;
@@ -2312,6 +2366,8 @@ begin
   authored.Bowed.VibDepth := 0.03;
   authored.Bowed.VibRate := 6.0;
   authored.Bowed.AttackTime := 0.06;
+  authored.Bowed.BodyKind := fbViolin;
+  authored.Bowed.BodyMix := 0.65;
   authored.Bowed.OutputTrim := 0.8;
 
   ms := TMemoryStream.Create;
@@ -2328,6 +2384,7 @@ begin
     paramsOk := (Abs(gp.MaxVelocity - 0.25) < 1e-4) and (Abs(gp.BowPosition - 0.13) < 1e-4)
       and (Abs(gp.BowForce - 3.0) < 1e-4) and (Abs(gp.VibDepth - 0.03) < 1e-4)
       and (Abs(gp.VibRate - 6.0) < 1e-3) and (Abs(gp.AttackTime - 0.06) < 1e-4)
+      and (gp.BodyKind = fbViolin) and (Abs(gp.BodyMix - 0.65) < 1e-4)
       and (Abs(gp.OutputTrim - 0.8) < 1e-4);
     Ok('bowed preset params round-trip', (idx >= 0) and paramsOk,
        Format('vel=%.2f pos=%.2f force=%.1f trim=%.2f',
@@ -2773,6 +2830,7 @@ begin
   TestPartialPreset;
   TestReedPreset;
   TestBowedPreset;
+  TestFormantBody;
   TestTubeResonator;
   TestAutoSpace;
   TestResidual;

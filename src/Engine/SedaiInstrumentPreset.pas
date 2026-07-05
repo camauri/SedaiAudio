@@ -23,7 +23,7 @@ interface
 
 uses
   Classes, SysUtils, SedaiPart, SedaiFMOperator, SedaiReedGenerator,
-  SedaiAudioTypes, SedaiVoice, SedaiFilter;   // + TReedBoreType for the reed .safinst block
+  SedaiFormantBody, SedaiAudioTypes, SedaiVoice, SedaiFilter;   // + TReedBoreType / TFormantBodyKind for .safinst blocks
 
 type
   // Composer-facing role of a sound. The PRIMARY browse axis (with character
@@ -512,10 +512,11 @@ begin
            FloatToStr(p.Reed.OutputTrim, fs)]));
       // Author side: full BOWED-STRING parameter block (one line).
       if (p.Technique = psBowed) and p.HasBowedParams then
-        sl.Add(Format('bowed=%s,%s,%s,%s,%s,%s,%s',
+        sl.Add(Format('bowed=%s,%s,%s,%s,%s,%s,%d,%s,%s',
           [FloatToStr(p.Bowed.MaxVelocity, fs), FloatToStr(p.Bowed.BowPosition, fs),
            FloatToStr(p.Bowed.BowForce, fs), FloatToStr(p.Bowed.VibDepth, fs),
            FloatToStr(p.Bowed.VibRate, fs), FloatToStr(p.Bowed.AttackTime, fs),
+           Ord(p.Bowed.BodyKind), FloatToStr(p.Bowed.BodyMix, fs),
            FloatToStr(p.Bowed.OutputTrim, fs)]));
       // Author side: full KARPLUS parameter block.
       if (p.Technique = psKarplus) and p.HasKarplusParams then
@@ -912,6 +913,8 @@ begin
         cur.Bowed.VibDepth := StrToFloatDef(NextTok, 0, fs);
         cur.Bowed.VibRate := StrToFloatDef(NextTok, 6, fs);
         cur.Bowed.AttackTime := StrToFloatDef(NextTok, 0, fs);
+        cur.Bowed.BodyKind := TFormantBodyKind(StrToIntDef(NextTok, 0));
+        cur.Bowed.BodyMix := StrToFloatDef(NextTok, 0, fs);
         cur.Bowed.OutputTrim := StrToFloatDef(NextTok, 1.0, fs);
       end
       // --- KARPLUS block ---
