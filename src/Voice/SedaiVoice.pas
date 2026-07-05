@@ -17,8 +17,8 @@ uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiSignalNode,
   SedaiOscillator, SedaiEnvelope, SedaiLFO, SedaiFilter,
   SedaiFMOperator, SedaiWavetableGenerator, SedaiAdditiveGenerator,
-  SedaiPartialGenerator, SedaiSamplePlayer, SedaiKarplusGenerator,
-  SedaiModulationMatrix;
+  SedaiPartialGenerator, SedaiReedGenerator, SedaiSamplePlayer,
+  SedaiKarplusGenerator, SedaiModulationMatrix;
 
 const
   MAX_OSCILLATORS = 3;
@@ -30,7 +30,7 @@ type
   // a classic oscillator stack, an FM synth, or a wavetable generator. The rest
   // of the chain (envelopes, filter, amp, pan) is shared across all source types.
   TVoiceSourceType = (vstOscillators, vstFM, vstWavetable, vstAdditive, vstSample,
-    vstKarplus, vstPartial);
+    vstKarplus, vstPartial, vstReed);
 
   // How the three oscillators combine in the vstOscillators source.
   TVoiceOscMode = (
@@ -50,6 +50,7 @@ type
     FWTGenerator: TSedaiWavetableGenerator;  // created on demand for vstWavetable
     FAdditive: TSedaiAdditiveGenerator;      // created on demand for vstAdditive
     FPartial: TSedaiPartialGenerator;        // created on demand for vstPartial
+    FReed: TSedaiReedGenerator;              // created on demand for vstReed
     FSamplePlayer: TSedaiSamplePlayer;       // created on demand for vstSample
     FKarplus: TSedaiKarplusGenerator;        // created on demand for vstKarplus
     FNote: Byte;                  // MIDI note number
@@ -241,6 +242,7 @@ type
     function GetWavetableGenerator: TSedaiWavetableGenerator;
     function GetAdditiveGenerator: TSedaiAdditiveGenerator;
     function GetPartialGenerator: TSedaiPartialGenerator;
+    function GetReedGenerator: TSedaiReedGenerator;
     function GetSamplePlayer: TSedaiSamplePlayer;
     function GetKarplusGenerator: TSedaiKarplusGenerator;
 
@@ -320,6 +322,7 @@ begin
   FWTGenerator := nil;
   FAdditive := nil;
   FPartial := nil;
+  FReed := nil;
   FSamplePlayer := nil;
   FKarplus := nil;
   FNote := 60;  // Middle C
@@ -416,6 +419,7 @@ begin
   FWTGenerator.Free;    // nil-safe
   FAdditive.Free;       // nil-safe
   FPartial.Free;        // nil-safe
+  FReed.Free;           // nil-safe
   FSamplePlayer.Free;   // nil-safe (does not own the sample buffer)
   FKarplus.Free;        // nil-safe
   FModMatrix.Free;
@@ -447,6 +451,7 @@ begin
   if Assigned(FWTGenerator) then FWTGenerator.Reset;
   if Assigned(FAdditive) then FAdditive.Kill;   // resets envelope + phases
   if Assigned(FPartial) then FPartial.Kill;     // resets phases + release
+  if Assigned(FReed) then FReed.Kill;           // clears bore + breath
   if Assigned(FSamplePlayer) then FSamplePlayer.Stop;
   if Assigned(FKarplus) then FKarplus.Reset;
   FModMatrix.Reset;          // clears source/dest state, keeps the routings
@@ -626,6 +631,14 @@ begin
   if (FSourceType = vstPartial) and Assigned(FPartial) then
     FPartial.NoteOn(ANote, AVelocity);
 
+  // Reed source self-oscillates; NoteOn sizes the bore from the note, then we
+  // retune to the voice's exact current Hz (explicit-freq / glide start).
+  if (FSourceType = vstReed) and Assigned(FReed) then
+  begin
+    FReed.NoteOn(ANote, AVelocity);
+    if FCurrentFrequency > 0 then FReed.Frequency := FCurrentFrequency;
+  end;
+
   // Sample source: pitch from the current frequency, then (re)start playback.
   if (FSourceType = vstSample) and Assigned(FSamplePlayer) then
   begin
@@ -662,6 +675,9 @@ begin
 
   if (FSourceType = vstPartial) and Assigned(FPartial) then
     FPartial.NoteOff;
+
+  if (FSourceType = vstReed) and Assigned(FReed) then
+    FReed.NoteOff;
 
   if (FSourceType = vstKarplus) and Assigned(FKarplus) then
     FKarplus.NoteOff;
@@ -767,6 +783,17 @@ begin
       FPartial.SetSampleRate(FSampleRate);
   end;
   Result := FPartial;
+end;
+
+function TSedaiVoice.GetReedGenerator: TSedaiReedGenerator;
+begin
+  if not Assigned(FReed) then
+  begin
+    FReed := TSedaiReedGenerator.Create;
+    if FSampleRate > 0 then
+      FReed.SetSampleRate(FSampleRate);
+  end;
+  Result := FReed;
 end;
 
 function TSedaiVoice.GetSamplePlayer: TSedaiSamplePlayer;
@@ -950,6 +977,22 @@ begin
           SourceOut := 0.0;
         Finished := (not Assigned(FPartial)) or
                     ((not FPartial.GateOpen) and (not FPartial.Releasing));
+        UseAmpEnv := False;
+      end;
+    vstReed:
+      begin
+        // Self-oscillating reed: its own breath envelope shapes the note, so the
+        // shared amp envelope is not applied. Drive the bore pitch from the
+        // voice frequency (glide / pitch mod repitch the delay line).
+        if Assigned(FReed) then
+        begin
+          FReed.Frequency := FCurrentFrequency * PitchFactor;
+          SourceOut := FReed.GenerateSample;
+        end
+        else
+          SourceOut := 0.0;
+        Finished := (not Assigned(FReed)) or
+                    ((not FReed.GateOpen) and (not FReed.Releasing));
         UseAmpEnv := False;
       end;
     vstSample:

@@ -76,6 +76,12 @@ type
     FGateOpen: Boolean;
     FReleasing: Boolean;
 
+  protected
+    // Driving the inherited Frequency property retunes the bore (so the voice's
+    // glide / explicit-Hz path repitches the reed like the other generators).
+    procedure SetFrequency(AValue: Single); override;
+
+  private
     procedure UpdateBoreDelay;
     procedure RecalcPressCoeff;
     procedure ClearDelays;
@@ -170,6 +176,12 @@ begin
   FD0.len := Length(FD0.buf);
   FD1.len := Length(FD1.buf);
   RecalcPressCoeff;
+  UpdateBoreDelay;
+end;
+
+procedure TSedaiReedGenerator.SetFrequency(AValue: Single);
+begin
+  inherited SetFrequency(AValue);
   UpdateBoreDelay;
 end;
 

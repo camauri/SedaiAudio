@@ -2042,6 +2042,80 @@ begin
   end;
 end;
 
+// Waveguide-reed preset .safinst round-trip: a psReed preset (physical-model sax
+// config) survives save->load with its parameters intact, and drives an audible,
+// bounded, self-oscillating voice through a Part.
+procedure TestReedPreset;
+const TSR = 48000;
+var
+  authored: TInstrumentPreset;
+  reg, reg2: TSedaiInstrumentRegistry;
+  ms: TMemoryStream;
+  idx, i, n: Integer;
+  gp: TReedParams;
+  paramsOk: Boolean;
+  part: TSAFPart;
+  buf: array of Single;
+  pk: Single;
+begin
+  WriteLn('== waveguide-reed preset .safinst round-trip ==');
+  authored := Default(TInstrumentPreset);
+  authored.Name := 'RT Reed Sax'; authored.Category := icWind;
+  authored.Technique := psReed; authored.PresetKey := '';
+  authored.Polyphony := 4;
+  authored.HasReedParams := True;
+  authored.Reed.BoreType := rbConical;
+  authored.Reed.BlowPosition := 0.2;
+  authored.Reed.ReedOffset := 0.7;
+  authored.Reed.ReedSlope := 0.3;
+  authored.Reed.Pressure := 0.6;
+  authored.Reed.Noise := 0.2;
+  authored.Reed.VibDepth := 0.05;
+  authored.Reed.VibRate := 5.5;
+  authored.Reed.ReflMag := 0.95;
+  authored.Reed.OutputTrim := 0.8;
+
+  ms := TMemoryStream.Create;
+  reg := TSedaiInstrumentRegistry.CreateEmpty;
+  reg2 := TSedaiInstrumentRegistry.CreateEmpty;
+  try
+    reg.AddPreset(authored);
+    reg.SaveToStream(ms, 'Reed');
+    ms.Position := 0;
+    reg2.LoadFromStream(ms);
+    idx := reg2.FindByName('RT Reed Sax');
+    if idx >= 0 then gp := reg2.Get(idx).Reed else gp := Default(TReedParams);
+
+    paramsOk := (gp.BoreType = rbConical)
+      and (Abs(gp.BlowPosition - 0.2) < 1e-4) and (Abs(gp.ReedSlope - 0.3) < 1e-4)
+      and (Abs(gp.Pressure - 0.6) < 1e-4) and (Abs(gp.Noise - 0.2) < 1e-4)
+      and (Abs(gp.VibRate - 5.5) < 1e-3) and (Abs(gp.ReflMag - 0.95) < 1e-4)
+      and (Abs(gp.OutputTrim - 0.8) < 1e-4);
+    Ok('reed preset params round-trip', (idx >= 0) and paramsOk,
+       Format('bore=%d pos=%.2f slope=%.2f press=%.2f trim=%.2f',
+         [Ord(gp.BoreType), gp.BlowPosition, gp.ReedSlope, gp.Pressure, gp.OutputTrim]));
+
+    RandSeed := 4242;
+    part := TSAFPart.Create;
+    try
+      part.SetSampleRate(TSR);
+      if idx >= 0 then part.SetInstrument(psReed, reg2.Get(idx).PresetKey);
+      part.SetReedParams(gp);
+      n := 24000; SetLength(buf, n*2);            // 0.5 s (reed needs time to start)
+      FillChar(buf[0], n*2*SizeOf(Single), 0);
+      part.NoteOn(60, 1.0);
+      part.RenderBlock(@buf[0], n);
+      pk := 0; for i := 0 to n*2-1 do if Abs(buf[i]) > pk then pk := Abs(buf[i]);
+      Ok('reed preset renders self-oscillating + bounded',
+         (idx >= 0) and (pk > 0.001) and (pk < 1.5), Format('peak=%.3f', [pk]));
+    finally
+      part.Free;
+    end;
+  finally
+    reg.Free; reg2.Free; ms.Free;
+  end;
+end;
+
 // Auto-space widener: a dual-mono input becomes a decorrelated stereo image
 // while staying MONO-SAFE (the mono sum is preserved bit-for-bit up to float
 // rounding). Also: Width=0 is a passthrough for a mono source, and Width>0 makes
@@ -2459,6 +2533,7 @@ begin
   TestPartialGenerator;
   TestLivingPresetRoundTrip;
   TestPartialPreset;
+  TestReedPreset;
   TestAutoSpace;
   TestResidual;
   TestBodyResonator;

@@ -21,14 +21,14 @@ interface
 uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer,
   SedaiOscillator, SedaiFilter, SedaiFMOperator, SedaiWavetableGenerator,
-  SedaiAdditiveGenerator, SedaiPartialGenerator, SedaiSamplePlayer,
-  SedaiKarplusGenerator, SedaiEnvelope, SedaiVoice, SedaiVoiceManager,
-  SedaiModulationMatrix;
+  SedaiAdditiveGenerator, SedaiPartialGenerator, SedaiReedGenerator,
+  SedaiSamplePlayer, SedaiKarplusGenerator, SedaiEnvelope, SedaiVoice,
+  SedaiVoiceManager, SedaiModulationMatrix;
 
 type
   // Which generator the part's voices use. Mirrors TVoiceSourceType but is the
   // public, instrument-level selector exposed by the Part.
-  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample, psKarplus, psSID, psPartial);
+  TSAFPartSource = (psClassic, psFM, psWavetable, psAdditive, psSample, psKarplus, psSID, psPartial, psReed);
 
   // Optional "common layer" overrides applied on top of the preset's own values
   // (envelope / filter / output level). Each Override* flag gates one group; all
@@ -152,6 +152,23 @@ type
     Partials: array of TPartialTrack;
   end;
 
+  // Full WAVEGUIDE-REED parameter block, driving TSedaiReedGenerator (a physical
+  // model, self-oscillating). Cylindrical (clarinet, odd harmonics) or conical
+  // (faux-cone sax, full harmonics via the blow position). Amplitude/attack come
+  // from the reed's own breath, not an ADSR; loudness is trimmed by OutputTrim.
+  TReedParams = record
+    BoreType: TReedBoreType;   // rbCylindrical (clarinet) / rbConical (sax)
+    BlowPosition: Single;      // cone: reed position along the bore (0..1)
+    ReedOffset: Single;        // reed table offset (~0.7)
+    ReedSlope: Single;         // reed table slope (clarinet ~-0.44, sax ~+0.3)
+    Pressure: Single;          // steady breath pressure (~0.5..0.7)
+    Noise: Single;             // breath turbulence noise depth
+    VibDepth: Single;          // vibrato depth
+    VibRate: Single;           // vibrato rate (Hz)
+    ReflMag: Single;           // bell reflection magnitude (0.5..0.999)
+    OutputTrim: Single;        // voice output level
+  end;
+
   // Full KARPLUS-STRONG parameter block — string damping/blend + the gating
   // amp envelope.
   TKarplusParams = record
@@ -249,6 +266,8 @@ type
     FAdditiveParams: TAdditiveParams;
     FHasPartialParams: Boolean;
     FPartialParams: TPartialParams;
+    FHasReedParams: Boolean;
+    FReedParams: TReedParams;
     FHasKarplusParams: Boolean;
     FKarplusParams: TKarplusParams;
 
@@ -343,6 +362,8 @@ type
     procedure ClearAdditiveParams;
     procedure SetPartialParams(const AParams: TPartialParams);
     procedure ClearPartialParams;
+    procedure SetReedParams(const AParams: TReedParams);
+    procedure ClearReedParams;
     procedure SetKarplusParams(const AParams: TKarplusParams);
     procedure ClearKarplusParams;
 
@@ -402,6 +423,9 @@ function ExplodeAdditiveParams(const APresetKey: string): TAdditiveParams;
 // the voice's TSedaiPartialGenerator. There is no named-preset counterpart
 // (partials come from sample analysis, not built-ins), so no Explode.
 procedure ConfigurePartialVoiceFromParams(AVoice: TSedaiVoice; const AParams: TPartialParams);
+// Waveguide-reed configurator: loads the physical-model reed parameters into the
+// voice's TSedaiReedGenerator. No named-preset counterpart, so no Explode.
+procedure ConfigureReedVoiceFromParams(AVoice: TSedaiVoice; const AParams: TReedParams);
 procedure ConfigureKarplusVoiceFromParams(AVoice: TSedaiVoice; const AParams: TKarplusParams);
 function ExplodeKarplusParams(const APresetKey: string): TKarplusParams;
 
@@ -893,6 +917,22 @@ begin
   AVoice.OutputLevel := AParams.OutputTrim;
 end;
 
+// ---- WAVEGUIDE REED ---------------------------------------------------------
+
+procedure ConfigureReedVoiceFromParams(AVoice: TSedaiVoice; const AParams: TReedParams);
+var
+  RG: TSedaiReedGenerator;
+begin
+  AVoice.SetSourceType(vstReed);
+  RG := AVoice.GetReedGenerator;
+  if RG = nil then Exit;
+  RG.SetBoreType(AParams.BoreType, AParams.BlowPosition);
+  RG.SetReed(AParams.ReedOffset, AParams.ReedSlope);
+  RG.SetBreath(AParams.Pressure, AParams.Noise, AParams.VibDepth, AParams.VibRate);
+  if AParams.ReflMag > 0 then RG.SetReflection(AParams.ReflMag);
+  AVoice.OutputLevel := AParams.OutputTrim;
+end;
+
 // ---- KARPLUS-STRONG ---------------------------------------------------------
 
 procedure ConfigureKarplusVoiceFromParams(AVoice: TSedaiVoice; const AParams: TKarplusParams);
@@ -1262,6 +1302,10 @@ begin
       // no block the voice stays inert (0 partials = silence), which is the
       // documented opt-in behaviour of TSedaiPartialGenerator.
       ConfigurePartialVoiceFromParams(AVoice, FPartialParams);
+    psReed:
+      // Physical-model reed comes from a parameter block; with no block the
+      // breath pressure is 0 => silent (opt-in), like the partial source.
+      ConfigureReedVoiceFromParams(AVoice, FReedParams);
     psKarplus:
       if FHasKarplusParams then
         ConfigureKarplusVoiceFromParams(AVoice, FKarplusParams)
@@ -1452,6 +1496,21 @@ begin
   if not FHasPartialParams then Exit;
   FHasPartialParams := False;
   FPartialParams := Default(TPartialParams);   // NOT FillChar: Partials[] is managed
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.SetReedParams(const AParams: TReedParams);
+begin
+  FReedParams := AParams;
+  FHasReedParams := True;
+  FManager.ConfigureAllVoices(@ApplyToVoice);
+end;
+
+procedure TSAFPart.ClearReedParams;
+begin
+  if not FHasReedParams then Exit;
+  FHasReedParams := False;
+  FillChar(FReedParams, SizeOf(FReedParams), 0);   // plain record, no managed fields
   FManager.ConfigureAllVoices(@ApplyToVoice);
 end;
 

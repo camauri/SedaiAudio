@@ -22,8 +22,8 @@ unit SedaiInstrumentPreset;
 interface
 
 uses
-  Classes, SysUtils, SedaiPart, SedaiFMOperator,
-  SedaiAudioTypes, SedaiVoice, SedaiFilter;   // TWaveformType / TVoiceOscMode / TFilterType for .safinst enum parsing
+  Classes, SysUtils, SedaiPart, SedaiFMOperator, SedaiReedGenerator,
+  SedaiAudioTypes, SedaiVoice, SedaiFilter;   // + TReedBoreType for the reed .safinst block
 
 type
   // Composer-facing role of a sound. The PRIMARY browse axis (with character
@@ -55,6 +55,8 @@ type
     Additive: TAdditiveParams;
     HasPartialParams: Boolean;
     Partial: TPartialParams;
+    HasReedParams: Boolean;
+    Reed: TReedParams;
     HasKarplusParams: Boolean;
     Karplus: TKarplusParams;
     Macros: TMacroArray;          // composer quick-controls authored on the preset
@@ -277,6 +279,10 @@ begin
     APart.SetPartialParams(FPresets[AIndex].Partial)
   else
     APart.ClearPartialParams;
+  if (FPresets[AIndex].Technique = psReed) and FPresets[AIndex].HasReedParams then
+    APart.SetReedParams(FPresets[AIndex].Reed)
+  else
+    APart.ClearReedParams;
   if (FPresets[AIndex].Technique = psKarplus) and FPresets[AIndex].HasKarplusParams then
     APart.SetKarplusParams(FPresets[AIndex].Karplus)
   else
@@ -312,6 +318,7 @@ begin
     psKarplus: Result := 'psKarplus';
     psSID: Result := 'psSID';
     psPartial: Result := 'psPartial';
+    psReed: Result := 'psReed';
   else
     Result := 'psClassic';
   end;
@@ -326,6 +333,7 @@ begin
   else if SameText(AName, 'psKarplus') then Result := psKarplus
   else if SameText(AName, 'psSID') then Result := psSID
   else if SameText(AName, 'psPartial') then Result := psPartial
+  else if SameText(AName, 'psReed') then Result := psReed
   else Result := psClassic;
 end;
 
@@ -484,6 +492,15 @@ begin
           sl.Add(trkline);
         end;
       end;
+      // Author side: full WAVEGUIDE-REED parameter block (one line, all params).
+      if (p.Technique = psReed) and p.HasReedParams then
+        sl.Add(Format('reed=%d,%s,%s,%s,%s,%s,%s,%s,%s,%s',
+          [Ord(p.Reed.BoreType),
+           FloatToStr(p.Reed.BlowPosition, fs), FloatToStr(p.Reed.ReedOffset, fs),
+           FloatToStr(p.Reed.ReedSlope, fs), FloatToStr(p.Reed.Pressure, fs),
+           FloatToStr(p.Reed.Noise, fs), FloatToStr(p.Reed.VibDepth, fs),
+           FloatToStr(p.Reed.VibRate, fs), FloatToStr(p.Reed.ReflMag, fs),
+           FloatToStr(p.Reed.OutputTrim, fs)]));
       // Author side: full KARPLUS parameter block.
       if (p.Technique = psKarplus) and p.HasKarplusParams then
       begin
@@ -849,6 +866,22 @@ begin
             Inc(tc);
           end;
         end;
+      end
+      // --- WAVEGUIDE-REED block ---
+      else if k = 'reed' then
+      begin
+        cur.HasReedParams := True;
+        rest := v;
+        cur.Reed.BoreType := TReedBoreType(StrToIntDef(NextTok, 0));
+        cur.Reed.BlowPosition := StrToFloatDef(NextTok, 0.2, fs);
+        cur.Reed.ReedOffset := StrToFloatDef(NextTok, 0.7, fs);
+        cur.Reed.ReedSlope := StrToFloatDef(NextTok, -0.44, fs);
+        cur.Reed.Pressure := StrToFloatDef(NextTok, 0.55, fs);
+        cur.Reed.Noise := StrToFloatDef(NextTok, 0, fs);
+        cur.Reed.VibDepth := StrToFloatDef(NextTok, 0, fs);
+        cur.Reed.VibRate := StrToFloatDef(NextTok, 5, fs);
+        cur.Reed.ReflMag := StrToFloatDef(NextTok, 0.95, fs);
+        cur.Reed.OutputTrim := StrToFloatDef(NextTok, 1.0, fs);
       end
       // --- KARPLUS block ---
       else if k = 'ksdamp' then
