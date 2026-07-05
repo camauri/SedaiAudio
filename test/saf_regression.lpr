@@ -22,7 +22,7 @@ uses
   SedaiAudioTypes, SedaiAudioBuffer,
   SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine, SedaiInstrumentPreset,
   SedaiFMOperator, SedaiAdditiveGenerator, SedaiPartialGenerator, SedaiReedGenerator,
-  SedaiBowedGenerator,
+  SedaiBowedGenerator, SedaiModalGenerator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
   SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
   SedaiSpatialChain, SedaiConvolver, SedaiTubeResonator, SedaiFormantBody;
@@ -1792,6 +1792,62 @@ begin
   end;
 end;
 
+// Modal percussion (TSedaiModalGenerator): struck idiophone by a bank of decaying
+// resonators. Verifies: silent before the strike; struck -> sound + bounded;
+// energy at a signature mode (bell prime = the note); rings out and decays.
+procedure TestModalGenerator;
+const TSR = 48000;
+var
+  g: TSedaiModalGenerator;
+  buf: array of Single;
+  i, n: Integer;
+  pkPre, pkEarly, pkTail, e1, e2: Single;
+
+  function MagAt(a, b: Integer; f: Single): Single;
+  var k: Integer; w, c, q0, q1, q2: Single;
+  begin
+    w := 2*Pi*f/TSR; c := 2*Cos(w); q1 := 0; q2 := 0;
+    for k := a to b do begin q0 := c*q1 - q2 + buf[k]; q2 := q1; q1 := q0; end;
+    Result := Sqrt(q1*q1 + q2*q2 - c*q1*q2);
+  end;
+begin
+  WriteLn('== modal percussion engine ==');
+  g := TSedaiModalGenerator.Create;
+  try
+    g.SetSampleRate(TSR);
+    g.SetKind(mkBell);
+    n := 3 * TSR;                      // 3 s (bell rings out)
+    SetLength(buf, n);
+
+    // (1) silent before the strike
+    pkPre := 0;
+    for i := 0 to 99 do begin buf[i] := g.GenerateSample; if Abs(buf[i]) > pkPre then pkPre := Abs(buf[i]); end;
+    Ok('modal silent before strike', pkPre = 0, Format('pk=%.4f', [pkPre]));
+
+    g.NoteOn(60, 1.0);                 // C4 = 261.63; bell prime rings at the note
+    for i := 0 to n - 1 do buf[i] := g.GenerateSample;
+
+    // (2) struck -> sound, bounded
+    pkEarly := 0;
+    for i := 0 to Round(0.2*TSR) do if Abs(buf[i]) > pkEarly then pkEarly := Abs(buf[i]);
+    Ok('modal struck sounds + bounded', (pkEarly > 0.01) and (pkEarly < 1.0),
+       Format('peak=%.3f', [pkEarly]));
+
+    // (3) energy at a signature mode (the bell prime = C4) vs an off-mode bin
+    e1 := MagAt(Round(0.1*TSR), Round(0.6*TSR), 261.63);   // prime
+    e2 := MagAt(Round(0.1*TSR), Round(0.6*TSR), 200.0);    // off-mode
+    Ok('modal rings at a signature mode (prime=C4)', e1 > 3 * e2,
+       Format('|261|=%.1f |200|=%.1f', [e1, e2]));
+
+    // (4) rings out and decays toward silence
+    pkTail := 0;
+    for i := Round(2.5*TSR) to n - 1 do if Abs(buf[i]) > pkTail then pkTail := Abs(buf[i]);
+    Ok('modal decays (tail << strike)', pkTail < 0.15 * pkEarly, Format('tail=%.4f', [pkTail]));
+  finally
+    g.Free;
+  end;
+end;
+
 // Free-partial engine (TSedaiPartialGenerator): the second-generation additive
 // with N free partials, each a (t,freq,amp) track and a continuous-phase
 // oscillator. Verifies: inert at 0 partials; a constant partial plays on pitch at
@@ -2825,6 +2881,7 @@ begin
   TestBandwidth;
   TestReedGenerator;
   TestBowedGenerator;
+  TestModalGenerator;
   TestPartialGenerator;
   TestLivingPresetRoundTrip;
   TestPartialPreset;
