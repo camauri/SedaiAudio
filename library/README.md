@@ -14,6 +14,7 @@ preset to a `TSAFPart`.
 | `strings.safinst` | Violin, Viola, Cello | `psBowed` (bowed-string physical model) | GPL-3.0 (SAF original) |
 | `percussion.safinst` | Bell, Marimba, Tubular Bells, Woodblock, Tom | `psModal` (modal struck synthesis) | GPL-3.0 (SAF original) |
 | `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax (×2 registers) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
+| `orchestra.safinst` | Violin, Viola, Cello, Contrabass · Flute, Oboe, Clarinet, Bassoon · Trumpet, Horn, Trombone, Tuba (12) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 
 *(more libraries — free-partial high-fidelity instruments, more sampled-derived
 families — land here as they are curated.)*
@@ -49,6 +50,17 @@ families — land here as they are curated.)*
   preset's `desc=` field names its source sample. SAF's rule: a code licence
   (GPL/AGPL) binds the code, not the preset data; each data source is credited on
   principle.
+
+- **`orchestra.safinst`** — a full additive orchestra (strings, woodwinds, brass)
+  resynthesised from single sustained notes of the **Versilian Studios Chamber
+  Orchestra 2 — Community Edition (VSCO-2-CE)** by Versilian Studios, released under
+  **CC0 (public domain)**. Same pipeline and rule as `vcsl.safinst`: SAF's analysis
+  extracts a per-harmonic additive model (levels + amplitude tracks, harmonic floor
+  −60 dB, voice filter off) from each recording; the derived preset *data* is CC0.
+  No sample audio is shipped — only the additive parameters. Each preset's `desc=`
+  field names its source recording. This is a first pass — one analysed note per
+  instrument, stretched across the keyboard; pitch vibrato is not yet reproduced.
+  Credit: Versilian Studios, VSCO-2-CE.
 
 ## Quick start
 

@@ -715,6 +715,7 @@ SAF ships ready-to-play instruments as **`.safinst`** text libraries under
 | `strings.safinst` | Violin, Viola, Cello | bowed-string physical model + formant body | GPL-3.0 (SAF) |
 | `percussion.safinst` | Bell, Marimba, Tubular Bell, Woodblock, Tom | modal synthesis | GPL-3.0 (SAF) |
 | `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax | additive resynthesis | preset data CC0 (VCSL) |
+| `orchestra.safinst` | Strings, woodwinds & brass (12 instruments) | additive resynthesis | preset data CC0 (VSCO-2-CE) |
 
 The `saf_play` demo is the runnable entry point — it loads these libraries, prints
 the catalogue, plays a short phrase and renders a WAV, all offline (no audio device):
