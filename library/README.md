@@ -14,7 +14,7 @@ preset to a `TSAFPart`.
 | `strings.safinst` | Violin, Viola, Cello | `psBowed` (bowed-string physical model) | GPL-3.0 (SAF original) |
 | `percussion.safinst` | Bell, Marimba, Tubular Bells, Woodblock, Tom | `psModal` (modal struck synthesis) | GPL-3.0 (SAF original) |
 | `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax (×2 registers) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
-| `orchestra.safinst` | Violin, Viola, Cello, Contrabass · Flute, Oboe, Clarinet, Bassoon · Trumpet, Horn, Trombone, Tuba (12) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
+| `orchestra.safinst` | Violin, Viola, Cello, Contrabass · Flute, Oboe, Clarinet, Bassoon, Piccolo · Trumpet, Horn, Trombone, Tuba (13) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 | `pipes_reeds.safinst` | Pipe/Renaissance Organ, Soprano/Alto/Tenor Recorder, Ocarina, Harmonica, Accordion (8) | `psAdditive` (resynthesis from analysis) | preset data CC0 (VCSL + FreePats) |
 | `mallets.safinst` | Glockenspiel, Balafon, Wine Glass, Vibraphone, Xylophone (5) | `psPartial` (free-partial resynthesis from analysis) | preset data CC0 (see below) |
 | `plucked_keys.safinst` | Nylon/Electric Guitar, Electric Bass, Concert/Folk Harp, Grand/Upright Piano, Harpsichord (8) | `psPartial` (free-partial resynthesis from analysis) | preset data CC0 (FreePats + VCSL) |
