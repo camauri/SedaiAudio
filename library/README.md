@@ -17,6 +17,7 @@ preset to a `TSAFPart`.
 | `orchestra.safinst` | Violin, Viola, Cello, Contrabass · Flute, Oboe, Clarinet, Bassoon · Trumpet, Horn, Trombone, Tuba (12) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 | `pipes_reeds.safinst` | Pipe Organ, Renaissance Organ, Soprano/Alto/Tenor Recorder, Ocarina, Harmonica (7) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 | `mallets.safinst` | Glockenspiel, Balafon, Wine Glass, Vibraphone, Xylophone (5) | `psPartial` (free-partial resynthesis from analysis) | preset data CC0 (see below) |
+| `plucked_keys.safinst` | Nylon Guitar, Electric Guitar, Electric Bass, Piano (4) | `psPartial` (free-partial resynthesis from analysis) | preset data CC0 (FreePats) |
 
 *(more libraries — free-partial high-fidelity instruments, more sampled-derived
 families — land here as they are curated.)*
@@ -80,6 +81,16 @@ families — land here as they are curated.)*
   frequency and amplitude track (which also captures the decay). Peak-normalised.
   Derived preset *data* is CC0; no sample audio shipped. Each preset's `desc=` names
   its source sample. Credit: Versilian Studios, VCSL.
+
+- **`plucked_keys.safinst`** — plucked strings and keys (nylon guitar, electric guitar,
+  electric bass, piano) resynthesised from single notes of **FreePats**
+  (<https://freepats.zenvoid.org>), each instrument released under **CC0**. Like the
+  mallets these are inharmonic / decaying, so they use the **free-partial** engine
+  (`psPartial`), peak-normalised. FreePats ships FLAC samples; SAF reads them directly
+  (`TSedaiAudioFileReader`). Derived preset *data* is CC0; no sample audio shipped. Each
+  preset's `desc=` names its source sample and FreePats sub-project. Credit: FreePats and
+  the respective sample-set authors (Spanish Classical Guitar, FSBS E-Guitar, Picked Bass
+  YR, Upright Piano KW).
 
 ## Quick start
 
