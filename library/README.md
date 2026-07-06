@@ -15,7 +15,7 @@ preset to a `TSAFPart`.
 | `percussion.safinst` | Bell, Marimba, Tubular Bells, Woodblock, Tom | `psModal` (modal struck synthesis) | GPL-3.0 (SAF original) |
 | `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax (×2 registers) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 | `orchestra.safinst` | Violin, Viola, Cello, Contrabass · Flute, Oboe, Clarinet, Bassoon · Trumpet, Horn, Trombone, Tuba (12) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
-| `pipes_reeds.safinst` | Pipe Organ, Renaissance Organ, Soprano/Alto/Tenor Recorder, Ocarina, Harmonica (7) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
+| `pipes_reeds.safinst` | Pipe/Renaissance Organ, Soprano/Alto/Tenor Recorder, Ocarina, Harmonica, Accordion (8) | `psAdditive` (resynthesis from analysis) | preset data CC0 (VCSL + FreePats) |
 | `mallets.safinst` | Glockenspiel, Balafon, Wine Glass, Vibraphone, Xylophone (5) | `psPartial` (free-partial resynthesis from analysis) | preset data CC0 (see below) |
 | `plucked_keys.safinst` | Nylon/Electric Guitar, Electric Bass, Concert/Folk Harp, Grand/Upright Piano, Harpsichord (8) | `psPartial` (free-partial resynthesis from analysis) | preset data CC0 (FreePats + VCSL) |
 
@@ -71,7 +71,9 @@ families — land here as they are curated.)*
   recorders, ocarina and harmonica: all steady, harmonic-rich tones that the additive
   pipeline reproduces closely (harmonic floor −60 dB, voice filter off). Derived preset
   *data* is CC0; no sample audio shipped. Each preset's `desc=` names its source sample.
-  Credit: Versilian Studios, VCSL.
+  Credit: Versilian Studios, VCSL. The **Accordion** (button accordion) is from
+  **FreePats** (Button Accordion HN, CC0) — a free-reed sustained tone, same additive
+  pipeline.
 
 - **`mallets.safinst`** — tuned mallet/idiophone percussion (glockenspiel, balafon,
   wine glass, vibraphone, xylophone) resynthesised from single struck notes of the

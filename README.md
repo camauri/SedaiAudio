@@ -716,7 +716,7 @@ SAF ships ready-to-play instruments as **`.safinst`** text libraries under
 | `percussion.safinst` | Bell, Marimba, Tubular Bell, Woodblock, Tom | modal synthesis | GPL-3.0 (SAF) |
 | `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax | additive resynthesis | preset data CC0 (VCSL) |
 | `orchestra.safinst` | Strings, woodwinds & brass (12 instruments) | additive resynthesis | preset data CC0 (VSCO-2-CE) |
-| `pipes_reeds.safinst` | Organs, recorders, ocarina, harmonica (7) | additive resynthesis | preset data CC0 (VCSL) |
+| `pipes_reeds.safinst` | Organs, recorders, ocarina, harmonica, accordion (8) | additive resynthesis | preset data CC0 (VCSL + FreePats) |
 | `mallets.safinst` | Glockenspiel, balafon, wine glass, vibraphone, xylophone (5) | free-partial resynthesis | preset data CC0 (VCSL) |
 | `plucked_keys.safinst` | Nylon/electric guitar, electric bass, concert/folk harp, grand/upright piano, harpsichord (8) | free-partial resynthesis | preset data CC0 (FreePats + VCSL) |
 
