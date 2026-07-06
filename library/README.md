@@ -16,6 +16,7 @@ preset to a `TSAFPart`.
 | `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax (×2 registers) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 | `orchestra.safinst` | Violin, Viola, Cello, Contrabass · Flute, Oboe, Clarinet, Bassoon · Trumpet, Horn, Trombone, Tuba (12) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 | `pipes_reeds.safinst` | Pipe Organ, Renaissance Organ, Soprano/Alto/Tenor Recorder, Ocarina, Harmonica (7) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
+| `mallets.safinst` | Glockenspiel, Balafon, Wine Glass, Vibraphone, Xylophone (5) | `psPartial` (free-partial resynthesis from analysis) | preset data CC0 (see below) |
 
 *(more libraries — free-partial high-fidelity instruments, more sampled-derived
 families — land here as they are curated.)*
@@ -70,6 +71,15 @@ families — land here as they are curated.)*
   pipeline reproduces closely (harmonic floor −60 dB, voice filter off). Derived preset
   *data* is CC0; no sample audio shipped. Each preset's `desc=` names its source sample.
   Credit: Versilian Studios, VCSL.
+
+- **`mallets.safinst`** — tuned mallet/idiophone percussion (glockenspiel, balafon,
+  wine glass, vibraphone, xylophone) resynthesised from single struck notes of the
+  **Versilian Community Sample Library (VCSL)**, **CC0**. These are *inharmonic* —
+  their partials do not sit on a harmonic series — so they use SAF's **free-partial**
+  engine (`psPartial`): a McAulay–Quatieri tracker extracts each partial's arbitrary
+  frequency and amplitude track (which also captures the decay). Peak-normalised.
+  Derived preset *data* is CC0; no sample audio shipped. Each preset's `desc=` names
+  its source sample. Credit: Versilian Studios, VCSL.
 
 ## Quick start
 
