@@ -718,7 +718,7 @@ SAF ships ready-to-play instruments as **`.safinst`** text libraries under
 | `orchestra.safinst` | Strings, woodwinds & brass (12 instruments) | additive resynthesis | preset data CC0 (VSCO-2-CE) |
 | `pipes_reeds.safinst` | Organs, recorders, ocarina, harmonica (7) | additive resynthesis | preset data CC0 (VCSL) |
 | `mallets.safinst` | Glockenspiel, balafon, wine glass, vibraphone, xylophone (5) | free-partial resynthesis | preset data CC0 (VCSL) |
-| `plucked_keys.safinst` | Nylon/electric guitar, electric bass, grand/upright piano, harpsichord (6) | free-partial resynthesis | preset data CC0 (FreePats + VCSL) |
+| `plucked_keys.safinst` | Nylon/electric guitar, electric bass, concert/folk harp, grand/upright piano, harpsichord (8) | free-partial resynthesis | preset data CC0 (FreePats + VCSL) |
 
 The `saf_play` demo is the runnable entry point — it loads these libraries, prints
 the catalogue, plays a short phrase and renders a WAV, all offline (no audio device):
