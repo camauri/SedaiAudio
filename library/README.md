@@ -17,7 +17,7 @@ preset to a `TSAFPart`.
 | `orchestra.safinst` | Violin, Viola, Cello, Contrabass · Flute, Oboe, Clarinet, Bassoon · Trumpet, Horn, Trombone, Tuba (12) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 | `pipes_reeds.safinst` | Pipe Organ, Renaissance Organ, Soprano/Alto/Tenor Recorder, Ocarina, Harmonica (7) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 | `mallets.safinst` | Glockenspiel, Balafon, Wine Glass, Vibraphone, Xylophone (5) | `psPartial` (free-partial resynthesis from analysis) | preset data CC0 (see below) |
-| `plucked_keys.safinst` | Nylon Guitar, Electric Guitar, Electric Bass, Piano (4) | `psPartial` (free-partial resynthesis from analysis) | preset data CC0 (FreePats) |
+| `plucked_keys.safinst` | Nylon/Electric Guitar, Electric Bass, Grand/Upright Piano, Harpsichord (6) | `psPartial` (free-partial resynthesis from analysis) | preset data CC0 (FreePats + VCSL) |
 
 *(more libraries — free-partial high-fidelity instruments, more sampled-derived
 families — land here as they are curated.)*
@@ -90,7 +90,9 @@ families — land here as they are curated.)*
   (`TSedaiAudioFileReader`). Derived preset *data* is CC0; no sample audio shipped. Each
   preset's `desc=` names its source sample and FreePats sub-project. Credit: FreePats and
   the respective sample-set authors (Spanish Classical Guitar, FSBS E-Guitar, Picked Bass
-  YR, Upright Piano KW).
+  YR, Upright Piano KW). The **Grand Piano** (Steinway B) and **Harpsichord** (French) are
+  from **VCSL** (Versilian Studios, CC0) — same free-partial pipeline. Each preset's `desc=`
+  names its exact source.
 
 ## Quick start
 
