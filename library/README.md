@@ -15,6 +15,7 @@ preset to a `TSAFPart`.
 | `percussion.safinst` | Bell, Marimba, Tubular Bells, Woodblock, Tom | `psModal` (modal struck synthesis) | GPL-3.0 (SAF original) |
 | `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax (×2 registers) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 | `orchestra.safinst` | Violin, Viola, Cello, Contrabass · Flute, Oboe, Clarinet, Bassoon · Trumpet, Horn, Trombone, Tuba (12) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
+| `pipes_reeds.safinst` | Pipe Organ, Renaissance Organ, Soprano/Alto/Tenor Recorder, Ocarina, Harmonica (7) | `psAdditive` (resynthesis from analysis) | preset data CC0 (see below) |
 
 *(more libraries — free-partial high-fidelity instruments, more sampled-derived
 families — land here as they are curated.)*
@@ -61,6 +62,14 @@ families — land here as they are curated.)*
   field names its source recording. This is a first pass — one analysed note per
   instrument, stretched across the keyboard; pitch vibrato is not yet reproduced.
   Credit: Versilian Studios, VSCO-2-CE.
+
+- **`pipes_reeds.safinst`** — additive presets resynthesised from single sustained
+  notes of the **Versilian Community Sample Library (VCSL)** by Versilian Studios,
+  **CC0 (public domain)** — the same source as `vcsl.safinst`. Organs, baroque
+  recorders, ocarina and harmonica: all steady, harmonic-rich tones that the additive
+  pipeline reproduces closely (harmonic floor −60 dB, voice filter off). Derived preset
+  *data* is CC0; no sample audio shipped. Each preset's `desc=` names its source sample.
+  Credit: Versilian Studios, VCSL.
 
 ## Quick start
 
