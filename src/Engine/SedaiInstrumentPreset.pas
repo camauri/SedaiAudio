@@ -460,6 +460,10 @@ begin
           sl.Add(Format('addhuman=%s,%s,%s',
             [FloatToStr(p.Additive.JitterCents, fs), FloatToStr(p.Additive.ShimmerDepth, fs),
              FloatToStr(p.Additive.RateHz, fs)]));
+        if p.Additive.VibDepth <> 0 then
+          sl.Add(Format('addvib=%s,%s,%s',
+            [FloatToStr(p.Additive.VibDepth, fs), FloatToStr(p.Additive.VibRate, fs),
+             FloatToStr(p.Additive.VibDelay, fs)]));
         if p.Additive.BreathLevel <> 0 then
           sl.Add(Format('addbreath=%s,%s',
             [FloatToStr(p.Additive.BreathLevel, fs), FloatToStr(p.Additive.BreathCutoff, fs)]));
@@ -788,6 +792,14 @@ begin
         cur.Additive.JitterCents := StrToFloatDef(NextTok, 0, fs);
         cur.Additive.ShimmerDepth := StrToFloatDef(NextTok, 0, fs);
         cur.Additive.RateHz := StrToFloatDef(NextTok, 0, fs);
+      end
+      else if k = 'addvib' then
+      begin
+        cur.HasAdditiveParams := True;
+        rest := v;
+        cur.Additive.VibDepth := StrToFloatDef(NextTok, 0, fs);
+        cur.Additive.VibRate := StrToFloatDef(NextTok, 0, fs);
+        cur.Additive.VibDelay := StrToFloatDef(NextTok, 0, fs);
       end
       else if k = 'addbreath' then
       begin

@@ -87,6 +87,12 @@ type
     FLfoPhase: Single;      // 0..1 ramp for the random-target LFOs
     FLfoPCur, FLfoPTgt: Single;   // pitch LFO current/target
     FLfoACur, FLfoATgt: Single;   // amp LFO current/target
+    // Regular vibrato: a sinusoidal pitch oscillation (unlike the random jitter),
+    // fading in after an onset delay the way a string player leans into it. 0 = off.
+    FVibDepthCents: Single; // peak pitch deviation (cents); 0 = off
+    FVibRate: Single;       // vibrato rate (Hz), ~5.5-6.5 for strings
+    FVibDelay: Single;      // onset delay (s) before vibrato starts fading in
+    FVibPhase: Single;      // 0..1 vibrato oscillator phase
     FPitchMod: Single;      // per-sample pitch multiplier (1 = none)
     FAmpMod: Single;        // per-sample amplitude multiplier (1 = none)
     FBreathState: Single;   // one-pole LP state for breath noise
@@ -175,6 +181,10 @@ type
     // Per-voice human micro-instability. AJitterCents = peak pitch wobble (cents),
     // AShimmerDepth = peak amplitude wobble (fraction), ARateHz = ~5. All 0 = off.
     procedure SetMicroInstability(AJitterCents, AShimmerDepth, ARateHz: Single);
+    // Regular vibrato: sinusoidal pitch oscillation (distinct from the random jitter).
+    // ADepthCents = peak deviation (strings ~15-30c), ARateHz ~5.5-6.5, ADelaySec =
+    // onset delay before it fades in (~0.3 s). ADepthCents 0 = off.
+    procedure SetVibrato(ADepthCents, ARateHz, ADelaySec: Single);
     // Airy breath layer. ALevel 0 = off; ACutoffHz shapes it ("air" low / "hiss" high).
     procedure SetBreath(ALevel, ACutoffHz: Single);
     // Per-partial bandwidth ("metal"). ADepth = fractional AM depth per partial
@@ -211,6 +221,9 @@ type
     property JitterCents: Single read FJitterCents write FJitterCents;
     property ShimmerDepth: Single read FShimmerDepth write FShimmerDepth;
     property ModRate: Single read FModRate write FModRate;
+    property VibDepthCents: Single read FVibDepthCents;
+    property VibRateHz: Single read FVibRate;
+    property VibDelaySec: Single read FVibDelay;
     property BreathLevel: Single read FBreathLevel write FBreathLevel;
     property BreathCutoff: Single read FBreathCut;
     property BandDepth: Single read FBandDepth write FBandDepth;
@@ -244,6 +257,7 @@ begin
   FUseHarmonicTracks := False;
   FNoteTime := 0;
   FJitterCents := 0; FShimmerDepth := 0; FModRate := 5.0;
+  FVibDepthCents := 0; FVibRate := 6.0; FVibDelay := 0.3; FVibPhase := 0;
   FBreathLevel := 0; FBreathCut := 4000;
   FLfoPhase := 0; FLfoPCur := 0; FLfoPTgt := 0; FLfoACur := 0; FLfoATgt := 0;
   FPitchMod := 1; FAmpMod := 1; FBreathState := 0;
@@ -425,18 +439,34 @@ begin
   FLfoPhase := 0; FPitchMod := 1; FAmpMod := 1; FBreathState := 0;
   FLfoPCur := 0; FLfoPTgt := 0; FLfoACur := 0; FLfoATgt := 0;
   ResetResidualState;
-  if (FJitterCents > 0) or (FShimmerDepth > 0) or (FBreathLevel > 0) then
+  // Per-voice DECORRELATION for the living/vibrato layer: give each voice a random
+  // vibrato phase (no lock-step wobble) and, crucially, random INITIAL HARMONIC
+  // PHASES. With zero phases every voice is a bit-identical waveform, so a chord /
+  // section sums coherently -> the "cheap synth strings" comb sound. Decorrelating
+  // the phases makes stacked voices read as several distinct players.
+  if (FJitterCents > 0) or (FShimmerDepth > 0) or (FBreathLevel > 0) or (FVibDepthCents > 0) then
   begin
     FLfoPCur := Random * 2 - 1; FLfoPTgt := Random * 2 - 1;
     FLfoACur := Random * 2 - 1; FLfoATgt := Random * 2 - 1;
-  end;
-  for I := 0 to ADDITIVE_MAX_HARMONICS - 1 do
+    FVibPhase := Random;
+    for I := 0 to ADDITIVE_MAX_HARMONICS - 1 do
+    begin
+      FHarmonicPhases[I] := Random;      // 0..1 (turns); decorrelates stacked voices
+      FTrackCursor[I] := 0; FBandState[I] := 0;
+      if FUseHarmonicEnvelopes then FHarmonicEnvelopes[I].Trigger;
+    end;
+  end
+  else
   begin
-    FHarmonicPhases[I] := 0;
-    FTrackCursor[I] := 0;
-    FBandState[I] := 0;
-    if FUseHarmonicEnvelopes then
-      FHarmonicEnvelopes[I].Trigger;
+    FVibPhase := 0;
+    for I := 0 to ADDITIVE_MAX_HARMONICS - 1 do
+    begin
+      FHarmonicPhases[I] := 0;
+      FTrackCursor[I] := 0;
+      FBandState[I] := 0;
+      if FUseHarmonicEnvelopes then
+        FHarmonicEnvelopes[I].Trigger;
+    end;
   end;
 
   // Trigger amplitude envelope
@@ -688,31 +718,50 @@ end;
 // modulators. Inert (mults = 1) while both depths are 0.
 procedure TSedaiAdditiveGenerator.UpdateModulation;
 var
-  inc, lp, la: Single;
+  inc, lp, la, vib, venv: Single;
 begin
-  if (FJitterCents <= 0) and (FShimmerDepth <= 0) then
+  if (FJitterCents <= 0) and (FShimmerDepth <= 0) and (FVibDepthCents <= 0) then
   begin
     FPitchMod := 1.0; FAmpMod := 1.0;
     Exit;
   end;
-  if FSampleRate > 0 then inc := FModRate / FSampleRate else inc := 0;
-  FLfoPhase := FLfoPhase + inc;
-  if FLfoPhase >= 1.0 then
+  FAmpMod := 1.0; FPitchMod := 1.0;
+
+  // --- random micro-instability (jitter / shimmer) ---
+  if (FJitterCents > 0) or (FShimmerDepth > 0) then
   begin
-    FLfoPhase := FLfoPhase - 1.0;
-    FLfoPCur := FLfoPTgt; FLfoPTgt := Random * 2 - 1;
-    FLfoACur := FLfoATgt; FLfoATgt := Random * 2 - 1;
+    if FSampleRate > 0 then inc := FModRate / FSampleRate else inc := 0;
+    FLfoPhase := FLfoPhase + inc;
+    if FLfoPhase >= 1.0 then
+    begin
+      FLfoPhase := FLfoPhase - 1.0;
+      FLfoPCur := FLfoPTgt; FLfoPTgt := Random * 2 - 1;
+      FLfoACur := FLfoATgt; FLfoATgt := Random * 2 - 1;
+    end;
+    lp := FLfoPCur + (FLfoPTgt - FLfoPCur) * FLfoPhase;   // -1..1, smooth
+    la := FLfoACur + (FLfoATgt - FLfoACur) * FLfoPhase;
+    if FJitterCents > 0 then FPitchMod := Power(2, (FJitterCents * lp) / 1200);
+    if FShimmerDepth > 0 then FAmpMod := 1.0 + FShimmerDepth * la;
   end;
-  lp := FLfoPCur + (FLfoPTgt - FLfoPCur) * FLfoPhase;   // -1..1, smooth
-  la := FLfoACur + (FLfoATgt - FLfoACur) * FLfoPhase;
-  if FJitterCents > 0 then
-    FPitchMod := Power(2, (FJitterCents * lp) / 1200)    // cents -> ratio
-  else
-    FPitchMod := 1.0;
-  if FShimmerDepth > 0 then
-    FAmpMod := 1.0 + FShimmerDepth * la
-  else
-    FAmpMod := 1.0;
+
+  // --- regular vibrato (sinusoidal pitch), onset-delayed then ramping in ---
+  if FVibDepthCents > 0 then
+  begin
+    if FSampleRate > 0 then FVibPhase := FVibPhase + FVibRate / FSampleRate;
+    if FVibPhase >= 1.0 then FVibPhase := FVibPhase - 1.0;
+    venv := (FNoteTime - FVibDelay) / 0.4;               // fade in over ~0.4 s
+    if venv < 0 then venv := 0 else if venv > 1 then venv := 1;
+    vib := Sin(2 * Pi * FVibPhase) * venv;
+    FPitchMod := FPitchMod * Power(2, (FVibDepthCents * vib) / 1200);
+  end;
+end;
+
+procedure TSedaiAdditiveGenerator.SetVibrato(ADepthCents, ARateHz, ADelaySec: Single);
+begin
+  if ADepthCents < 0 then ADepthCents := 0;
+  FVibDepthCents := ADepthCents;
+  if ARateHz > 0 then FVibRate := ARateHz;
+  if ADelaySec >= 0 then FVibDelay := ADelaySec;
 end;
 
 procedure TSedaiAdditiveGenerator.SetMicroInstability(AJitterCents, AShimmerDepth, ARateHz: Single);

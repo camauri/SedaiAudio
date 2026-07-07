@@ -123,6 +123,9 @@ type
     JitterCents: Single;      // pitch micro-instability depth (cents peak), per-voice
     ShimmerDepth: Single;     // amplitude micro-instability depth (0..1 peak), per-voice
     RateHz: Single;           // micro-instability modulation rate
+    VibDepth: Single;         // regular vibrato depth (cents peak); 0 = off
+    VibRate: Single;          // vibrato rate (Hz), ~5.5-6.5 for strings
+    VibDelay: Single;         // vibrato onset delay (s) before it fades in
     BreathLevel: Single;      // airy breath (low-passed noise) level; 0 = off
     BreathCutoff: Single;     // breath low-pass cutoff (Hz)
     BandDepth: Single;        // per-partial bandwidth ("metal") AM depth; 0 = off
@@ -889,6 +892,7 @@ begin
     if Length(AParams.Tracks[I].T) > 0 then
       AG.SetHarmonicTrack(I, AParams.Tracks[I].T, AParams.Tracks[I].V);
   AG.SetMicroInstability(AParams.JitterCents, AParams.ShimmerDepth, AParams.RateHz);
+  AG.SetVibrato(AParams.VibDepth, AParams.VibRate, AParams.VibDelay);
   AG.SetBreath(AParams.BreathLevel, AParams.BreathCutoff);
   AG.SetBandwidth(AParams.BandDepth, AParams.BandCutoff);
   AG.SetResidual(AParams.ResidualLevel, AParams.ResidualGains);
@@ -922,6 +926,9 @@ begin
       Result.JitterCents := AG.JitterCents;
       Result.ShimmerDepth := AG.ShimmerDepth;
       Result.RateHz := AG.ModRate;
+      Result.VibDepth := AG.VibDepthCents;
+      Result.VibRate := AG.VibRateHz;
+      Result.VibDelay := AG.VibDelaySec;
       Result.BreathLevel := AG.BreathLevel;
       Result.BreathCutoff := AG.BreathCutoff;
       Result.BandDepth := AG.BandDepth;
