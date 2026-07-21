@@ -114,6 +114,48 @@ type
 
 implementation
 
+{$IFDEF WINDOWS}
+uses dynlibs;
+
+{ Unique object IDs without a STATIC ole32 import: SysUtils.CreateGUID resolves to ole32's
+  CoCreateGuid on Windows, and that single static reference made every host map ole32 at
+  launch even when no audio object is ever created. Bind it lazily instead (audio objects
+  are only born on the first audio use, so the library loads then, not at startup). }
+type
+  TCoCreateGuid = function(out guid: TGuid): LongInt; stdcall;
+var
+  GOle32Tried: Boolean = False;
+  GCoCreateGuid: TCoCreateGuid = nil;
+
+procedure SafNewGuid(out G: TGuid);
+var
+  H: TLibHandle;
+  i: Integer;
+begin
+  if not GOle32Tried then
+  begin
+    GOle32Tried := True;
+    H := LoadLibrary('ole32.dll');
+    if H <> NilHandle then
+      Pointer(GCoCreateGuid) := GetProcedureAddress(H, 'CoCreateGuid');
+  end;
+  if Assigned(GCoCreateGuid) then
+  begin
+    GCoCreateGuid(G);
+    Exit;
+  end;
+  // Fallback (never expected on Windows): random bytes are plenty for internal object ids.
+  for i := 0 to 3 do
+    PCardinal(@G)[i] := Cardinal(Random($7FFFFFFF)) xor (Cardinal(Random($7FFFFFFF)) shl 1);
+end;
+{$ELSE}
+{ Non-Windows CreateGUID reads the system randomness source - no import involved. }
+procedure SafNewGuid(out G: TGuid);
+begin
+  CreateGUID(G);
+end;
+{$ENDIF}
+
 { TSedaiAudioObject }
 
 constructor TSedaiAudioObject.Create;
@@ -121,7 +163,7 @@ begin
   inherited Create;
 
   // Generate unique ID
-  CreateGUID(FID);
+  SafNewGuid(FID);
 
   // Default values
   FName := '';
@@ -209,7 +251,7 @@ end;
 
 procedure TSedaiAudioObject.RegenerateID;
 begin
-  CreateGUID(FID);
+  SafNewGuid(FID);
 end;
 
 function TSedaiAudioObject.IsActive: Boolean; inline;
