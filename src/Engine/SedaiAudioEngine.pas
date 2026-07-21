@@ -13,7 +13,9 @@ unit SedaiAudioEngine;
 interface
 
 uses
-  Classes, SysUtils, Math, SDL2,
+  // SedaiAudioSDL2Dyn AFTER SDL2: audio SDL calls resolve to its runtime-loaded pointers
+  // (no static SDL2 import in hosts); types/constants keep coming from the binding.
+  Classes, SysUtils, Math, SDL2, SedaiAudioSDL2Dyn,
   SedaiAudioTypes, SedaiOscillator, SedaiEnvelope, SedaiFilter,
   SedaiVoice, SedaiSIDEvo;
 
@@ -239,6 +241,13 @@ begin
 
   // Initialize critical section
   InitCriticalSection(GVoiceLock);
+
+  // Runtime SDL2 binding: load + bind on first audio use (see SedaiAudioSDL2Dyn).
+  if not EnsureAudioSDL2Bound then
+  begin
+    WriteLn('SDL_Init error: ', SDL_LibName, ' not found');
+    Exit;
+  end;
 
   // Initialize SDL audio
   if SDL_Init(SDL_INIT_AUDIO or SDL_INIT_TIMER) < 0 then

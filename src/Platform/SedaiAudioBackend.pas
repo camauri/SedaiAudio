@@ -19,7 +19,9 @@ unit SedaiAudioBackend;
 interface
 
 uses
-  Classes, SysUtils, SDL2, SedaiAudioTypes;
+  // SedaiAudioSDL2Dyn AFTER SDL2: audio SDL calls resolve to its runtime-loaded pointers
+  // (no static SDL2 import in hosts); types/constants keep coming from the binding.
+  Classes, SysUtils, SDL2, SedaiAudioSDL2Dyn, SedaiAudioTypes;
 
 type
   TBackendState = (
@@ -159,6 +161,14 @@ begin
   if FState <> bsUninitialized then
   begin
     Result := True;
+    Exit;
+  end;
+
+  // Runtime SDL2 binding: load + bind on first audio use (a host without the SDL2
+  // library simply has no audio, exactly like a failed subsystem init).
+  if not EnsureAudioSDL2Bound then
+  begin
+    FState := bsError;
     Exit;
   end;
 
