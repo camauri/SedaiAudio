@@ -13,22 +13,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build System
 
+**Dual-platform: the project is developed on both Windows and Linux — never break either one.**
+The primary machine is now Linux (`/home/camauri/Progetti/FreePascal/SedaiAudioFoundation`);
+the Windows checkout was `C:\Progetti\Artiforge\SedaiAudioFoundation`.
+
 The user handles compilation. For reference only:
 
 - **Language**: Free Pascal (FPC), `{$mode objfpc}{$H+}`
-- **Build scripts**: `build.ps1` (Windows) / `build.sh` (Linux/macOS); `setup.ps1` / `setup.sh` fetch deps (SDL2 dll downloaded separately)
-- **Targets**: `test_saf_main`, `demo_synth`, `sng_player`, `sng_dump`, `audiotest`, `sedaisid_test`
-  - Build one: `./build.ps1 -Target sng_player`  (add `-Clean` to rebuild)
-- **Output**: `bin/<cpu>-<os>/` (executables), `lib/<cpu>-<os>/` (compiled units)
-- **Platform flags**: `-CPU x86_64|i386|aarch64`, `-OS win64|win32|linux|darwin`
+- **Build scripts**: `build.ps1` (Windows) / `build.sh` (Linux/macOS) — functionally equivalent ports; `setup.ps1` / `setup.sh` fetch deps
+  - PowerShell `-Switch` ⇄ bash `--switch` (`-Target x` ⇄ `--target x`, `-SkipDemos` ⇄ `--skip-demos`, ...); the mapping is in each script's header
+- **Targets**: `sng_player`, `sng_dump` (tool) · `saf_play`, `demo_synth` (demo) · `test_saf_main`, `audiotest`, `sedaisid_test`, `saf_regression` (test)
+  - Build one: `./build.ps1 -Target sng_player` / `./build.sh --target sng_player`  (add `-Clean` / `--clean` to rebuild)
+- **Output**: `bin/<cpu>-<os>/` (executables), `lib/<cpu>-<os>/` (compiled units) — Linux artefacts live in `bin/x86_64-linux/`, Windows ones in `bin/x86_64-win64/`
+- **Platform flags**: `-CPU`/`--cpu` `x86_64|i386|aarch64`, `-OS`/`--os` `win64|win32|linux|darwin` (the .sh defaults to the host)
+- **cthreads**: `{$IFDEF UNIX}cthreads,{$ENDIF}` must be the FIRST unit of any program that opens audio (SDL2 calls back from its own thread) — `sng_player`, `demo_synth`, `audiotest`, `TestSAFMain`
+- **SDL2 on Linux needs the `-dev` package** (`libsdl2-dev` / `SDL2-devel` / `sdl2`): the bindings `dlopen("libSDL2.so")`, which only the dev symlink provides. Missing ⇒ silent no-audio, not a crash
 
 ## Running Programs
 
+Linux (`bin/x86_64-linux/`), Windows (`bin/x86_64-win64/`, add `.exe`):
+
 ```
-bin/x86_64-win64/sng_player.exe [--sdl2] <file.sng> [subtune]   # GoatTracker .sng player (SAF backend by default)
-bin/x86_64-win64/sng_dump.exe <file.sng>                        # Dump .sng structure
-bin/x86_64-win64/sedaisid_test.exe                              # SID emulation reference/regression test
-bin/x86_64-win64/demo_synth.exe                                 # Synthesis demo
+bin/x86_64-linux/sng_player [--sdl2] <file.sng> [subtune]   # GoatTracker .sng player (SAF backend by default)
+bin/x86_64-linux/sng_dump <file.sng>                        # Dump .sng structure
+bin/x86_64-linux/sedaisid_test                              # SID emulation reference/regression test
+bin/x86_64-linux/saf_regression                             # Headless render-path regression suite
+bin/x86_64-linux/demo_synth                                 # Synthesis demo
 ```
 
 `sng_player` controls during playback: SPACE pause, R restart, L loop, V/W verbose, S tables, 1/2/3 mute voices, +/- subtune, Q/ESC quit.

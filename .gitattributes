@@ -1,0 +1,31 @@
+# Line-ending policy for a project developed on both Windows and Linux.
+#
+# The repository is canonical LF: git normalises text on commit, whatever the
+# platform the checkout happens on, and restores the platform's native endings
+# in the working tree (CRLF on Windows when core.autocrlf=true, LF elsewhere).
+# This keeps a Windows checkout from ever committing CRLF back into history.
+
+* text=auto
+
+# Sources and docs are always text
+*.pas   text
+*.lpr   text
+*.inc   text
+*.md    text
+*.txt   text
+*.safinst text
+
+# Shell scripts must stay LF even on a Windows checkout, or bash chokes on the CR.
+# PowerShell is fine with either, so .ps1 just follows the platform default.
+*.sh    text eol=lf
+*.ps1   text
+
+# Binary assets - never convert
+*.wav   binary
+*.wt    binary
+*.flac  binary
+*.mp3   binary
+*.ogg   binary
+*.mid   binary
+*.sng   binary
+*.dump  binary

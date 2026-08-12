@@ -1010,30 +1010,37 @@ For manual installation or troubleshooting, run:
 .\setup.ps1 -Help
 ```
 
-### Linux (Debian/Ubuntu)
+### Linux / macOS
+
+`setup.sh` is the counterpart of `setup.ps1`: it creates the directory
+structure, checks (or installs) FPC, downloads the SDL2 Pascal bindings into
+`deps/sdl2/` and then builds through `build.sh`.
 
 ```bash
-# Install Free Pascal and SDL2
-sudo apt install fpc fp-units-base fp-units-rtl libsdl2-dev
-
-# Clone the repository and build
-git clone <repository-url>
-cd SedaiAudioFoundation
-chmod +x build.sh
-./build.sh
+chmod +x setup.sh build.sh
+./setup.sh                  # full setup (FPC must already be installed)
+./setup.sh --install-fpc    # also install FPC via the system package manager
+./setup.sh --no-build       # dependencies only
+./setup.sh --help
 ```
 
-### Linux (Fedora/RHEL)
+Dependencies by distribution:
 
 ```bash
+# Debian/Ubuntu
+sudo apt install fpc libsdl2-dev
+# Fedora/RHEL
 sudo dnf install fpc SDL2-devel
-```
-
-### Linux (Arch)
-
-```bash
+# Arch
 sudo pacman -S fpc sdl2
+# macOS
+brew install fpc sdl2
 ```
+
+> **The `-dev` package is required, not just the runtime.** SDL2 is loaded at
+> runtime (`SedaiAudioSDL2Dyn`), and the Pascal bindings ask for `libSDL2.so` —
+> the development symlink. With only the runtime package installed the `dlopen`
+> fails silently and the programs simply produce no audio.
 
 ### Manual Windows Installation
 
@@ -1074,9 +1081,27 @@ kind so a normal build isn't a pile of test executables.
 
 #### Linux / macOS
 
-> `build.sh` is currently a **stub / placeholder**. On Linux/macOS, invoke FPC
-> directly (e.g. `fpc -MObjFPC -Sh -Fusrc/... test/saf_play.lpr`) until the native
-> build script is implemented.
+`build.sh` is a functional port of `build.ps1` — same targets, same kinds, same
+flags, same output layout and the same exit code (number of failures).
+
+```bash
+./build.sh                  # tools + ask whether to build the demos
+./build.sh --demos          # tools + demos (no prompt)
+./build.sh --skip-demos     # tools only (no prompt)
+./build.sh --tests          # tools + the QA test suite
+./build.sh --test-only      # only the QA test suite
+./build.sh --target sng_player   # just one target (any parameter suppresses the prompt)
+./build.sh --lib-only       # compile the library units only
+./build.sh --clean          # clean artifacts before building
+./build.sh --debug          # debug symbols instead of release
+./build.sh --fpc-path /usr/lib/fpc/3.2.2/ppcx64
+./build.sh --help
+```
+
+`--cpu` / `--os` default to the host (e.g. `x86_64-linux`), so executables land in
+`bin/x86_64-linux/` and units in `lib/x86_64-linux/`, side by side with the
+Windows ones. Every `-Xxx` PowerShell switch has a `--xxx` counterpart; the
+mapping is listed in the script header.
 
 ### Build Targets
 
