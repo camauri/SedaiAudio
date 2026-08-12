@@ -20,6 +20,10 @@ program sng_player;
 {$APPTYPE CONSOLE}
 
 uses
+  // cthreads MUST stay the first unit on Unix: SDL2 fills the audio buffer from
+  // its own thread, so the RTL needs the threaded memory manager installed
+  // before anything else initialises.
+  {$IFDEF UNIX}cthreads,{$ENDIF}
   {$IFDEF WINDOWS}
   Windows,
   {$ENDIF}
