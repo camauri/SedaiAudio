@@ -2003,6 +2003,86 @@ end;
 // + breath + natural release + RMS-matched trim) survives a .safinst round-trip:
 // the naturalness layer is carried in the file, not just in the analyzer harness.
 // Also confirms it loads into a Part and renders audible + bounded.
+// Additive unison / ensemble ("section") mode. Verifies: (1) unison=1 is fully
+// inert -> bit-identical to never touching unison (same RNG stream); (2) a lone
+// pure sine is amplitude-steady while 4 detuned copies BEAT (window-peak wobble)
+// yet stay bounded (1/sqrt(N) normalization, so peak <= ~sqrt(N)).
+procedure TestAdditiveUnison;
+const TSR = 48000;
+var
+  ga, gb: TSedaiAdditiveGenerator;
+  bufa, bufb: array of Single;
+  i, n: Integer;
+  maxdiff, pk, cvSolo, cvEns: Double;
+
+  function CvOf(const buf: array of Single): Double;
+  var a, w, nw, k, e: Integer; wp, mean, sd: Double; peaks: array of Double;
+  begin
+    nw := 0; SetLength(peaks, 20); w := Length(buf) div 2;
+    while (w + Round(0.05*TSR) < Length(buf)) and (nw < 20) do
+    begin
+      wp := 0; e := w + Round(0.05*TSR); if e > High(buf) then e := High(buf);
+      for k := w to e do if Abs(buf[k]) > wp then wp := Abs(buf[k]);
+      peaks[nw] := wp; Inc(nw); Inc(w, Round(0.05*TSR));
+    end;
+    mean := 0; for a := 0 to nw-1 do mean := mean + peaks[a]; mean := mean/nw;
+    sd := 0; for a := 0 to nw-1 do sd := sd + Sqr(peaks[a]-mean); sd := Sqrt(sd/nw);
+    Result := sd/(mean+1e-9);
+  end;
+
+  procedure Setup(g: TSedaiAdditiveGenerator; harmCount: Integer);
+  var j: Integer;
+  begin
+    g.SetSampleRate(TSR);
+    g.HarmonicCount := harmCount;
+    for j := 0 to harmCount-1 do g.SetHarmonicLevel(j, 1.0/(j+1));
+    g.AmpEnvelope.AttackTime := 0; g.AmpEnvelope.DecayTime := 0;
+    g.AmpEnvelope.SustainLevel := 1; g.AmpEnvelope.ReleaseTime := 0;
+  end;
+
+begin
+  WriteLn('== additive unison / ensemble ==');
+
+  // (1) unison=1 is inert: identical, sample-for-sample, to never calling it.
+  ga := TSedaiAdditiveGenerator.Create;
+  gb := TSedaiAdditiveGenerator.Create;
+  try
+    Setup(ga, 4); Setup(gb, 4);
+    ga.SetVibrato(20, 6, 0.3);        gb.SetVibrato(20, 6, 0.3);
+    ga.SetMicroInstability(5, 0.1, 5); gb.SetMicroInstability(5, 0.1, 5);
+    gb.SetUnison(1, 20, 0.02);        // 1 voice = off, must not perturb anything
+    n := TSR div 2; SetLength(bufa, n); SetLength(bufb, n);
+    RandSeed := 555; ga.NoteOn(60, 1.0);
+    for i := 0 to n-1 do bufa[i] := ga.GenerateSample;
+    RandSeed := 555; gb.NoteOn(60, 1.0);
+    for i := 0 to n-1 do bufb[i] := gb.GenerateSample;
+    maxdiff := 0;
+    for i := 0 to n-1 do if Abs(bufa[i]-bufb[i]) > maxdiff then maxdiff := Abs(bufa[i]-bufb[i]);
+    Ok('unison=1 is inert (bit-identical)', maxdiff = 0, Format('maxdiff=%.2e', [maxdiff]));
+  finally ga.Free; gb.Free; end;
+
+  // (2) a lone pure sine is steady; 4 detuned copies beat but stay bounded.
+  ga := TSedaiAdditiveGenerator.Create;
+  try
+    Setup(ga, 1);
+    RandSeed := 321; ga.NoteOn(69, 1.0);
+    n := TSR; SetLength(bufa, n);
+    for i := 0 to n-1 do bufa[i] := ga.GenerateSample;
+    cvSolo := CvOf(bufa);
+
+    ga.SetUnison(4, 20, 0);
+    RandSeed := 321; ga.NoteOn(69, 1.0);
+    SetLength(bufb, n);
+    for i := 0 to n-1 do bufb[i] := ga.GenerateSample;
+    cvEns := CvOf(bufb);
+    pk := 0; for i := 0 to n-1 do if Abs(bufb[i]) > pk then pk := Abs(bufb[i]);
+
+    Ok('unison solo sine is steady', cvSolo < 0.01, Format('cv=%.4f', [cvSolo]));
+    Ok('unison 4 voices beat + bounded', (cvEns > 0.02) and (pk < 2.1),
+       Format('cv=%.3f peak=%.2f', [cvEns, pk]));
+  finally ga.Free; end;
+end;
+
 procedure TestLivingPresetRoundTrip;
 const TSR = 48000;
 var
@@ -2011,7 +2091,7 @@ var
   ms: TMemoryStream;
   idx, i, n: Integer;
   gp: TAdditiveParams;
-  tracksOk, humanOk, breathOk, residualOk: Boolean;
+  tracksOk, humanOk, breathOk, residualOk, unisonOk: Boolean;
   part: TSAFPart;
   buf: array of Single;
   pk: Single;
@@ -2036,6 +2116,9 @@ begin
   authored.Additive.BreathCutoff := 4000;
   authored.Additive.BandDepth := 0.04;
   authored.Additive.BandCutoff := 45;
+  authored.Additive.UnisonVoices := 3;
+  authored.Additive.UnisonDetune := 14.0;
+  authored.Additive.UnisonAttack := 0.02;
   authored.Additive.ResidualLevel := 0.03;
   authored.Additive.ResidualGains[0] := 0.5;
   authored.Additive.ResidualGains[3] := 0.8;
@@ -2066,6 +2149,8 @@ begin
     residualOk := (Abs(gp.ResidualLevel - 0.03) < 1e-4)
       and (Abs(gp.ResidualGains[0] - 0.5) < 1e-4) and (Abs(gp.ResidualGains[3] - 0.8) < 1e-4)
       and (Abs(gp.ResidualGains[1]) < 1e-6);
+    unisonOk := (gp.UnisonVoices = 3) and (Abs(gp.UnisonDetune - 14.0) < 1e-4)
+      and (Abs(gp.UnisonAttack - 0.02) < 1e-4);
     tracksOk := (Length(gp.Tracks[0].T) = 3) and (Length(gp.Tracks[1].T) = 0)
       and (Length(gp.Tracks[2].T) = 2)
       and (Abs(gp.Tracks[0].V[1] - 1.0) < 1e-4) and (Abs(gp.Tracks[0].T[2] - 1.0) < 1e-4)
@@ -2078,6 +2163,8 @@ begin
          [gp.BreathLevel, gp.BreathCutoff, gp.BandDepth, gp.BandCutoff]));
     Ok('living residual round-trip', (idx >= 0) and residualOk,
        Format('res=%.3f g0=%.2f g3=%.2f', [gp.ResidualLevel, gp.ResidualGains[0], gp.ResidualGains[3]]));
+    Ok('living unison round-trip', (idx >= 0) and unisonOk,
+       Format('n=%d det=%.2f atk=%.3f', [gp.UnisonVoices, gp.UnisonDetune, gp.UnisonAttack]));
     Ok('living tracks round-trip', (idx >= 0) and tracksOk,
        Format('t0=%d t1=%d t2=%d',
          [Length(gp.Tracks[0].T), Length(gp.Tracks[1].T), Length(gp.Tracks[2].T)]));
@@ -2094,7 +2181,10 @@ begin
       part.NoteOn(69, 1.0);
       part.RenderBlock(@buf[0], n);
       pk := 0; for i := 0 to n*2-1 do if Abs(buf[i]) > pk then pk := Abs(buf[i]);
-      Ok('living preset renders bounded', (idx >= 0) and (pk > 0.001) and (pk < 1.5),
+      // Ensemble (unison=3) sums N detuned copies; peak can approach ~sqrt(N)
+      // in transient alignment, so the "bounded" check guards runaway, not clip
+      // (peak clipping is the mixer/limiter's job downstream).
+      Ok('living preset renders bounded', (idx >= 0) and (pk > 0.001) and (pk < 3.0),
          Format('peak=%.3f', [pk]));
     finally
       part.Free;
@@ -2944,6 +3034,7 @@ begin
   TestBowedGenerator;
   TestModalGenerator;
   TestPartialGenerator;
+  TestAdditiveUnison;
   TestLivingPresetRoundTrip;
   TestPartialPreset;
   TestReedPreset;

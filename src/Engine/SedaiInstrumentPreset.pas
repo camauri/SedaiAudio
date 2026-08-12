@@ -464,6 +464,11 @@ begin
           sl.Add(Format('addvib=%s,%s,%s',
             [FloatToStr(p.Additive.VibDepth, fs), FloatToStr(p.Additive.VibRate, fs),
              FloatToStr(p.Additive.VibDelay, fs)]));
+        // Unison / ensemble ("section"): only emitted when > 1 copy.
+        if p.Additive.UnisonVoices > 1 then
+          sl.Add(Format('unison=%d,%s,%s',
+            [p.Additive.UnisonVoices, FloatToStr(p.Additive.UnisonDetune, fs),
+             FloatToStr(p.Additive.UnisonAttack, fs)]));
         if p.Additive.BreathLevel <> 0 then
           sl.Add(Format('addbreath=%s,%s',
             [FloatToStr(p.Additive.BreathLevel, fs), FloatToStr(p.Additive.BreathCutoff, fs)]));
@@ -800,6 +805,14 @@ begin
         cur.Additive.VibDepth := StrToFloatDef(NextTok, 0, fs);
         cur.Additive.VibRate := StrToFloatDef(NextTok, 0, fs);
         cur.Additive.VibDelay := StrToFloatDef(NextTok, 0, fs);
+      end
+      else if k = 'unison' then
+      begin
+        cur.HasAdditiveParams := True;
+        rest := v;
+        cur.Additive.UnisonVoices := StrToIntDef(NextTok, 1);
+        cur.Additive.UnisonDetune := StrToFloatDef(NextTok, 0, fs);
+        cur.Additive.UnisonAttack := StrToFloatDef(NextTok, 0, fs);
       end
       else if k = 'addbreath' then
       begin

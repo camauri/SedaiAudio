@@ -20,6 +20,7 @@ uses
 const
   ADDITIVE_MAX_HARMONICS = 64;
   ADDITIVE_DEFAULT_HARMONICS = 32;
+  ADDITIVE_MAX_UNISON = 8;    // max detuned copies per voice for the "section" mode
   TWO_PI = 2 * Pi;
 
   // Filtered-noise residual: a small fixed bank of ~octave-spaced band-pass
@@ -110,6 +111,40 @@ type
     FBandNorm: Single;      // std-normalization factor for the LP noise
     FBandState: array[0..ADDITIVE_MAX_HARMONICS - 1] of Single;  // per-partial LP state
 
+    // ---- Unison / ensemble ("section") -------------------------------------
+    // One additive voice can render N slightly-detuned, phase- and vibrato-
+    // decorrelated COPIES of itself, summed -> a lone note reads as a whole
+    // section instead of one player (fixes the "cheap synth strings" comb).
+    // FUnisonVoices = 1 -> completely inert: the single-voice path runs
+    // bit-identical and no extra RNG is touched. Opt-in via SetUnison.
+    // Detune is even-spaced across the ensemble PLUS a per-copy random jitter of
+    // +/-(spacing/2), so intonation is IRREGULAR (incommensurate beating = many
+    // players, not a regular chorus). Each copy has independent vibrato/jitter
+    // (its own phase AND a small rate spread, so they drift apart over time) and
+    // an optional staggered onset. The sum is normalized by 1/sqrt(N): a
+    // decorrelated sum grows ~sqrt(N), so /N would make the section too quiet
+    // relative to a soloist.
+    // TODO (deferred to post-ear-check v1.1): per-copy TIMBRE spread (a small
+    // random per-harmonic level tilt per copy) and per-copy static GAIN spread
+    // (+/-1-2 dB) would decorrelate more than pitch alone. Pitch + independent
+    // vibrato is the bulk of the "section" cue; add these only if it still reads
+    // synthetic at ear-check.
+    FUnisonVoices: Integer;   // 1 = off
+    FUnisonDetune: Single;    // total intonation spread across the ensemble (cents)
+    FUnisonAttack: Single;    // max onset stagger (s); 0 = all copies enter together
+    FUniNorm: Single;         // cached 1/sqrt(FUnisonVoices)
+    FUniDetuneRatio: array[0..ADDITIVE_MAX_UNISON - 1] of Single;  // static per-copy pitch ratio
+    FUniOnset: array[0..ADDITIVE_MAX_UNISON - 1] of Single;        // per-copy entry time (s)
+    FUniVibRate: array[0..ADDITIVE_MAX_UNISON - 1] of Single;      // per-copy vibrato rate (Hz)
+    FUniModRate: array[0..ADDITIVE_MAX_UNISON - 1] of Single;      // per-copy jitter LFO rate (Hz)
+    FUniVibPhase: array[0..ADDITIVE_MAX_UNISON - 1] of Single;     // per-copy vibrato phase
+    FUniLfoPhase: array[0..ADDITIVE_MAX_UNISON - 1] of Single;     // per-copy jitter LFO ramp
+    FUniLfoPCur, FUniLfoPTgt: array[0..ADDITIVE_MAX_UNISON - 1] of Single;  // pitch LFO
+    FUniLfoACur, FUniLfoATgt: array[0..ADDITIVE_MAX_UNISON - 1] of Single;  // amp LFO
+    FUniPitchMod, FUniAmpMod: array[0..ADDITIVE_MAX_UNISON - 1] of Single;  // per-copy modulators
+    FUniPhases: array[0..ADDITIVE_MAX_UNISON - 1, 0..ADDITIVE_MAX_HARMONICS - 1] of Single;
+    FUniBandState: array[0..ADDITIVE_MAX_UNISON - 1, 0..ADDITIVE_MAX_HARMONICS - 1] of Single;
+
     // Filtered-noise RESIDUAL (SMS/DDSP "stochastic" layer). White noise shaped by
     // a bank of RESIDUAL_BANDS band-pass filters with per-band gains (the measured
     // residual spectral envelope), scaled by FResidualLevel and the amp envelope.
@@ -144,8 +179,11 @@ type
     procedure ApplyPreset(APreset: TAdditivePreset);
 
     function CalculateSample: Single;
+    function CalculateUnison: Single;
     function TrackLevel(AHarmonic: Integer): Single;
     procedure UpdateModulation;
+    procedure UpdateUnisonModulation;
+    procedure SeedUnison;
     procedure RecalcBreathCoeff;
     procedure RecalcBandCoeff;
     procedure RecalcResidualCoeffs;
@@ -185,6 +223,13 @@ type
     // ADepthCents = peak deviation (strings ~15-30c), ARateHz ~5.5-6.5, ADelaySec =
     // onset delay before it fades in (~0.3 s). ADepthCents 0 = off.
     procedure SetVibrato(ADepthCents, ARateHz, ADelaySec: Single);
+    // Unison / ensemble ("section"): render AVoices detuned + phase/vibrato-
+    // decorrelated copies of this voice (1 = off, bit-identical single voice).
+    // ADetuneCents = total intonation spread across the ensemble (~10-20c for
+    // strings); AAttackSpreadSec = max per-copy onset stagger (0 = together).
+    // Turns a single held note into a section. Combine with SetVibrato/
+    // SetMicroInstability so each copy's vibrato/jitter is independent.
+    procedure SetUnison(AVoices: Integer; ADetuneCents, AAttackSpreadSec: Single);
     // Airy breath layer. ALevel 0 = off; ACutoffHz shapes it ("air" low / "hiss" high).
     procedure SetBreath(ALevel, ACutoffHz: Single);
     // Per-partial bandwidth ("metal"). ADepth = fractional AM depth per partial
@@ -224,6 +269,9 @@ type
     property VibDepthCents: Single read FVibDepthCents;
     property VibRateHz: Single read FVibRate;
     property VibDelaySec: Single read FVibDelay;
+    property UnisonVoices: Integer read FUnisonVoices;
+    property UnisonDetune: Single read FUnisonDetune;
+    property UnisonAttackSpread: Single read FUnisonAttack;
     property BreathLevel: Single read FBreathLevel write FBreathLevel;
     property BreathCutoff: Single read FBreathCut;
     property BandDepth: Single read FBandDepth write FBandDepth;
@@ -262,6 +310,7 @@ begin
   FLfoPhase := 0; FLfoPCur := 0; FLfoPTgt := 0; FLfoACur := 0; FLfoATgt := 0;
   FPitchMod := 1; FAmpMod := 1; FBreathState := 0;
   FBandDepth := 0; FBandCut := 45;
+  FUnisonVoices := 1; FUnisonDetune := 0; FUnisonAttack := 0; FUniNorm := 1;
   FResidualLevel := 0;
   for I := 0 to RESIDUAL_BANDS - 1 do FResidualGains[I] := 0;
   RecalcBreathCoeff;
@@ -419,6 +468,78 @@ begin
   end;
 end;
 
+// Ensemble sum: render FUnisonVoices detuned + decorrelated copies of the
+// harmonic stack and mix them. The harmonic LEVEL (track/env/static) is shared
+// across copies (the section plays one timbre); only phase, static detune,
+// per-copy pitch modulation and per-partial band AM differ. Copies are combined
+// with their own amplitude shimmer + optional staggered onset, then normalized
+// by 1/sqrt(N). Called only when FUnisonVoices >= 2.
+function TSedaiAdditiveGenerator.CalculateUnison: Single;
+var
+  I, c: Integer;
+  baseLevel, lvl, harmDetune, HarmonicFreq, PhaseInc, fade, acc: Single;
+  sumc: array[0..ADDITIVE_MAX_UNISON - 1] of Single;
+begin
+  for c := 0 to FUnisonVoices - 1 do sumc[c] := 0;
+
+  for I := 0 to FActiveHarmonics - 1 do
+  begin
+    if FHarmonicLevels[I] <= 0.001 then Continue;
+
+    // Shared base level for this harmonic, computed ONCE (track > env > static)
+    // so the breakpoint-track cursor advances exactly once per sample.
+    if FUseHarmonicTracks then
+      baseLevel := TrackLevel(I)
+    else if FUseHarmonicEnvelopes then
+      baseLevel := FHarmonicLevels[I] * FHarmonicEnvelopes[I].Process
+    else
+      baseLevel := FHarmonicLevels[I];
+    if baseLevel <= 0.001 then Continue;
+
+    if FHarmonicDetune[I] <> 0 then
+      harmDetune := Power(2, FHarmonicDetune[I] / 1200)
+    else
+      harmDetune := 1.0;
+
+    for c := 0 to FUnisonVoices - 1 do
+    begin
+      lvl := baseLevel;
+      // Per-copy band AM ("metal"), decorrelated per copy.
+      if FBandDepth > 0 then
+      begin
+        FUniBandState[c][I] := FUniBandState[c][I] +
+          FBandCoeff * ((Random * 2 - 1) - FUniBandState[c][I]);
+        lvl := lvl * (1.0 + FBandDepth * FBandNorm * FUniBandState[c][I]);
+        if lvl < 0 then lvl := 0;
+      end;
+
+      HarmonicFreq := FFrequency * FUniPitchMod[c] * FUniDetuneRatio[c] * (I + 1) * harmDetune;
+      if HarmonicFreq < FNyquistLimit then
+      begin
+        sumc[c] := sumc[c] + Sin(FUniPhases[c][I] * TWO_PI) * lvl;
+        PhaseInc := HarmonicFreq / FSampleRate;
+        FUniPhases[c][I] := FUniPhases[c][I] + PhaseInc;
+        if FUniPhases[c][I] >= 1.0 then FUniPhases[c][I] := FUniPhases[c][I] - 1.0;
+      end;
+    end;
+  end;
+
+  // Combine: per-copy shimmer + optional staggered onset fade, then /sqrt(N).
+  acc := 0;
+  for c := 0 to FUnisonVoices - 1 do
+  begin
+    if FUnisonAttack > 0 then
+    begin
+      fade := (FNoteTime - FUniOnset[c]) / 0.005;   // ~5 ms fade-in at each entry
+      if fade < 0 then fade := 0 else if fade > 1 then fade := 1;
+    end
+    else
+      fade := 1.0;
+    acc := acc + sumc[c] * FUniAmpMod[c] * fade;
+  end;
+  Result := acc * FUniNorm;
+end;
+
 procedure TSedaiAdditiveGenerator.NoteOn(ANote: Integer; AVelocity: Single);
 var
   I: Integer;
@@ -444,7 +565,12 @@ begin
   // PHASES. With zero phases every voice is a bit-identical waveform, so a chord /
   // section sums coherently -> the "cheap synth strings" comb sound. Decorrelating
   // the phases makes stacked voices read as several distinct players.
-  if (FJitterCents > 0) or (FShimmerDepth > 0) or (FBreathLevel > 0) or (FVibDepthCents > 0) then
+  if FUnisonVoices >= 2 then
+    // Ensemble mode: seed independent per-copy state (own detune/phases/vibrato/
+    // jitter). Kept separate so the N=1 path below stays bit-identical (its exact
+    // RNG call order is unchanged when unison is off).
+    SeedUnison
+  else if (FJitterCents > 0) or (FShimmerDepth > 0) or (FBreathLevel > 0) or (FVibDepthCents > 0) then
   begin
     FLfoPCur := Random * 2 - 1; FLfoPTgt := Random * 2 - 1;
     FLfoACur := Random * 2 - 1; FLfoATgt := Random * 2 - 1;
@@ -539,7 +665,13 @@ begin
 
   // Calculate sample (CalculateSample applies FPitchMod to the harmonic freqs;
   // FAmpMod is the amplitude shimmer). tracks read the CURRENT FNoteTime.
-  Result := CalculateSample * EnvValue * FVelocity * FAmplitude * FAmpMod;
+  // In ensemble mode CalculateUnison sums the detuned copies and folds each
+  // copy's own shimmer in (so no outer FAmpMod). breath/residual below stay a
+  // single shared "air" layer over the whole section.
+  if FUnisonVoices >= 2 then
+    Result := CalculateUnison * EnvValue * FVelocity * FAmplitude
+  else
+    Result := CalculateSample * EnvValue * FVelocity * FAmplitude * FAmpMod;
 
   // Airy breath layer: one-pole low-passed white noise, following the envelope
   if FBreathLevel > 0 then
@@ -720,6 +852,11 @@ procedure TSedaiAdditiveGenerator.UpdateModulation;
 var
   inc, lp, la, vib, venv: Single;
 begin
+  if FUnisonVoices >= 2 then
+  begin
+    UpdateUnisonModulation;
+    Exit;
+  end;
   if (FJitterCents <= 0) and (FShimmerDepth <= 0) and (FVibDepthCents <= 0) then
   begin
     FPitchMod := 1.0; FAmpMod := 1.0;
@@ -756,12 +893,113 @@ begin
   end;
 end;
 
+// Per-copy modulation for ensemble mode: same jitter+vibrato law as the scalar
+// path, but each copy carries its own LFO/vibrato state and rate, so the section
+// wobbles independently (not in lock-step). Fills FUniPitchMod/FUniAmpMod, read
+// by CalculateUnison. The vibrato onset delay is shared (the section leans in
+// together). Static per-copy detune lives in FUniDetuneRatio (set at NoteOn).
+procedure TSedaiAdditiveGenerator.UpdateUnisonModulation;
+var
+  c: Integer;
+  inc, lp, la, vib, venv: Single;
+begin
+  for c := 0 to FUnisonVoices - 1 do
+  begin
+    FUniPitchMod[c] := 1.0; FUniAmpMod[c] := 1.0;
+    if (FJitterCents <= 0) and (FShimmerDepth <= 0) and (FVibDepthCents <= 0) then
+      Continue;
+
+    // --- random micro-instability (per-copy) ---
+    if (FJitterCents > 0) or (FShimmerDepth > 0) then
+    begin
+      if FSampleRate > 0 then inc := FUniModRate[c] / FSampleRate else inc := 0;
+      FUniLfoPhase[c] := FUniLfoPhase[c] + inc;
+      if FUniLfoPhase[c] >= 1.0 then
+      begin
+        FUniLfoPhase[c] := FUniLfoPhase[c] - 1.0;
+        FUniLfoPCur[c] := FUniLfoPTgt[c]; FUniLfoPTgt[c] := Random * 2 - 1;
+        FUniLfoACur[c] := FUniLfoATgt[c]; FUniLfoATgt[c] := Random * 2 - 1;
+      end;
+      lp := FUniLfoPCur[c] + (FUniLfoPTgt[c] - FUniLfoPCur[c]) * FUniLfoPhase[c];
+      la := FUniLfoACur[c] + (FUniLfoATgt[c] - FUniLfoACur[c]) * FUniLfoPhase[c];
+      if FJitterCents > 0 then FUniPitchMod[c] := Power(2, (FJitterCents * lp) / 1200);
+      if FShimmerDepth > 0 then FUniAmpMod[c] := 1.0 + FShimmerDepth * la;
+    end;
+
+    // --- regular vibrato (per-copy phase + rate), onset-delayed then ramping ---
+    if FVibDepthCents > 0 then
+    begin
+      if FSampleRate > 0 then FUniVibPhase[c] := FUniVibPhase[c] + FUniVibRate[c] / FSampleRate;
+      if FUniVibPhase[c] >= 1.0 then FUniVibPhase[c] := FUniVibPhase[c] - 1.0;
+      venv := (FNoteTime - FVibDelay) / 0.4;                // fade in over ~0.4 s
+      if venv < 0 then venv := 0 else if venv > 1 then venv := 1;
+      vib := Sin(2 * Pi * FUniVibPhase[c]) * venv;
+      FUniPitchMod[c] := FUniPitchMod[c] * Power(2, (FVibDepthCents * vib) / 1200);
+    end;
+  end;
+end;
+
+// Seed independent per-copy state at NoteOn (ensemble mode only). Even-spaced
+// intonation + per-copy random jitter of +/-(spacing/2) (irregular tuning);
+// per-copy vibrato/jitter rate spread of +/-4% (so copies drift apart); random
+// vibrato phase and initial harmonic phases (decorrelation); optional staggered
+// onset. Caches FUniNorm = 1/sqrt(N).
+procedure TSedaiAdditiveGenerator.SeedUnison;
+var
+  c, h: Integer;
+  baseCents, spacing, jit: Single;
+begin
+  if FUnisonVoices < 2 then begin FUniNorm := 1.0; Exit; end;
+  FUniNorm := 1.0 / Sqrt(FUnisonVoices);
+  spacing := FUnisonDetune / (FUnisonVoices - 1);
+  for c := 0 to FUnisonVoices - 1 do
+  begin
+    baseCents := (c - (FUnisonVoices - 1) / 2) * spacing;
+    jit := (Random - 0.5) * spacing;                       // +/- spacing/2
+    FUniDetuneRatio[c] := Power(2, (baseCents + jit) / 1200);
+    FUniVibRate[c] := FVibRate * (1 + 0.04 * (Random * 2 - 1));
+    FUniModRate[c] := FModRate * (1 + 0.04 * (Random * 2 - 1));
+    FUniVibPhase[c] := Random;
+    FUniLfoPhase[c] := 0;
+    FUniLfoPCur[c] := Random * 2 - 1; FUniLfoPTgt[c] := Random * 2 - 1;
+    FUniLfoACur[c] := Random * 2 - 1; FUniLfoATgt[c] := Random * 2 - 1;
+    FUniPitchMod[c] := 1.0; FUniAmpMod[c] := 1.0;
+    if FUnisonAttack > 0 then
+      FUniOnset[c] := (c / (FUnisonVoices - 1)) * FUnisonAttack
+    else
+      FUniOnset[c] := 0;
+    for h := 0 to ADDITIVE_MAX_HARMONICS - 1 do
+    begin
+      FUniPhases[c][h] := Random;      // decorrelate stacked copies
+      FUniBandState[c][h] := 0;
+    end;
+  end;
+  // Shared per-harmonic state (amplitude tracks + optional envelopes) resets too.
+  for h := 0 to ADDITIVE_MAX_HARMONICS - 1 do
+  begin
+    FTrackCursor[h] := 0;
+    if FUseHarmonicEnvelopes then FHarmonicEnvelopes[h].Trigger;
+  end;
+end;
+
 procedure TSedaiAdditiveGenerator.SetVibrato(ADepthCents, ARateHz, ADelaySec: Single);
 begin
   if ADepthCents < 0 then ADepthCents := 0;
   FVibDepthCents := ADepthCents;
   if ARateHz > 0 then FVibRate := ARateHz;
   if ADelaySec >= 0 then FVibDelay := ADelaySec;
+end;
+
+procedure TSedaiAdditiveGenerator.SetUnison(AVoices: Integer; ADetuneCents, AAttackSpreadSec: Single);
+begin
+  if AVoices < 1 then AVoices := 1
+  else if AVoices > ADDITIVE_MAX_UNISON then AVoices := ADDITIVE_MAX_UNISON;
+  FUnisonVoices := AVoices;
+  if ADetuneCents < 0 then ADetuneCents := 0;
+  FUnisonDetune := ADetuneCents;
+  if AAttackSpreadSec < 0 then AAttackSpreadSec := 0;
+  FUnisonAttack := AAttackSpreadSec;
+  if FUnisonVoices > 1 then FUniNorm := 1.0 / Sqrt(FUnisonVoices) else FUniNorm := 1.0;
 end;
 
 procedure TSedaiAdditiveGenerator.SetMicroInstability(AJitterCents, AShimmerDepth, ARateHz: Single);

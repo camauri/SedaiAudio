@@ -130,6 +130,9 @@ type
     BreathCutoff: Single;     // breath low-pass cutoff (Hz)
     BandDepth: Single;        // per-partial bandwidth ("metal") AM depth; 0 = off
     BandCutoff: Single;       // per-partial band-noise low-pass cutoff (Hz)
+    UnisonVoices: Integer;    // ensemble ("section") copies per voice; 1 = off / solo
+    UnisonDetune: Single;     // total intonation spread across the ensemble (cents)
+    UnisonAttack: Single;     // per-copy onset stagger (s); 0 = copies enter together
     ResidualLevel: Single;    // filtered-noise residual (SMS stochastic) level; 0 = off
     ResidualGains: array[0..RESIDUAL_BANDS-1] of Single;  // residual per-band gains (spectral envelope)
     Tracks: array[0..ADDITIVE_MAX_HARMONICS-1] of TAdditiveTrack;  // per-harmonic amp tracks
@@ -893,6 +896,7 @@ begin
       AG.SetHarmonicTrack(I, AParams.Tracks[I].T, AParams.Tracks[I].V);
   AG.SetMicroInstability(AParams.JitterCents, AParams.ShimmerDepth, AParams.RateHz);
   AG.SetVibrato(AParams.VibDepth, AParams.VibRate, AParams.VibDelay);
+  AG.SetUnison(AParams.UnisonVoices, AParams.UnisonDetune, AParams.UnisonAttack);
   AG.SetBreath(AParams.BreathLevel, AParams.BreathCutoff);
   AG.SetBandwidth(AParams.BandDepth, AParams.BandCutoff);
   AG.SetResidual(AParams.ResidualLevel, AParams.ResidualGains);
@@ -933,6 +937,9 @@ begin
       Result.BreathCutoff := AG.BreathCutoff;
       Result.BandDepth := AG.BandDepth;
       Result.BandCutoff := AG.BandCutoff;
+      Result.UnisonVoices := AG.UnisonVoices;
+      Result.UnisonDetune := AG.UnisonDetune;
+      Result.UnisonAttack := AG.UnisonAttackSpread;
       Result.ResidualLevel := AG.ResidualLevel;
       for I := 0 to RESIDUAL_BANDS - 1 do
         Result.ResidualGains[I] := AG.GetResidualGain(I);
