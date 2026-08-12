@@ -389,6 +389,10 @@ var
   Sign, Expon: Integer;
   HiMant, LoMant: LongWord;
   FMant, M: Double;
+  // Frexp's mantissa is an out parameter of the RTL's 'float' type, which is
+  // Double on win64 but the 80-bit Extended on x86-64 Linux; a var/out argument
+  // has to match exactly, so take it in an Extended and narrow afterwards.
+  ME: Extended;
   E: Integer;
 begin
   // 80-bit IEEE 754 extended precision, big-endian, with an explicit integer
@@ -411,7 +415,8 @@ begin
   end
   else
   begin
-    Frexp(AValue, M, E);   // AValue = M * 2^E, 0.5 <= M < 1
+    Frexp(AValue, ME, E);  // AValue = M * 2^E, 0.5 <= M < 1
+    M := ME;
     if E > 16384 then
     begin
       Expon := $7FFF;      // out of range -> Inf
