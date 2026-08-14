@@ -3,10 +3,10 @@
 { These tables are used for combined waveform output (ST, PT, PS, PST). }
 {                                                                            }
 { This is reSID data by Dag Lem (reSID, Copyright (C) 2004 Dag Lem). It is   }
-{ therefore a derivative work of reSID and is licensed -- like SedaiSIDEvo.pas}
-{ and UNLIKE the dual-licensed rest of Sedai Audio Foundation -- under the    }
-{ GNU General Public License version 2 or any later version (GPL-2.0-or-later)}
-{ No commercial/proprietary license applies. With thanks to Dag Lem.         }
+{ therefore a derivative work of reSID and carries -- like SedaiSIDEvo.pas -- }
+{ the terms of its upstream: GNU General Public License version 2 or any      }
+{ later version (GPL-2.0-or-later). The "or later" is what lets it sit inside }
+{ this GPL-3.0 project. With thanks to Dag Lem.                               }
 
 const
   WAVE_TABLE_SIZE = 4096;

@@ -18,7 +18,7 @@
  * this is a clean-room implementation from the spec. Our thanks to the FLAC
  * authors for an open, well-documented lossless format. See LICENSING.md.
  *
- * (c) 2024 Artiforge - Licensed under GPL-3.0 OR Commercial (clean-room; not a
+ * (c) 2024 Artiforge - Licensed under GPL-3.0 (clean-room; not a
  * derivative of any GPL'd decoder)
  *}
 unit SedaiFLACDecoder;

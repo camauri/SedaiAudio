@@ -17,17 +17,17 @@
  * ============================================================================
  *
  * This unit is a derivative work of GoatTracker 2 (v2.77) by Lasse Oorni
- * (Cadaver / Covert Bitops), the Commodore 64 music editor and player. As with
- * SedaiSIDEvo, the project's dual "GPL-3.0 OR Commercial" license DOES NOT
- * apply to this unit: GoatTracker is licensed "GNU GPL version 2 or (at your
- * option) any later version", so this file carries the SAME license:
+ * (Cadaver / Covert Bitops), the Commodore 64 music editor and player. Sedai
+ * Audio Foundation as a whole is GPL-3.0; as with SedaiSIDEvo, this unit also
+ * carries the terms of its upstream, since GoatTracker is licensed "GNU GPL
+ * version 2 or (at your option) any later version":
  *
  *       GNU General Public License, version 2 or any later version
- *       (GPL-2.0-or-later).  -- GPL-only; full text in LICENSE.GPL-2.0
+ *       (GPL-2.0-or-later).  -- full text in LICENSE.GPL-2.0
  *
- * No commercial / proprietary license can be granted for this unit without the
- * permission of the GoatTracker copyright holder. (It also depends on
- * TSedaiSIDEvo, which is GPL-2.0-or-later as a reSID port.)
+ * The "or later" is what lets it live inside a GPL-3.0 project. These upstream
+ * terms cannot be narrowed without the permission of the GoatTracker copyright
+ * holder. (It also depends on TSedaiSIDEvo, GPL-2.0-or-later as a reSID port.)
  *
  * ACKNOWLEDGEMENTS & THANKS
  *   - Lasse Oorni (Cadaver / Covert Bitops) -- author of GoatTracker 2, whose

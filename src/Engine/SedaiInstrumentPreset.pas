@@ -13,7 +13,7 @@
  * parameter blocks, authorable macros and .safinst save/load (the sound-designer
  * "author" side) come in later slices — see tmp/SAF_PRESET_DESIGN.md.
  *
- * (c) 2024 Artiforge - Licensed under GPL-3.0 OR Commercial
+ * (c) 2024 Artiforge - Licensed under GPL-3.0
  *}
 unit SedaiInstrumentPreset;
 

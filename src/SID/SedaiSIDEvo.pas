@@ -62,17 +62,18 @@
  *     blocks (it uses its own reSID-ported oscillator/envelope/filter).
  *
  * ----------------------------------------------------------------------------
- * LICENSE -- IMPORTANT: the rest of Sedai Audio Foundation is dual-licensed
- * "GPL-3.0 OR Commercial", but that dual license DOES NOT apply to this unit.
- * Because TSedaiSIDEvo is a derivative work of reSID / reSID-fp, this file --
- * together with SedaiSIDEvo_WaveTables.inc, which holds reSID's combined-
- * waveform data verbatim -- is distributed under the SAME license as reSID:
+ * LICENSE -- Sedai Audio Foundation as a whole is GPL-3.0. Because TSedaiSIDEvo
+ * is a derivative work of reSID / reSID-fp, this file -- together with
+ * SedaiSIDEvo_WaveTables.inc, which holds reSID's combined-waveform data
+ * verbatim -- also carries the terms of its upstream:
  *
  *       GNU General Public License, version 2 or (at your option) any later
  *       version  (GPL-2.0-or-later).
  *
- * No commercial / proprietary license can be granted for this unit without the
- * permission of the reSID copyright holders.
+ * The "or later" is what lets this unit live inside a GPL-3.0 project: as
+ * distributed here it is covered by GPL-3.0, and the v2 text (LICENSE.GPL-2.0)
+ * is kept so that option stays available. These upstream terms cannot be
+ * narrowed without the permission of the reSID copyright holders.
  * ----------------------------------------------------------------------------
  * ACKNOWLEDGEMENTS & THANKS
  *

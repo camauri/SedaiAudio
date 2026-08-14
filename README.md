@@ -603,10 +603,10 @@ engines from the same per-cycle register stream and comparing the raw output:
   Release setting) reproduce reSID's `readOSC`/`readENV`/`output()` with zero deviation.
 
 > `SedaiSIDEvo` is a Pascal **port of reSID** (and reSID-fp for the optional distortion
-> model), partially built on the SAF framework. As a derivative work of reSID it is
-> **GPL-2.0-or-later, GPL-only** — the project's dual "GPL-3.0 OR Commercial" license does
-> **not** apply to the SID engine. Credit and thanks to Dag Lem (reSID) and Antti S.
-> Lankila (reSID-fp). See the [License](#license) section for details.
+> model), partially built on the SAF framework. As a derivative work of reSID it carries
+> its upstream's terms, **GPL-2.0-or-later**, which is what allows it to sit inside this
+> GPL-3.0 project. Credit and thanks to Dag Lem (reSID) and Antti S. Lankila (reSID-fp).
+> See the [License](#license) section for details.
 
 #### Sampling Methods
 
@@ -1629,26 +1629,27 @@ pure-Pascal **MP3 decoder** (MPEG-1/2/2.5 Layer III, minimp3 port, Xing/LAME gap
 
 ## License
 
-This project is dual-licensed: **GNU General Public License v3.0 (GPL-3.0) OR Commercial**.
+This project is released under the **GNU General Public License v3.0 (GPL-3.0)**.
 See [`LICENSING.md`](LICENSING.md) for the full picture, [`LICENSE`](LICENSE) for the
 GPL-3.0 text, and [`LICENSE.GPL-2.0`](LICENSE.GPL-2.0) for the GPL-2.0 text.
 
-You are free to use, modify, and distribute this software under the terms of the GPL-3.0 license.
+You are free to use, modify, and distribute this software under the terms of the GPL-3.0
+license. There is no commercial or proprietary option.
 
-### Exception — SID engine and GoatTracker player (GPL-2.0-or-later, GPL-only)
+### Third-party derived components (GPL-2.0-or-later upstream)
 
-These files are **ports of GPL'd third-party engines**, so the dual license above **does
-not apply to them** — they are distributed under the **same license as their upstream,
-GNU GPL version 2 or any later version (GPL-2.0-or-later)**, GPL-only (full text in
-[`LICENSE.GPL-2.0`](LICENSE.GPL-2.0)):
+These files are **ports of GPL'd third-party engines**, so they are derivative works and
+carry their upstream's terms — **GNU GPL version 2 or any later version
+(GPL-2.0-or-later)**, full text in [`LICENSE.GPL-2.0`](LICENSE.GPL-2.0):
 
 - `src/SID/SedaiSIDEvo.pas` + `src/SID/SedaiSIDEvo_WaveTables.inc` — a Pascal port of
   **reSID / reSID-fp** (partially built on the SAF framework);
 - `src/Players/SedaiGoatTracker.pas` — a reimplementation of the **GoatTracker 2** player
   routine (and it uses GoatTracker's frequency tables).
 
-No commercial/proprietary license can be granted for these without permission from the
-respective upstream copyright holders. `sng_player` links them, so the built player is GPL.
+The "**or later**" in their upstream licence is what lets them sit inside a GPL-3.0
+project: as distributed here they are covered by GPL-3.0 like everything else, and the v2
+text is kept so that option remains available. Their upstream terms cannot be narrowed.
 See [`LICENSING.md`](LICENSING.md) for the full breakdown.
 
 > **reSID** is the cycle-accurate MOS 6581/8580 emulator by **Dag Lem** (Copyright © 2004
@@ -1659,11 +1660,7 @@ See [`LICENSING.md`](LICENSING.md) for the full breakdown.
 > under the GPL. The bit-exact accuracy of `SedaiSIDEvo` and `SedaiGoatTracker` is a
 > tribute to reSID and GoatTracker.
 
-### Commercial Licensing
-
-The commercial option covers the Sedai Audio Foundation code authored for this project; it
-does **not** cover the reSID-derived SID engine (see the exception above). For commercial
-use or proprietary licensing options, please contact the author:
+### Contact
 
 **Maurizio Cammalleri**
 Email: maurizio.cammalleri@gmail.com

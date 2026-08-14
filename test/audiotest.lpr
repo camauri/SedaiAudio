@@ -4,7 +4,7 @@
  *
  * Interactive demo showcasing synthesis capabilities using the new modular API.
  *
- * SPDX-License-Identifier: GPL-3.0-only OR Commercial
+ * SPDX-License-Identifier: GPL-3.0-only
  *}
 
 program AudioTest;

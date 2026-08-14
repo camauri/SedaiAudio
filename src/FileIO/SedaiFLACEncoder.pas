@@ -16,7 +16,7 @@
  *
  * Lossless: re-decoding the output reproduces the input integer PCM exactly.
  *
- * (c) 2024 Artiforge - Licensed under GPL-3.0 OR Commercial (clean-room).
+ * (c) 2024 Artiforge - Licensed under GPL-3.0 (clean-room).
  *}
 unit SedaiFLACEncoder;
 

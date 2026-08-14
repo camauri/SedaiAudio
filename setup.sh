@@ -2,7 +2,7 @@
 #
 # SedaiAudio Foundation - Setup Script for Linux/macOS
 # Copyright (c) 2025 Maurizio Cammalleri
-# Released under GNU GPL v3 or Commercial License
+# Released under the GNU GPL v3
 #
 # Functional port of setup.ps1:
 #   - creates the directory structure (bin/<platform>, lib/<platform>, deps)
@@ -105,7 +105,7 @@ show_banner() {
     echo -e "${CYAN}${border}${NC}"
     echo ""
     echo -e "${GRAY}  Audio Foundation - Professional Audio Synthesis Library${NC}"
-    echo -e "${GRAY}  Copyright (c) 2025 Maurizio Cammalleri - GPL-3.0 or Commercial${NC}"
+    echo -e "${GRAY}  Copyright (c) 2025 Maurizio Cammalleri - GPL-3.0${NC}"
     echo ""
     echo -e "${CYAN}${border}${NC}"
     echo ""

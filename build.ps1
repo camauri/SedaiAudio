@@ -78,7 +78,7 @@
 
 .NOTES
     Copyright (c) 2025 Maurizio Cammalleri
-    Released under GNU GPL v3 or Commercial License
+    Released under the GNU GPL v3
 #>
 
 param(
@@ -268,7 +268,7 @@ function Show-Banner {
     Write-Host $border -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  Audio Foundation - Professional Audio Synthesis Library" -ForegroundColor Gray
-    Write-Host "  Copyright (c) 2025 Maurizio Cammalleri - GPL-3.0 or Commercial" -ForegroundColor Gray
+    Write-Host "  Copyright (c) 2025 Maurizio Cammalleri - GPL-3.0" -ForegroundColor Gray
     Write-Host ""
     Write-Host $border -ForegroundColor Cyan
     Write-Host ""

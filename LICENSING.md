@@ -1,23 +1,18 @@
 # Licensing
 
-Sedai Audio Foundation is distributed under **two** licenses, depending on the file.
+Sedai Audio Foundation is distributed under the **GNU General Public License v3.0**.
 
-## 1. Most of the project — dual licensed: GPL-3.0 **OR** Commercial
+## The project — GPL-3.0
 
-All Sedai Audio Foundation code authored for this project is dual-licensed:
+All Sedai Audio Foundation code is released under the **GNU General Public License
+version 3.0** — full text in [`LICENSE`](LICENSE). There is no commercial or
+proprietary option: if you distribute a work based on this code, it must be GPL too.
 
-- **Open source:** GNU General Public License v3.0 — full text in [`LICENSE`](LICENSE).
-- **Commercial / proprietary:** available on request — contact
-  **Maurizio Cammalleri** &lt;maurizio.cammalleri@gmail.com&gt;.
+## Third-party derived components
 
-You may use this code under *either* option.
-
-## 2. SID engine and GoatTracker player — GPL-2.0-or-later only (no commercial)
-
-The following files are **ports of GPL'd third-party engines** and are therefore
-**derivative works** to which the dual license above **does not apply**. They are
-distributed under the **same license as their upstream — the GNU GPL version 2 or (at
-your option) any later version** (see [`LICENSE.GPL-2.0`](LICENSE.GPL-2.0)):
+The following files are **ports of GPL'd third-party engines**, so they are derivative
+works and carry their upstream's terms — the **GNU GPL version 2 or (at your option) any
+later version** (full text in [`LICENSE.GPL-2.0`](LICENSE.GPL-2.0)):
 
 | File | Derived from | Upstream author |
 |------|--------------|-----------------|
@@ -25,13 +20,11 @@ your option) any later version** (see [`LICENSE.GPL-2.0`](LICENSE.GPL-2.0)):
 | `src/SID/SedaiSIDEvo_WaveTables.inc` (reSID combined-waveform data, verbatim) | reSID | Dag Lem |
 | `src/Players/SedaiGoatTracker.pas` | GoatTracker 2 player routine | Lasse Öörni |
 
-A commercial/proprietary license for these files cannot be granted without permission
-from the respective upstream copyright holders. The `sng_player` front-end
-(`test/sng_player.lpr`) links these GPL units, so the resulting executable is GPL too.
-
-> "GPL-2.0-or-later" means the GPL v2 terms apply, and you may also choose to comply under
-> any later GPL version (e.g. GPL-3.0). The full GPL v2 text is provided so the v2 option
-> is available; the GPL v3 text is in `LICENSE`.
+The "**or later**" in their upstream licence is what lets them sit inside a GPL-3.0
+project: as distributed here they are covered by GPL-3.0 like everything else, and the
+v2 text is kept so that option remains available to anyone who prefers it. Their upstream
+terms cannot be narrowed — a fact worth remembering if the licensing question is ever
+revisited, because these files are the reason the project cannot be anything but GPL.
 
 ## Acknowledgements & thanks
 
@@ -52,7 +45,7 @@ released under the GPL:
 
 We likewise stand on the work of those who designed the **open audio formats** we decode.
 These decoders are implemented **clean-room from the public format specifications** (no
-upstream code vendored), so they are part of the dual-licensed code in section 1 — not
+upstream code vendored), so they are original work under the GPL-3.0 above rather than
 derivative works — but the formats themselves are very much someone else's labour, and that
 deserves recognition:
 
