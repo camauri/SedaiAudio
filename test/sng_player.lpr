@@ -27,7 +27,7 @@ uses
   {$IFDEF WINDOWS}
   Windows,
   {$ENDIF}
-  SysUtils, Classes, SDL2, SedaiSIDEvo, SedaiGoatTracker,
+  SysUtils, Classes, SDL2, SedaiAudioTypes, SedaiSIDEvo, SedaiGoatTracker,
   SedaiAudioFoundation, SedaiAudioBackend;
 
 const
@@ -53,18 +53,21 @@ var
   // Audio buffer size, switchable at runtime among 2048/4096/8192 (key 'B').
   GBufferSize: Integer = DEFAULT_BUFFER_SIZE;
 
+// Mono 16-bit scratch buffer (sized for the largest selectable buffer). The
+// GoatTracker player is the classic, C64-compatible path and renders one
+// channel; both audio paths below fan it out to the stereo device through the
+// shared adapters in SedaiAudioTypes.
+var
+  GMonoTempBuffer: array[0..MAX_BUFFER_SIZE * 2 - 1] of SmallInt;
+
 // ============================================================================
-// SDL2 AUDIO CALLBACK
+// SDL2 AUDIO CALLBACK (Stereo 16-bit Output)
 // ============================================================================
 
 procedure AudioCallback(AUserData: Pointer; AStream: PUInt8; ALen: Integer); cdecl;
 var
-  Samples: Integer;
-  OutBuffer: PSmallInt;
+  Frames: Integer;
 begin
-  Samples := ALen div 2;  // 16-bit samples
-  OutBuffer := PSmallInt(AStream);
-
   if not Assigned(GPlayer) or GPaused or GPlayer.SongFinished then
   begin
     // Silence
@@ -72,24 +75,25 @@ begin
     Exit;
   end;
 
-  // FillBuffer does EVERYTHING correctly:
+  // The device is opened stereo, the same contract the SAF backend imposes, so
+  // that --sdl2 is an A/B of the BACKEND and not of the channel layout as well
+  // (and so it can carry SedaiSIDEvo's real stereo the day the player asks for
+  // it). FillBuffer does EVERYTHING correctly:
   // - Calls PlayRoutine at correct intervals (using BPM timing)
   // - Writes SID registers with SIDWRITEDELAY timing
   // - Generates 16-bit audio samples directly
-  GPlayer.FillBuffer(OutBuffer, Samples);
+  Frames := ALen div 4;  // 2 channels x 16-bit
+  GPlayer.FillBuffer(@GMonoTempBuffer[0], Frames);
+  MonoS16ToStereoS16(@GMonoTempBuffer[0], PSmallInt(AStream), Frames);
 end;
 
 // ============================================================================
 // SAF AUDIO CALLBACK (Stereo Float Output)
 // ============================================================================
 
-var
-  GSAFTempBuffer: array[0..MAX_BUFFER_SIZE * 2 - 1] of SmallInt;  // Mono 16-bit temp buffer (sized for max)
-
 procedure SAFAudioCallback(AOutput: PSingle; AFrameCount: Integer; AUserData: Pointer);
 var
   I: Integer;
-  Sample: Single;
 begin
   if not Assigned(GPlayer) or GPaused or GPlayer.SongFinished then
   begin
@@ -99,18 +103,10 @@ begin
     Exit;
   end;
 
-  // Generate mono 16-bit samples into temp buffer
-  GPlayer.FillBuffer(@GSAFTempBuffer[0], AFrameCount);
-
-  // Convert mono 16-bit to stereo float
-  for I := 0 to AFrameCount - 1 do
-  begin
-    // Convert 16-bit signed to float (-1.0 to 1.0)
-    Sample := GSAFTempBuffer[I] / 32768.0;
-    // Output stereo (same sample to both channels)
-    AOutput[I * 2] := Sample;      // Left
-    AOutput[I * 2 + 1] := Sample;  // Right
-  end;
+  // Generate mono 16-bit samples into temp buffer, then fan out to both
+  // channels through the shared adapter.
+  GPlayer.FillBuffer(@GMonoTempBuffer[0], AFrameCount);
+  MonoS16ToStereoFloat(@GMonoTempBuffer[0], AOutput, AFrameCount);
 end;
 
 // ============================================================================
@@ -294,7 +290,7 @@ begin
     Exit;
   end;
 
-  WriteLn('Audio (SAF): ', GSAFBackend.SampleRate, ' Hz, 2 ch (stereo), ',
+  WriteLn('Audio (SAF): ', GSAFBackend.SampleRate, ' Hz, 2 ch (mono SID source), ',
           GSAFBackend.BufferSize, ' samples');
 
   Result := True;
@@ -309,7 +305,7 @@ begin
   FillChar(Wanted, SizeOf(Wanted), 0);
   Wanted.freq := SAMPLE_RATE;
   Wanted.format := AUDIO_S16;
-  Wanted.channels := 1;
+  Wanted.channels := 2;   // same contract as the SAF backend; source stays mono
   Wanted.samples := GBufferSize;
   Wanted.callback := @AudioCallback;
   Wanted.userdata := nil;
@@ -321,8 +317,8 @@ begin
     Exit;
   end;
 
-  WriteLn('Audio (SDL2): ', Obtained.freq, ' Hz, ', Obtained.channels, ' ch (mono), ',
-          Obtained.samples, ' samples');
+  WriteLn('Audio (SDL2): ', Obtained.freq, ' Hz, ', Obtained.channels,
+          ' ch (mono SID source), ', Obtained.samples, ' samples');
 
   Result := True;
 end;

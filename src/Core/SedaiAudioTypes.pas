@@ -470,6 +470,24 @@ function DefaultADSR: TADSRParams;
 // Default time signature
 function DefaultTimeSignature: TTimeSignature;
 
+{ Mono -> interleaved stereo adapters.
+
+  A MOS 6581/8580 has a single audio output pin, so the C64-compatible path is
+  mono by nature, while the audio backend's callback contract is interleaved
+  stereo. These duplicate the mono stream across both channels once, in one
+  place, instead of leaving every host to hand-roll the same loop - which is
+  how the two paths of sng_player came to disagree about the channel count.
+
+  They are NOT a "the SID is mono" rule. TSedaiSIDEvo in EVO mode is a 64-voice
+  STEREO source with per-voice pan (GenerateStereoSample / ProcessAudioStereo,
+  SetVoicePan, SetStereoWidth) and its output must reach the device untouched.
+  Use these only where the source really is a single channel: the classic,
+  reSID-compatible path.
+
+  Allocation-free and safe to call from an audio callback. }
+procedure MonoS16ToStereoFloat(ASrc: PSmallInt; ADest: PSingle; AFrameCount: Integer);
+procedure MonoS16ToStereoS16(ASrc, ADest: PSmallInt; AFrameCount: Integer);
+
 implementation
 
 // ============================================================================
@@ -692,6 +710,40 @@ function DefaultTimeSignature: TTimeSignature;
 begin
   Result.Numerator := 4;
   Result.Denominator := 4;
+end;
+
+// ============================================================================
+// MONO -> INTERLEAVED STEREO ADAPTERS
+// ============================================================================
+
+procedure MonoS16ToStereoFloat(ASrc: PSmallInt; ADest: PSingle; AFrameCount: Integer);
+const
+  INV_32768 = 1.0 / 32768.0;
+var
+  I: Integer;
+  S: Single;
+begin
+  if (ASrc = nil) or (ADest = nil) then Exit;
+  for I := 0 to AFrameCount - 1 do
+  begin
+    S := ASrc[I] * INV_32768;
+    ADest[I * 2] := S;         // Left
+    ADest[I * 2 + 1] := S;     // Right
+  end;
+end;
+
+procedure MonoS16ToStereoS16(ASrc, ADest: PSmallInt; AFrameCount: Integer);
+var
+  I: Integer;
+  S: SmallInt;
+begin
+  if (ASrc = nil) or (ADest = nil) then Exit;
+  for I := 0 to AFrameCount - 1 do
+  begin
+    S := ASrc[I];
+    ADest[I * 2] := S;         // Left
+    ADest[I * 2 + 1] := S;     // Right
+  end;
 end;
 
 end.
