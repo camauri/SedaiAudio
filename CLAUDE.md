@@ -9,7 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **NEVER perform destructive git operations** on the working tree (`reset --hard`, `checkout --`, `restore`, `clean`). There are local, unpushed modifications.
 - **NEVER delete or move user files** without explicit authorization.
 - **Communicate in Italian**; keep code comments and documentation in English.
-- **Keep the repo root clean**: build scripts + `README.md`/`LICENSE`/`*.md` docs only. Scratch/test files go in `./tmp/`.
+- **Keep the repo root clean**: build scripts + `README.md`/`LICENSE`/`*.md` docs only.
+- **`job/` vs `tmp/`** (both gitignored, same convention as SedaiBasic2): `job/` is the local working area — `docs/` (design documents), `tools/` (harnesses and scripts: `saf/`, `evo/`, `resid/`), `samples/` (CC0 source recordings), `midi/`, `ir/`, `ref/` (reSID reference data). `tmp/` holds **output only, never input**, and must stay disposable: `rm -rf tmp/*` has to be safe to run at any moment. Anything that would hurt to lose belongs in `job/`.
 
 ## Build System
 

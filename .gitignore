@@ -49,7 +49,10 @@ TODO.md
 # Session resume file (local only, never pushed)
 NEXT_SESSION_PROMPT.md
 
-# Scratch / test render dir
+# Local working area (design docs, harnesses, source recordings, reference data)
+/job/
+
+# Scratch / test render dir - OUTPUT ONLY, safe to wipe at any time
 /tmp/
 
 # IDE/Editor directories
