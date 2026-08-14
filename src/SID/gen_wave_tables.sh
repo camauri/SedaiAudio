@@ -8,7 +8,7 @@
 # the same output layout (16 values per line).
 #
 # Usage:
-#   ./gen_wave_tables.sh                 # reads ../../temp/src/resid
+#   ./gen_wave_tables.sh                 # reads ../../job/GoatTracker/src/resid
 #   RESID_SRC=/path/to/resid ./gen_wave_tables.sh
 #
 # NOTE: this is a one-shot code generator, not part of the build. The generated
@@ -19,7 +19,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-BASE_PATH="${RESID_SRC:-$PROJECT_ROOT/temp/src/resid}"
+BASE_PATH="${RESID_SRC:-$PROJECT_ROOT/job/GoatTracker/src/resid}"
 OUT_PATH="$SCRIPT_DIR/SedaiSIDWaveTables.inc"
 
 if [[ ! -d "$BASE_PATH" ]]; then

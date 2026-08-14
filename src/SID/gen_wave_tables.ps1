@@ -1,7 +1,7 @@
 # Paths are relative to this script (src/SID/) so the repo can live anywhere.
 # Override with:  .\gen_wave_tables.ps1  after setting $env:RESID_SRC
 $projectRoot = (Get-Item (Join-Path $PSScriptRoot '..\..')).FullName
-$basePath = if ($env:RESID_SRC) { $env:RESID_SRC } else { Join-Path $projectRoot 'temp\src\resid' }
+$basePath = if ($env:RESID_SRC) { $env:RESID_SRC } else { Join-Path $projectRoot 'job/GoatTracker/src/resid' }
 $outPath = Join-Path $PSScriptRoot 'SedaiSIDWaveTables.inc'
 
 if (-not (Test-Path $basePath)) {
