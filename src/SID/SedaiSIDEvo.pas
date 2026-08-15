@@ -741,6 +741,7 @@ type
 
     // reSID-fp nonlinear "distortion" filter (ported from filterfp.cpp)
     function FP_KinkedDac(X: Integer; NL: Single; MaxBits: Integer): Single;
+    function FP_ExpF(X: Single): Single;       // glibc expf, ported (see impl.)
     function FP_FastExp(Val: Single): Single;  // reSID-fp Schraudolph fast exp
     procedure FP_InitParams;
     procedure FP_SetW0;
@@ -925,6 +926,7 @@ type
     function GetFilterW0(AFc: Integer): Integer;             // Current-model filter w0 table entry
     function GetOutput16Debug: Integer;                      // Current cycle 16-bit output (reSID output())
     function FastExpDebug(V: Single): Single;                // reSID-fp fastexp (test hook)
+    function ExpFDebug(V: Single): Single;                   // ported glibc expf (test hook)
 
     // ========================================================================
     // LFO API (EVO feature)
@@ -2994,16 +2996,12 @@ var
 begin
   FC := (FFilter.CutoffLo and $07) or ((FFilter.CutoffHi and $FF) shl 3);
   if FC > 2047 then FC := 2047;
-  // reSID-fp: `float type3_fc_kink` + expf(). Single throughout.
-  // CAVEAT: FPC has no native single-precision Exp, so this is Exp in Double
-  // rounded to Single. That agrees with glibc's expf on 2046 of the 2048
-  // possible fc values; fc = 322 and fc = 1443 land 1 ULP away because the true
-  // result sits astride a Single rounding boundary and glibc's expf rounds it
-  // the other way. Not fixable without reimplementing glibc's expf, and it is a
-  // libm difference rather than a modelling error.
+  // reSID-fp: `float type3_fc_kink` + expf(). Single throughout, and expf is
+  // OUR port of glibc's (FP_ExpF) rather than Exp-in-Double-then-round, which is
+  // a different function and disagreed at fc = 322 and fc = 1443.
   Kink := FP_KinkedDac(FC, FFP_voiceNonlin, 11);
   FFP_t3_kinkExp := FFP_t3_offset *
-                    Single(Exp(Single(Kink * FFP_t3_steepness * Single(FC_TO_OSC))));
+                    FP_ExpF(Single(Kink * FFP_t3_steepness * Single(FC_TO_OSC)));
 end;
 
 // set_Q (6581).
@@ -3015,6 +3013,91 @@ begin
   // reSID-fp: _1_div_Q = 1.f / (0.5f + res / 20.f), all single precision.
   FFP_1divQ := Single(1.0) / (Single(0.5) + Single(Res) / Single(20.0));
 end;
+
+// ============================================================================
+// SINGLE-PRECISION expf, ported from glibc (sysdeps/ieee754/flt-32/e_expf.c),
+// whose table and polynomial come from Arm Limited's optimized-routines
+// (exp2f_data.c, MIT). glibc is LGPL-2.1-or-later; both are compatible with
+// this project's GPL-3.0.
+//
+// WHY: reSID-fp calls the C library's expf() in set_w0. FPC has no native
+// single-precision Exp, and Exp-in-Double-then-round is NOT the same function:
+// glibc's expf carries about 0.502 ULP of its own approximation error, so where
+// the true result sits astride a Single rounding boundary the two land on
+// different floats. That happened at fc = 322 and fc = 1443.
+//
+// Porting it does not ADD a libm dependency, it REMOVES one: the result no
+// longer depends on whatever Exp the host RTL happens to provide, so Linux and
+// Windows now produce identical output by construction.
+//
+// Verified against this machine's glibc expf over EVERY float in [-14, 0] --
+// 1,096,810,497 values, zero differences. That interval covers set_w0's whole
+// reachable domain, which is about [-13.62, 0].
+// ============================================================================
+const
+  // tab[i] = uint64(2^(i/32)) - (i << 47)
+  FP_EXP2F_TAB: array[0..31] of QWord = (
+    QWord($3FF0000000000000), QWord($3FEFD9B0D3158574), QWord($3FEFB5586CF9890F),
+    QWord($3FEF9301D0125B51), QWord($3FEF72B83C7D517B), QWord($3FEF54873168B9AA),
+    QWord($3FEF387A6E756238), QWord($3FEF1E9DF51FDEE1), QWord($3FEF06FE0A31B715),
+    QWord($3FEEF1A7373AA9CB), QWord($3FEEDEA64C123422), QWord($3FEECE086061892D),
+    QWord($3FEEBFDAD5362A27), QWord($3FEEB42B569D4F82), QWord($3FEEAB07DD485429),
+    QWord($3FEEA47EB03A5585), QWord($3FEEA09E667F3BCD), QWord($3FEE9F75E8EC5F74),
+    QWord($3FEEA11473EB0187), QWord($3FEEA589994CCE13), QWord($3FEEACE5422AA0DB),
+    QWord($3FEEB737B0CDC5E5), QWord($3FEEC49182A3F090), QWord($3FEED503B23E255D),
+    QWord($3FEEE89F995AD3AD), QWord($3FEEFF76F2FB5E47), QWord($3FEF199BDD85529C),
+    QWord($3FEF3720DCEF9069), QWord($3FEF5818DCFBA487), QWord($3FEF7C97337B9B5F),
+    QWord($3FEFA4AFA2A490DA), QWord($3FEFD0765B6E4540));
+  // Pascal has no hex float literals, so the Double constants are given as their
+  // exact bit patterns rather than as decimals that would have to round-trip.
+  FP_EXPF_INVLN2N_BITS = QWord($40471547652B82FE);  // 0x1.71547652b82fep+0 * 32
+  FP_EXPF_SHIFT_BITS   = QWord($4338000000000000);  // 0x1.8p+52
+  FP_EXPF_C0_BITS      = QWord($3EBC6AF84B912394);  // poly[0] / 32^3
+  FP_EXPF_C1_BITS      = QWord($3F2EBFCE50FAC4F3);  // poly[1] / 32^2
+  FP_EXPF_C2_BITS      = QWord($3F962E42FF0C52D6);  // poly[2] / 32
+
+{$PUSH}{$Q-}{$R-}   // the table arithmetic below is deliberately wrapping
+function TSedaiSIDEvo.FP_ExpF(X: Single): Single;
+var
+  Conv: packed record case Byte of 0: (u: QWord); 1: (d: Double); end;
+  Ki, Tv: QWord;
+  Kd, Xd, Z, R, R2, Y, S: Double;
+  InvLn2N, Shift, C0, C1, C2: Double;
+begin
+  // |x| >= 88 takes glibc's overflow/underflow path. set_w0 cannot get there,
+  // so rather than duplicate that machinery just defer to the RTL.
+  if (X >= 88.0) or (X <= -88.0) or (X <> X) then
+  begin
+    Result := Exp(Double(X));
+    Exit;
+  end;
+
+  Conv.u := FP_EXPF_INVLN2N_BITS; InvLn2N := Conv.d;
+  Conv.u := FP_EXPF_SHIFT_BITS;   Shift   := Conv.d;
+  Conv.u := FP_EXPF_C0_BITS;      C0      := Conv.d;
+  Conv.u := FP_EXPF_C1_BITS;      C1      := Conv.d;
+  Conv.u := FP_EXPF_C2_BITS;      C2      := Conv.d;
+
+  Xd := X;
+  // x*N/ln2 = k + r with r in [-1/2, 1/2] and integer k
+  Z := InvLn2N * Xd;
+  // Round-to-nearest-even via the shift trick, then recover k from the bits.
+  Kd := Z + Shift;
+  Conv.d := Kd; Ki := Conv.u;
+  Kd := Kd - Shift;
+  R := Z - Kd;
+  // exp(x) = 2^(k/N) * 2^(r/N) ~= s * (C0*r^3 + C1*r^2 + C2*r + 1)
+  Tv := FP_EXP2F_TAB[Ki and 31];
+  Tv := Tv + (Ki shl 47);
+  Conv.u := Tv; S := Conv.d;
+  Z := C0 * R + C1;
+  R2 := R * R;
+  Y := C2 * R + 1.0;
+  Y := Z * R2 + Y;
+  Y := Y * S;
+  Result := Y;   // the single narrowing to Single, exactly as glibc's (float) y
+end;
+{$POP}
 
 // reSID-fp fast exp (Schraudolph bit-hack approximation, filterfp.h::fastexp).
 // reSID-fp uses this APPROXIMATE exp (not libc expf) in the per-sample type3_w0,
@@ -3985,6 +4068,11 @@ end;
 function TSedaiSIDEvo.GetOutput16Debug: Integer;
 begin
   Result := OutputSample16;  // reSID output(): extfilt output / 11, clamped 16-bit
+end;
+
+function TSedaiSIDEvo.ExpFDebug(V: Single): Single;
+begin
+  Result := FP_ExpF(V);
 end;
 
 function TSedaiSIDEvo.FastExpDebug(V: Single): Single;
