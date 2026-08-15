@@ -350,6 +350,13 @@ type
   end;
 
   // ============================================================================
+  // reSID-fp ANALOG WAVEFORM BITS
+  // The 12 DAC bit levels as continuous values in [0,1] (reSID-fp models the
+  // waveform DAC analogically instead of using reSID's measured ROM tables).
+  // ============================================================================
+  TFPWaveBits = array[0..11] of Single;
+
+  // ============================================================================
   // SID EXTERNAL FILTER STATE (ReSID-exact C64 output stage)
   // Low-pass:  R = 10kOhm, C = 1000pF; w0lp = 1/RC = 100000
   // High-pass: R =  1kOhm, C =   10uF; w0hp = 1/RC = 100
@@ -606,6 +613,34 @@ type
     FFP_waveDac: array[0..4095] of Single;
     FFP_envDac: array[0..255] of Single;
     FFP_voiceDC: Single;
+    // reSID-fp per-bit DAC weights (wavefp.cpp `dac[]`). The waveform DAC is the
+    // SUM of these weights in single precision, NOT one kinked_dac() call: the
+    // two are equal in real arithmetic but not in floating point.
+    FFP_bitDac: array[0..11] of Single;
+    FFP_waveZero: Single;
+    // reSID-fp analog waveform tables (wavefp.cpp `wftable[11][4096]`).
+    // reSID-fp does NOT use reSID's measured combined-waveform ROMs; it models
+    // the DAC bits analogically (wfconfig: bias/pulsestrength/topbit/distance/
+    // stmix). Index = waveform + variant, exactly as WaveformGeneratorFP::output.
+    FFP_wfTable: array[0..10] of array[0..4095] of Single;
+    FFP_wfReady: Boolean;
+    // Per-voice reSID-fp oscillator state. Kept SEPARATE from the classic
+    // SIDOsc state because reSID and reSID-fp genuinely disagree on noise:
+    // different initial LFSR ($7ffffc vs $7ffff8) and different test-bit
+    // handling. Sharing one shift register would make one of the two models
+    // wrong, so the distortion path keeps its own and the classic path is
+    // left byte-identical.
+    // reSID-fp deliberately runs the analog section at HALF rate: the filter and
+    // the external filter are clocked every second cycle, on the average of the
+    // current and previous voice samples (sidfp.cpp::clock, "the analog parts
+    // are relatively expensive"). Clocking them every cycle, as the classic path
+    // does, is audibly close but not the same filter.
+    FFP_lastSample: array[0..2] of Single;
+    FFP_cycleGate: Byte;
+    FFP_prev: array[0..2] of Byte;          // held OSC3 value (`previous`)
+    FFP_prevDac: array[0..2] of Single;     // held DAC output (`previous_dac`)
+    FFP_shift: array[0..2] of Cardinal;     // reSID-fp noise LFSR
+    FFP_noiseDelay: array[0..2] of Integer; // `noise_overwrite_delay`
 
     // ReSID-exact bus value and external input
     FBusValue: Byte;              // Last value written to any SID register
@@ -705,7 +740,7 @@ type
     function OutputSample16: Integer; inline;
 
     // reSID-fp nonlinear "distortion" filter (ported from filterfp.cpp)
-    function FP_KinkedDac(X: Integer; NL: Double; MaxBits: Integer): Double;
+    function FP_KinkedDac(X: Integer; NL: Single; MaxBits: Integer): Single;
     function FP_FastExp(Val: Single): Single;  // reSID-fp Schraudolph fast exp
     procedure FP_InitParams;
     procedure FP_SetW0;
@@ -716,6 +751,16 @@ type
     function FP_GetVoiceOutput(AIndex: Integer): Single;
     procedure FP_ClockFilter(V1, V2, V3, Ext: Single);
     procedure FP_ClockExtFilter(Vi: Single);
+    // reSID-fp analog waveform generator (ported from wavefp.cpp/wavefp.h)
+    procedure FP_CalcWaveformSample(AWave: Integer; AAcc: Cardinal; APw: Integer;
+                                    out O: TFPWaveBits);
+    function FP_MakeSample(const O: TFPWaveBits): Single;
+    procedure FP_RebuildWfTable;
+    function FP_WaveOutput(AIndex: Integer): Single;
+    function FP_ReadOSC(AIndex: Integer): Byte;
+    procedure FP_ClockNoise(AIndex: Integer; ADoClock: Boolean);
+    procedure FP_WriteControl(AIndex: Integer; AValue: Byte);
+    procedure FP_ResetVoice(AIndex: Integer);
     function GenerateSampleFast: Single;
     function GenerateSampleInterpolated: Single;
     function GenerateSampleResampled: Single;
@@ -1390,6 +1435,9 @@ begin
     SIDOsc.PreviousSyncMSB := False;
     SIDOsc.TestBit := False;
 
+    // reSID-fp oscillator mirror (distortion path only; different LFSR seed)
+    FP_ResetVoice(AIndex);
+
     // SID envelope state (ReSID-style)
     SIDEnv.State := sesRelease;  // ReSID starts in RELEASE, not frozen
     SIDEnv.EnvelopeCounter := 0;
@@ -1570,24 +1618,31 @@ begin
                 SetEnvelopeGate(Voice, False);
               end;
 
-              // Test bit (ReSID-exact behavior)
-              if (AValue and SID_CTRL_TEST) <> 0 then
-              begin
-                // Test bit set: accumulator and shift register are cleared
-                FState.Voices[Voice].SIDOsc.Accumulator := 0;
-                FState.Voices[Voice].SIDOsc.ShiftRegister := 0;
-                FState.Voices[Voice].SIDOsc.TestBit := True;
-              end
-              else if (FState.Voices[Voice].Control and SID_CTRL_TEST) <> 0 then
-              begin
-                // Test bit cleared: shift register is reset to 0x7ffff8
-                FState.Voices[Voice].SIDOsc.ShiftRegister := $7FFFF8;
-                FState.Voices[Voice].SIDOsc.TestBit := False;
-              end
+              // Test bit. reSID and reSID-fp genuinely disagree here (different LFSR
+              // seed and different test-bit rules), so the distortion path owns the
+              // whole control-register write. See FP_WriteControl.
+              if FFilterModel = sfmDistortion then
+                FP_WriteControl(Voice, AValue)
               else
-                FState.Voices[Voice].SIDOsc.TestBit := False;
+              begin
+                if (AValue and SID_CTRL_TEST) <> 0 then
+                begin
+                  // Test bit set: accumulator and shift register are cleared
+                  FState.Voices[Voice].SIDOsc.Accumulator := 0;
+                  FState.Voices[Voice].SIDOsc.ShiftRegister := 0;
+                  FState.Voices[Voice].SIDOsc.TestBit := True;
+                end
+                else if (FState.Voices[Voice].Control and SID_CTRL_TEST) <> 0 then
+                begin
+                  // Test bit cleared: shift register is reset to 0x7ffff8
+                  FState.Voices[Voice].SIDOsc.ShiftRegister := $7FFFF8;
+                  FState.Voices[Voice].SIDOsc.TestBit := False;
+                end
+                else
+                  FState.Voices[Voice].SIDOsc.TestBit := False;
 
-              FState.Voices[Voice].Control := AValue;
+                FState.Voices[Voice].Control := AValue;
+              end;
             end;
           $05:
             begin
@@ -1630,22 +1685,29 @@ begin
                       ((FState.Voices[Voice].Control and SID_CTRL_GATE) <> 0) then
                 SetEnvelopeGate(Voice, False);
 
-              // Test bit (ReSID-exact behavior)
-              if (AValue and SID_CTRL_TEST) <> 0 then
-              begin
-                FState.Voices[Voice].SIDOsc.Accumulator := 0;
-                FState.Voices[Voice].SIDOsc.ShiftRegister := 0;
-                FState.Voices[Voice].SIDOsc.TestBit := True;
-              end
-              else if (FState.Voices[Voice].Control and SID_CTRL_TEST) <> 0 then
-              begin
-                FState.Voices[Voice].SIDOsc.ShiftRegister := $7FFFF8;
-                FState.Voices[Voice].SIDOsc.TestBit := False;
-              end
+              // Test bit. reSID and reSID-fp genuinely disagree here (different LFSR
+              // seed and different test-bit rules), so the distortion path owns the
+              // whole control-register write. See FP_WriteControl.
+              if FFilterModel = sfmDistortion then
+                FP_WriteControl(Voice, AValue)
               else
-                FState.Voices[Voice].SIDOsc.TestBit := False;
+              begin
+                if (AValue and SID_CTRL_TEST) <> 0 then
+                begin
+                  FState.Voices[Voice].SIDOsc.Accumulator := 0;
+                  FState.Voices[Voice].SIDOsc.ShiftRegister := 0;
+                  FState.Voices[Voice].SIDOsc.TestBit := True;
+                end
+                else if (FState.Voices[Voice].Control and SID_CTRL_TEST) <> 0 then
+                begin
+                  FState.Voices[Voice].SIDOsc.ShiftRegister := $7FFFF8;
+                  FState.Voices[Voice].SIDOsc.TestBit := False;
+                end
+                else
+                  FState.Voices[Voice].SIDOsc.TestBit := False;
 
-              FState.Voices[Voice].Control := AValue;
+                FState.Voices[Voice].Control := AValue;
+              end;
             end;
           $0C:
             begin
@@ -1688,22 +1750,29 @@ begin
                       ((FState.Voices[Voice].Control and SID_CTRL_GATE) <> 0) then
                 SetEnvelopeGate(Voice, False);
 
-              // Test bit (ReSID-exact behavior)
-              if (AValue and SID_CTRL_TEST) <> 0 then
-              begin
-                FState.Voices[Voice].SIDOsc.Accumulator := 0;
-                FState.Voices[Voice].SIDOsc.ShiftRegister := 0;
-                FState.Voices[Voice].SIDOsc.TestBit := True;
-              end
-              else if (FState.Voices[Voice].Control and SID_CTRL_TEST) <> 0 then
-              begin
-                FState.Voices[Voice].SIDOsc.ShiftRegister := $7FFFF8;
-                FState.Voices[Voice].SIDOsc.TestBit := False;
-              end
+              // Test bit. reSID and reSID-fp genuinely disagree here (different LFSR
+              // seed and different test-bit rules), so the distortion path owns the
+              // whole control-register write. See FP_WriteControl.
+              if FFilterModel = sfmDistortion then
+                FP_WriteControl(Voice, AValue)
               else
-                FState.Voices[Voice].SIDOsc.TestBit := False;
+              begin
+                if (AValue and SID_CTRL_TEST) <> 0 then
+                begin
+                  FState.Voices[Voice].SIDOsc.Accumulator := 0;
+                  FState.Voices[Voice].SIDOsc.ShiftRegister := 0;
+                  FState.Voices[Voice].SIDOsc.TestBit := True;
+                end
+                else if (FState.Voices[Voice].Control and SID_CTRL_TEST) <> 0 then
+                begin
+                  FState.Voices[Voice].SIDOsc.ShiftRegister := $7FFFF8;
+                  FState.Voices[Voice].SIDOsc.TestBit := False;
+                end
+                else
+                  FState.Voices[Voice].SIDOsc.TestBit := False;
 
-              FState.Voices[Voice].Control := AValue;
+                FState.Voices[Voice].Control := AValue;
+              end;
             end;
           $13:
             begin
@@ -1760,7 +1829,12 @@ begin
     $1A: Result := 0;  // Potentiometer Y (not emulated)
     // ReSID-exact: wave.readOSC() returns output() >> 4
     // This is the 12-bit waveform output shifted right 4 bits to get 8 bits
-    $1B: Result := GetWaveformOutput12(2) shr 4;  // Voice 3 osc
+    // Voice 3 osc. reSID-fp derives OSC3 from its analog bit state, so the
+    // distortion path must read it back the same way.
+    $1B: if FFilterModel = sfmDistortion then
+           Result := FP_ReadOSC(2)
+         else
+           Result := GetWaveformOutput12(2) shr 4;
     $1C: Result := FState.Voices[2].SIDEnv.EnvelopeCounter;  // Voice 3 envelope
   else
     // ReSID-exact: write-only registers return bus_value
@@ -1784,7 +1858,22 @@ begin
   with FState.Voices[AIndex] do
   begin
     // No operation if test bit is set (ReSID-exact)
-    if SIDOsc.TestBit then Exit;
+    if SIDOsc.TestBit then
+    begin
+      // reSID-fp additionally emulates the analog fade of the noise register
+      // while the test bit is held (wavefp.h::clock).
+      if (FFilterModel = sfmDistortion) and (AIndex <= 2) and
+         (FFP_noiseDelay[AIndex] <> 0) then
+      begin
+        Dec(FFP_noiseDelay[AIndex]);
+        if FFP_noiseDelay[AIndex] = 0 then
+        begin
+          FFP_shift[AIndex] := FFP_shift[AIndex] or $7FFFFC;
+          FP_ClockNoise(AIndex, False);
+        end;
+      end;
+      Exit;
+    end;
 
     // Save previous accumulator
     PrevAccum := SIDOsc.Accumulator;
@@ -1806,7 +1895,13 @@ begin
     Bit19Prev := (PrevAccum and $080000) <> 0;
     Bit19Now := (SIDOsc.Accumulator and $080000) <> 0;
     if (not Bit19Prev) and Bit19Now then
+    begin
       ShiftNoiseRegister(AIndex);
+      // The distortion path keeps its own LFSR (different seed and different
+      // test-bit rules) and latches the noise DAC value on every shift.
+      if (FFilterModel = sfmDistortion) and (AIndex <= 2) then
+        FP_ClockNoise(AIndex, True);
+    end;
   end;
 end;
 
@@ -2438,6 +2533,7 @@ procedure TSedaiSIDEvo.ClockCycle;
 var
   I: Integer;
   Voice1, Voice2, Voice3: Integer;
+  FPVoice1, FPVoice2, FPVoice3: Single;
 begin
   // ReSID-exact: age bus value (TTL decrements each cycle)
   // Pre-decrement, then check (ReSID: if (--bus_value_ttl <= 0))
@@ -2472,10 +2568,23 @@ begin
   // 4-6. Voice outputs + filter + external output filter, branched on model.
   if FFilterModel = sfmDistortion then
   begin
-    // reSID-fp nonlinear path: float voices with DAC nonlinearity (kinked DAC).
-    FP_ClockFilter(FP_GetVoiceOutput(0), FP_GetVoiceOutput(1),
-                   FP_GetVoiceOutput(2), FExtIn);
-    FP_ClockExtFilter(FFP_Vf);
+    // reSID-fp nonlinear path (sidfp.cpp::clock). The voices run at full rate,
+    // but the analog section is clocked every SECOND cycle on the average of
+    // this sample and the last one -- a deliberate 2x decimation in reSID-fp.
+    FPVoice1 := FP_GetVoiceOutput(0);
+    FPVoice2 := FP_GetVoiceOutput(1);
+    FPVoice3 := FP_GetVoiceOutput(2);
+    if (FFP_cycleGate and 1) <> 0 then
+    begin
+      FP_ClockFilter((FFP_lastSample[0] + FPVoice1) * Single(0.5),
+                     (FFP_lastSample[1] + FPVoice2) * Single(0.5),
+                     (FFP_lastSample[2] + FPVoice3) * Single(0.5), FExtIn);
+      FP_ClockExtFilter(FFP_Vf);
+    end;
+    Inc(FFP_cycleGate);
+    FFP_lastSample[0] := FPVoice1;
+    FFP_lastSample[1] := FPVoice2;
+    FFP_lastSample[2] := FPVoice3;
   end
   else
   begin
@@ -2556,9 +2665,22 @@ const
   // reSID: extfilt.output() / ((4095*255 >> 7)*3*15*2 / 2^16) = / 11
   DIVISOR = (((4095 * 255) shr 7) * 3 * 15 * 2) div (1 shl 16);
   HALF = 1 shl 15;
+var
+  V: Single;
 begin
   if FFilterModel = sfmDistortion then
-    Result := Round(FFP_out * 32768.0)
+  begin
+    // reSID-fp is sampled as lroundf(output() * 32768.f): the scaling happens in
+    // SINGLE precision, and lroundf breaks ties AWAY FROM ZERO. Pascal's Round
+    // is banker's rounding (half to even) on a Double, which lands 1 LSB off on
+    // roughly one sample in 7000. Widening to Double before adding the half
+    // makes that addition exact, so this is exactly lroundf's result.
+    V := FFP_out * Single(32768.0);
+    if V >= 0 then
+      Result := Trunc(Double(V) + 0.5)
+    else
+      Result := Trunc(Double(V) - 0.5);
+  end
   else
     Result := ExternalFilterOutput div DIVISOR;
   if Result >= HALF then Result := HALF - 1
@@ -2793,19 +2915,23 @@ end;
 // ============================================================================
 
 // DAC nonlinearity model (SIDFP::kinked_dac).
-function TSedaiSIDEvo.FP_KinkedDac(X: Integer; NL: Double; MaxBits: Integer): Double;
+// reSID-fp SIDFP::kinked_dac (sidfp.cpp). SINGLE precision throughout: the
+// original is float, and the 11-12 step accumulation below diverges visibly if
+// it is carried out in Double and only rounded at the end.
+function TSedaiSIDEvo.FP_KinkedDac(X: Integer; NL: Single; MaxBits: Integer): Single;
 var
-  Value, Weight, Dir: Double;
+  Value, Weight, Dir: Single;
   Bit, I: Integer;
 begin
-  Value := 0.0; Bit := 1; Weight := 1.0; Dir := 2.0 * NL;
+  Value := 0.0; Bit := 1; Weight := 1.0;
+  Dir := Single(2.0) * NL;
   for I := 0 to MaxBits - 1 do
   begin
     if (X and Bit) <> 0 then Value := Value + Weight;
     Bit := Bit shl 1;
     Weight := Weight * Dir;
   end;
-  Result := Value / (Weight / NL / NL) * (1 shl MaxBits);
+  Result := Value / (Weight / NL / NL) * Single(1 shl MaxBits);
 end;
 
 // Set GoatTracker's 6581 reSID-fp parameters and clock-derived helpers.
@@ -2815,30 +2941,43 @@ const
   PASS_FREQ = 15915.6;
   FC_TO_OSC = 512.0;
 var
-  ClockFreq: Double;
+  ClockFreq: Single;
 begin
+  // reSID-fp keeps every one of these in float. Each expression below is
+  // therefore evaluated as a chain of SINGLE-typed steps, in the same order as
+  // the C++, so the rounding after every operation matches. Folding them in
+  // Double and rounding once at the end gives different constants.
+  // HALF the SID clock: reSID-fp's set_sampling_parameters hands the filter and
+  // the external filter `clock_freq * 0.5`, because the analog section is only
+  // clocked every second cycle (see ClockCycle). Every coefficient derived from
+  // the clock below therefore uses the halved rate.
   ClockFreq := FState.ClockFrequency;
   if ClockFreq <= 0 then ClockFreq := SID_CLOCK_PAL;
+  ClockFreq := Single(Double(ClockFreq) * 0.5);
 
   // GoatTracker FILTERPARAMS (6581) from gsid.cpp.
-  FFP_attenuation  := 0.50;
-  FFP_distNonlin   := 3.3e6;
-  FFP_intermixLeaks := 1.0e-4;
-  FFP_t3_baseR     := 1147036.4394268463;
-  FFP_t3_offset    := 274228796.97550374;
-  // type3_steepness = -ln(s)/FC_TO_OSC  (s = 1.0066634233403395)
-  FFP_t3_steepness := -Ln(1.0066634233403395) / FC_TO_OSC;
-  FFP_t3_minfetR   := 16125.154840564108;
-  FFP_voiceNonlin  := 0.9613160610660189;
+  FFP_attenuation  := Single(0.5);
+  FFP_distNonlin   := Single(3.3e6);
+  FFP_intermixLeaks := Single(1.0e-4);
+  FFP_t3_baseR     := Single(1147036.4394268463);
+  FFP_t3_offset    := Single(274228796.97550374);
+  // set_type3_properties: type3_steepness = -logf(s)/FC_TO_OSC. NOTE `s` arrives
+  // as a FLOAT parameter, so it is rounded to Single BEFORE the log. Taking the
+  // log of the full-precision literal instead is off by ~39 ULP, because
+  // ln(1+x) with x ~ 0.0066 amplifies the input's relative error about 150x.
+  FFP_t3_steepness := Single(-Ln(Single(1.0066634233403395)) / Single(FC_TO_OSC));
+  FFP_t3_minfetR   := Single(16125.154840564108);
+  FFP_voiceNonlin  := Single(0.9613160610660189);
 
   // dist_CT = 1 / (caps * clock)
-  FFP_distCT := 1.0 / (SIDCAPS_6581 * ClockFreq);
+  FFP_distCT := Single(1.0) / (Single(SIDCAPS_6581) * ClockFreq);
 
-  // External output filter coefficients.
-  FFP_extW0hp := 100.0 / ClockFreq;
-  FFP_extW0lp := PASS_FREQ * 2.0 * PI / ClockFreq;
+  // External output filter coefficients (extfiltfp.cpp::set_clock_frequency),
+  // evaluated left to right in Single exactly as the C++ does.
+  FFP_extW0hp := Single(100.0) / ClockFreq;
+  FFP_extW0lp := Single(Single(Single(PASS_FREQ) * Single(2.0)) * Single(PI)) / ClockFreq;
 
-  FFP_volf := (FFilter.ModeVol and $0F) / 15.0;
+  FFP_volf := Single(FFilter.ModeVol and $0F) / Single(15.0);
 
   FP_SetW0;
   FP_SetQ;
@@ -2851,12 +2990,20 @@ const
   FC_TO_OSC = 512.0;
 var
   FC: Integer;
-  Kink: Double;
+  Kink: Single;
 begin
   FC := (FFilter.CutoffLo and $07) or ((FFilter.CutoffHi and $FF) shl 3);
   if FC > 2047 then FC := 2047;
+  // reSID-fp: `float type3_fc_kink` + expf(). Single throughout.
+  // CAVEAT: FPC has no native single-precision Exp, so this is Exp in Double
+  // rounded to Single. That agrees with glibc's expf on 2046 of the 2048
+  // possible fc values; fc = 322 and fc = 1443 land 1 ULP away because the true
+  // result sits astride a Single rounding boundary and glibc's expf rounds it
+  // the other way. Not fixable without reimplementing glibc's expf, and it is a
+  // libm difference rather than a modelling error.
   Kink := FP_KinkedDac(FC, FFP_voiceNonlin, 11);
-  FFP_t3_kinkExp := FFP_t3_offset * Exp(Kink * FFP_t3_steepness * FC_TO_OSC);
+  FFP_t3_kinkExp := FFP_t3_offset *
+                    Single(Exp(Single(Kink * FFP_t3_steepness * Single(FC_TO_OSC))));
 end;
 
 // set_Q (6581).
@@ -2865,7 +3012,8 @@ var
   Res: Integer;
 begin
   Res := (FFilter.ResFilt shr 4) and $0F;
-  FFP_1divQ := 1.0 / (0.5 + Res / 20.0);
+  // reSID-fp: _1_div_Q = 1.f / (0.5f + res / 20.f), all single precision.
+  FFP_1divQ := Single(1.0) / (Single(0.5) + Single(Res) / Single(20.0));
 end;
 
 // reSID-fp fast exp (Schraudolph bit-hack approximation, filterfp.h::fastexp).
@@ -2919,36 +3067,414 @@ end;
 // waveform and the 8-bit envelope). wave_zero/voice_DC are chip-model dependent.
 procedure TSedaiSIDEvo.FP_BuildDacTables;
 var
-  I: Integer;
-  WaveZero: Double;
+  I, V: Integer;
+  Acc: Single;
 begin
   if FModel = smMOS6581 then
   begin
-    WaveZero := -$380;
-    FFP_voiceDC := $800 * $FF;
+    FFP_waveZero := Single(-$380);
+    FFP_voiceDC := Single($800 * $FF);
   end
   else
   begin
-    WaveZero := -$800;
+    FFP_waveZero := Single(-$800);
     FFP_voiceDC := 0;
   end;
-  for I := 0 to 4095 do
-    FFP_waveDac[I] := FP_KinkedDac(I, FFP_voiceNonlin, 12) + WaveZero;
+
+  // reSID-fp WaveformGeneratorFP::set_nonlinearity: one DAC weight PER BIT.
+  for I := 0 to 11 do
+    FFP_bitDac[I] := FP_KinkedDac(1 shl I, FFP_voiceNonlin, 12);
+
+  // The plain 12-bit waveform DAC is make_sample() over those weights, i.e. a
+  // single-precision SUM, not one kinked_dac(value) call. Mathematically the
+  // same, bit-for-bit not. Kept as a table for the non-analog fallback path.
+  for V := 0 to 4095 do
+  begin
+    Acc := 0.0;
+    for I := 0 to 11 do
+      if ((V shr I) and 1) <> 0 then Acc := Acc + FFP_bitDac[I];
+    FFP_waveDac[V] := Acc + FFP_waveZero;
+  end;
+
+  // The envelope DAC IS one kinked_dac() call per value (envelopefp.cpp).
   for I := 0 to 255 do
     FFP_envDac[I] := FP_KinkedDac(I, FFP_voiceNonlin, 8);
+
+  FP_RebuildWfTable;
+end;
+
+// ============================================================================
+// reSID-fp ANALOG WAVEFORM GENERATOR (ported from wavefp.cpp / wavefp.h)
+//
+// reSID-fp does NOT reuse reSID's measured combined-waveform ROM tables. It
+// models the 12 DAC bits as continuous levels and lets neighbouring bits bleed
+// into each other (Antti Lankila's model, fitted to kevtris' chip samples).
+// For the PURE waveforms the model collapses back to the plain binary DAC --
+// the non-combined config row is (bias 0.5, pulsestrength 0, topbit 1, distance
+// 0, stmix 0), so the bias stage maps 0 -> 0 and 1 -> 1 exactly -- which is why
+// triangle/sawtooth/pulse already agreed. Only waveforms 3, 5, 6 and 7 differ.
+// ============================================================================
+
+const
+  // wfconfig[2][5] from wavefp.cpp: [model][waveform class]
+  //   [0] = 6581 (kevtris chip G), [1] = 8580 (kevtris chip V)
+  //   class 0..3 = waveform 3, 5, 6, 7 (the combined ones), class 4 = the rest
+  // Fields: 0 bias, 1 pulsestrength, 2 topbit, 3 distance, 4 stmix
+  FP_WFCONFIG: array[0..1, 0..4, 0..4] of Single = (
+    ((0.880815,  0.0,      0.0,       0.3279614,  0.5999545),
+     (0.8924618, 2.014781, 1.003332,  0.02992322, 0.0),
+     (0.8646501, 1.712586, 1.137704,  0.02845423, 0.0),
+     (0.9527834, 1.794777, 0.0,       0.09806272, 0.7752482),
+     (0.5,       0.0,      1.0,       0.0,        0.0)),
+    ((0.9781665, 0.0,      0.9899469, 8.087667,   0.8226412),
+     (0.9097769, 2.039997, 0.9584096, 0.1765447,  0.0),
+     (0.9231212, 2.084788, 0.9493895, 0.1712518,  0.0),
+     (0.9845552, 1.415612, 0.9703883, 3.68829,    0.8265008),
+     (0.5,       0.0,      1.0,       0.0,        0.0)));
+  FP_SHARPNESS: Single = 512.0;
+
+// wavefp.cpp::calculate_waveform_sample. Pure function of (waveform, phase
+// accumulator, pulse width) so it can also drive the table build.
+procedure TSedaiSIDEvo.FP_CalcWaveformSample(AWave: Integer; AAcc: Cardinal;
+  APw: Integer; out O: TFPWaveBits);
+var
+  I, J, CfgIdx, ModelIdx: Integer;
+  Bias, PulseStrength, TopBit, Distance, StMix: Single;
+  DistTable: array[0..24] of Single;
+  Pulse, Avg, N, Weight: Single;
+  Tmp: TFPWaveBits;
+
+  procedure Populate(AValue: Cardinal);
+  var
+    K: Integer;
+    Mask: Cardinal;
+  begin
+    Mask := 1;
+    for K := 0 to 11 do
+    begin
+      if (AValue and Mask) <> 0 then O[K] := 1.0 else O[K] := 0.0;
+      Mask := Mask shl 1;
+    end;
+  end;
+
+begin
+  // P: pure pulse returns immediately, before the bias stage.
+  if AWave = 4 then
+  begin
+    if (AAcc shr 12) >= Cardinal(APw) then Populate($FFF) else Populate($000);
+    Exit;
+  end;
+
+  if FModel = smMOS6581 then ModelIdx := 0 else ModelIdx := 1;
+  case AWave of
+    3: CfgIdx := 0;
+    5: CfgIdx := 1;
+    6: CfgIdx := 2;
+    7: CfgIdx := 3;
+  else
+    CfgIdx := 4;
+  end;
+  Bias          := FP_WFCONFIG[ModelIdx, CfgIdx, 0];
+  PulseStrength := FP_WFCONFIG[ModelIdx, CfgIdx, 1];
+  TopBit        := FP_WFCONFIG[ModelIdx, CfgIdx, 2];
+  Distance      := FP_WFCONFIG[ModelIdx, CfgIdx, 3];
+  StMix         := FP_WFCONFIG[ModelIdx, CfgIdx, 4];
+
+  // S with strong top bit for 6581
+  Populate(AAcc shr 12);
+
+  // convert to T
+  if (AWave and 3) = 1 then
+  begin
+    if (AAcc and $800000) <> 0 then
+      for I := 11 downto 1 do O[I] := Single(1.0) - O[I - 1]
+    else
+      for I := 11 downto 1 do O[I] := O[I - 1];
+    O[0] := 0.0;
+  end;
+
+  // convert to ST (bottom bit is grounded via the T waveform selector)
+  if (AWave and 3) = 3 then
+  begin
+    O[0] := O[0] * StMix;
+    for I := 1 to 11 do
+      O[I] := O[I - 1] * (Single(1.0) - StMix) + O[I] * StMix;
+  end;
+  O[11] := O[11] * TopBit;
+
+  // ST or P* waveform: let neighbouring bits bleed into each other
+  if (AWave = 3) or (AWave > 4) then
+  begin
+    for I := 0 to 12 do
+    begin
+      DistTable[12 + I] := Single(1.0) / (Single(1.0) + Single(I * I) * Distance);
+      DistTable[12 - I] := DistTable[12 + I];
+    end;
+
+    if (AAcc shr 12) >= Cardinal(APw) then Pulse := 1.0 else Pulse := -1.0;
+    Pulse := Pulse * PulseStrength;
+
+    for I := 0 to 11 do
+    begin
+      Avg := 0.0;
+      N := 0.0;
+      for J := 0 to 11 do
+      begin
+        Weight := DistTable[I - J + 12];
+        Avg := Avg + O[J] * Weight;
+        N := N + Weight;
+      end;
+      // pulse control bit
+      if AWave > 4 then
+      begin
+        Weight := DistTable[I - 12 + 12];
+        Avg := Avg + Pulse * Weight;
+        N := N + Weight;
+      end;
+      Tmp[I] := (O[I] + Avg / N) * Single(0.5);
+    end;
+
+    for I := 0 to 11 do O[I] := Tmp[I];
+  end;
+
+  // Use the environment around the bias value to set/clear the DAC bit. The
+  // relationship is deliberately nonlinear (it sounded better to Lankila).
+  for I := 0 to 11 do
+  begin
+    O[I] := (O[I] - Bias) * FP_SHARPNESS;
+    O[I] := O[I] + Single(0.5);
+    if O[I] > Single(1.0) then O[I] := 1.0;
+    if O[I] < Single(0.0) then O[I] := 0.0;
+  end;
+end;
+
+// wavefp.cpp::make_sample -- render the analog bit state through the DAC.
+function TSedaiSIDEvo.FP_MakeSample(const O: TFPWaveBits): Single;
+var
+  I: Integer;
+begin
+  Result := 0.0;
+  for I := 0 to 11 do
+    Result := Result + O[I] * FFP_bitDac[I];
+end;
+
+// wavefp.cpp::rebuild_wftable -- 11 tables of 4096 entries: waveforms 1..7 with
+// the pulse low, then the four pulse-high variants of waveforms 4..7.
+procedure TSedaiSIDEvo.FP_RebuildWfTable;
+var
+  Wf, Phase: Integer;
+  Acc: Cardinal;
+  O: TFPWaveBits;
+begin
+  for Wf := 1 to 7 do
+    for Phase := 0 to 4095 do
+    begin
+      Acc := Cardinal(Phase) shl 12;
+      // pulse always low (pw above the maximum phase)
+      FP_CalcWaveformSample(Wf, Acc, $1000, O);
+      FFP_wfTable[Wf - 1][Phase] := FP_MakeSample(O) + FFP_waveZero;
+      if Wf >= 4 then
+      begin
+        // pulse always high
+        FP_CalcWaveformSample(Wf, Acc, $000, O);
+        FFP_wfTable[Wf + 3][Phase] := FP_MakeSample(O) + FFP_waveZero;
+      end;
+    end;
+  FFP_wfReady := True;
+end;
+
+// wavefp.h::WaveformGeneratorFP::output
+function TSedaiSIDEvo.FP_WaveOutput(AIndex: Integer): Single;
+var
+  Wf, Vari, PW, SyncSrc: Integer;
+  Phase: Cardinal;
+begin
+  Wf := (FState.Voices[AIndex].Control shr 4) and $0F;
+  // Waveform 0 and the noise waveforms hold the last DAC value. reSID returns 0
+  // for waveform 0 instead; this hold is one of the two structural differences
+  // between the two emulations.
+  if (Wf = 0) or (Wf > 7) then
+  begin
+    Result := FFP_prevDac[AIndex];
+    Exit;
+  end;
+
+  Phase := FState.Voices[AIndex].SIDOsc.Accumulator shr 12;
+  PW := FState.Voices[AIndex].PWLo or ((FState.Voices[AIndex].PWHi and $0F) shl 8);
+
+  // The pulse on/off state selects between the low and high table variants.
+  if (Wf >= 4) and (FState.Voices[AIndex].SIDOsc.TestBit or (Phase >= Cardinal(PW))) then
+    Vari := 3
+  else
+    Vari := -1;
+
+  // Ring modulation: the table already contains a triangle, so flipping the top
+  // phase bit is enough to reproduce the original SID ringmod.
+  SyncSrc := (AIndex + 2) mod 3;
+  if ((Wf and 3) = 1) and
+     ((FState.Voices[AIndex].Control and SID_CTRL_RINGMOD) <> 0) and
+     ((FState.Voices[SyncSrc].SIDOsc.Accumulator and $800000) <> 0) then
+    Phase := Phase xor $800;
+
+  Result := FFP_wfTable[Wf + Vari][Phase and $FFF];
+end;
+
+// wavefp.cpp::readOSC -- OSC3 readback from the analog bit state.
+function TSedaiSIDEvo.FP_ReadOSC(AIndex: Integer): Byte;
+var
+  O: TFPWaveBits;
+  Wf, PW, I, SyncSrc: Integer;
+  Acc: Cardinal;
+  Bit: Byte;
+begin
+  Wf := (FState.Voices[AIndex].Control shr 4) and $0F;
+  if (Wf = 0) or (Wf > 7) then
+  begin
+    Result := FFP_prev[AIndex];
+    Exit;
+  end;
+
+  // Include the effects of the test bit and ring modulation.
+  PW := FState.Voices[AIndex].PWLo or ((FState.Voices[AIndex].PWHi and $0F) shl 8);
+  if FState.Voices[AIndex].SIDOsc.TestBit then PW := 0;
+  Acc := FState.Voices[AIndex].SIDOsc.Accumulator;
+  SyncSrc := (AIndex + 2) mod 3;
+  if ((Wf and 3) = 1) and
+     ((FState.Voices[AIndex].Control and SID_CTRL_RINGMOD) <> 0) and
+     ((FState.Voices[SyncSrc].SIDOsc.Accumulator and $800000) <> 0) then
+    Acc := Acc xor $800000;
+
+  FP_CalcWaveformSample(Wf, Acc, PW, O);
+
+  Result := 0;
+  Bit := 1;
+  for I := 4 to 11 do
+  begin
+    if O[I] > Single(0.5) then Result := Result or Bit;
+    Bit := Bit shl 1;
+  end;
+end;
+
+// wavefp.cpp::clock_noise -- advance the LFSR and latch the noise DAC value.
+procedure TSedaiSIDEvo.FP_ClockNoise(AIndex: Integer; ADoClock: Boolean);
+var
+  Bit0, SR: Cardinal;
+  Wf, I: Integer;
+  NoiseOut: Cardinal;
+  Acc: Single;
+begin
+  if (AIndex < 0) or (AIndex > 2) then Exit;
+
+  if ADoClock then
+  begin
+    SR := FFP_shift[AIndex];
+    Bit0 := ((SR shr 22) xor (SR shr 17)) and 1;
+    FFP_shift[AIndex] := ((SR shl 1) or Bit0) and $7FFFFF;
+  end;
+
+  Wf := (FState.Voices[AIndex].Control shr 4) and $0F;
+
+  // Clear the output bits of the shift register when noise is selected together
+  // with another waveform.
+  if Wf > 8 then
+    FFP_shift[AIndex] := FFP_shift[AIndex] and
+      ($7FFFFF xor (1 shl 22) xor (1 shl 20) xor (1 shl 16) xor (1 shl 13) xor
+                   (1 shl 11) xor (1 shl 7)  xor (1 shl 4)  xor (1 shl 2));
+
+  if Wf >= 8 then
+  begin
+    SR := FFP_shift[AIndex];
+    NoiseOut := ((SR and $400000) shr 11) or
+                ((SR and $100000) shr 10) or
+                ((SR and $010000) shr 7) or
+                ((SR and $002000) shr 5) or
+                ((SR and $000800) shr 4) or
+                ((SR and $000080) shr 1) or
+                ((SR and $000010) shl 1) or
+                ((SR and $000004) shl 2);
+    FFP_prev[AIndex] := Byte(NoiseOut shr 4);
+    // reSID-fp sums the per-bit DAC weights starting from wave_zero.
+    Acc := FFP_waveZero;
+    for I := 0 to 7 do
+      if (FFP_prev[AIndex] and (1 shl I)) <> 0 then
+        Acc := Acc + FFP_bitDac[I + 4];
+    FFP_prevDac[AIndex] := Acc;
+  end;
+end;
+
+// wavefp.cpp::writeCONTROL_REG. Owns the whole control-register update for the
+// distortion path, because reSID and reSID-fp disagree on the test bit: reSID
+// clears the LFSR and reloads $7ffff8, reSID-fp pokes bit 1 and starts a
+// 200 ms "analog fade" instead.
+procedure TSedaiSIDEvo.FP_WriteControl(AIndex: Integer; AValue: Byte);
+var
+  WaveCur, WaveNext: Integer;
+  TestCur, TestNext: Boolean;
+  Bit19: Cardinal;
+begin
+  if (AIndex < 0) or (AIndex > 2) then Exit;
+
+  WaveCur  := (FState.Voices[AIndex].Control shr 4) and $0F;
+  WaveNext := (AValue shr 4) and $0F;
+  TestCur  := (FState.Voices[AIndex].Control and SID_CTRL_TEST) <> 0;
+  TestNext := (AValue and SID_CTRL_TEST) <> 0;
+
+  // Selecting waveform 0 holds the previous output in the DAC MOSFET gates.
+  if (WaveNext = 0) and (WaveCur >= 1) and (WaveCur <= 7) then
+  begin
+    FFP_prev[AIndex] := FP_ReadOSC(AIndex);
+    FFP_prevDac[AIndex] := FP_WaveOutput(AIndex);
+  end;
+
+  // clock_noise() reads the NEW waveform, so publish the register first.
+  FState.Voices[AIndex].Control := AValue;
+
+  if TestNext and (not TestCur) then
+  begin
+    // Test bit rising: invert bit 19 and write it to bit 1.
+    FState.Voices[AIndex].SIDOsc.Accumulator := 0;
+    Bit19 := (FFP_shift[AIndex] shr 18) and 2;
+    FFP_shift[AIndex] := (FFP_shift[AIndex] and $7FFFFD) or (Bit19 xor 2);
+    FFP_noiseDelay[AIndex] := 200000;
+    // Keep the classic mirror coherent in case the model is toggled at runtime.
+    FState.Voices[AIndex].SIDOsc.ShiftRegister := 0;
+  end
+  else if not TestNext then
+  begin
+    // Test bit falling clocks the noise once; otherwise this only re-evaluates
+    // the combined-noise masking.
+    FP_ClockNoise(AIndex, TestCur);
+    if TestCur then
+      FState.Voices[AIndex].SIDOsc.ShiftRegister := $7FFFF8;
+  end;
+
+  FState.Voices[AIndex].SIDOsc.TestBit := TestNext;
+end;
+
+// Per-voice reSID-fp oscillator reset (wavefp.cpp::reset).
+procedure TSedaiSIDEvo.FP_ResetVoice(AIndex: Integer);
+begin
+  if (AIndex < 0) or (AIndex > 2) then Exit;
+  FFP_prev[AIndex] := 0;
+  FFP_prevDac[AIndex] := 0.0;
+  // reSID-fp starts the LFSR at $7ffffc; reSID classic uses $7ffff8.
+  FFP_shift[AIndex] := $7FFFFC;
+  FFP_noiseDelay[AIndex] := 0;
+  // Half-rate analog section state (sidfp.cpp::reset)
+  FFP_lastSample[AIndex] := 0.0;
+  FFP_cycleGate := 0;
 end;
 
 // Nonlinear float voice output (reSID-fp VoiceFP::output) for the distortion path:
 // (waveDAC(wave) * envDAC(env) + voice_DC) * per-voice volume.
 function TSedaiSIDEvo.FP_GetVoiceOutput(AIndex: Integer): Single;
-var
-  WaveOut: Integer;
 begin
-  WaveOut := GetWaveformOutput12(AIndex);
-  FState.Voices[AIndex].WaveformOutput := WaveOut;  // for OSC3 register read
-  // reSID-fp VoiceFP::output() = waveDAC*envDAC + voice_DC (float). The * Volume
-  // is the EVO per-voice gain (1.0 for plain SID playback).
-  Result := (FFP_waveDac[WaveOut] *
+  // reSID-fp VoiceFP::output() = wave.output() * envelope.output() + voice_DC,
+  // all in float. wave.output() is the ANALOG table (FP_WaveOutput), already in
+  // the DAC domain with wave_zero folded in -- not reSID's integer waveform run
+  // through a kinked DAC, which is what this used to do.
+  // The * Volume is the EVO per-voice gain (1.0 for plain SID playback).
+  Result := (FP_WaveOutput(AIndex) *
              FFP_envDac[FState.Voices[AIndex].SIDEnv.EnvelopeCounter] + FFP_voiceDC)
             * FState.Voices[AIndex].Volume;
 end;
