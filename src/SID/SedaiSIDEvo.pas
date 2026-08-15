@@ -925,6 +925,7 @@ type
     function GetVoiceOutputDebug(AVoice: Integer): Integer;  // Voice output before filter
     function GetFilterW0(AFc: Integer): Integer;             // Current-model filter w0 table entry
     function GetOutput16Debug: Integer;                      // Current cycle 16-bit output (reSID output())
+    function GetWaveformOutput12Debug(AVoice: Integer): Integer;  // full 12-bit waveform (OSC3 only shows the top 8)
     function FastExpDebug(V: Single): Single;                // reSID-fp fastexp (test hook)
     function ExpFDebug(V: Single): Single;                   // ported glibc expf (test hook)
 
@@ -2351,10 +2352,14 @@ begin
     FFilter.W0_ceil_dt := W0_MAX_DT;
 
   // Resonance: 4 bits (0-15)
-  // ReSID-exact: _1024_div_Q = 1024.0/(0.707 + 1.0*res/0x0f)
+  // ReSID-exact: _1024_div_Q = static_cast<sound_sample>(1024.0/(0.707 + res/15)).
+  // The C cast TRUNCATES toward zero; Round() disagrees on 8 of the 16 resonance
+  // values (res 15: 599.88 -> 599 in reSID, 600 here). Never caught before
+  // because the per-cycle test song, Ocean_Reloaded, routes NO voice through the
+  // filter (RES/FILT = 0 on all 3000 frames), so the filter state stayed at 0.
   // Q range is [0.707, 1.707] - NOT [0.707, 8.0]!
   Res := (FFilter.ResFilt shr 4) and $0F;
-  FFilter._1024_div_Q := Round(1024.0 / (0.707 + 1.0 * Res / $0F));
+  FFilter._1024_div_Q := Trunc(1024.0 / (0.707 + 1.0 * Res / $0F));
 end;
 
 // ReSID-exact filter clock (1 cycle)
@@ -2421,15 +2426,19 @@ begin
   // Vlp -= dVlp
   // Vhp = (Vbp*_1024_div_Q >> 10) - Vlp - Vi
 
-  // Use Int64 to prevent overflow: W0_ceil_1 (17-bit) * Vhp (16-bit) > 32-bit
-  // CRITICAL: Must use SarInt64 (arithmetic right shift), NOT shr (logical shift).
-  // Vhp/Vbp are signed — shr on negative Int64 fills with zeros, producing
-  // huge positive values instead of small negatives, breaking the filter.
-  dVbp := SarInt64(Int64(FFilter.W0_ceil_1) * FFilter.Vhp, 20);
-  dVlp := SarInt64(Int64(FFilter.W0_ceil_1) * FFilter.Vbp, 20);
+  // reSID computes these in `sound_sample`, i.e. a 32-bit int, and at high
+  // cutoff with resonance w0_ceil_1*Vhp DOES exceed 2^31 and wraps. Widening to
+  // Int64 "to prevent overflow" is therefore NOT more correct here - it is a
+  // different filter. Reproduce the 32-bit wrap, and use an arithmetic shift
+  // (shr would fill negatives with zeros and destroy the loop).
+  {$PUSH}{$Q-}{$R-}
+  dVbp := SarLongint(LongInt(FFilter.W0_ceil_1) * LongInt(FFilter.Vhp), 20);
+  dVlp := SarLongint(LongInt(FFilter.W0_ceil_1) * LongInt(FFilter.Vbp), 20);
   FFilter.Vbp := FFilter.Vbp - dVbp;
   FFilter.Vlp := FFilter.Vlp - dVlp;
-  FFilter.Vhp := SarInt64(Int64(FFilter.Vbp) * FFilter._1024_div_Q, 10) - FFilter.Vlp - Vi;
+  FFilter.Vhp := SarLongint(LongInt(FFilter.Vbp) * LongInt(FFilter._1024_div_Q), 10)
+                 - FFilter.Vlp - Vi;
+  {$POP}
 end;
 
 // ReSID-exact filter output
@@ -2513,10 +2522,12 @@ begin
   // Vo = Vlp - Vhp
   // Vlp += dVlp
   // Vhp += dVhp
-  // Use Int64 for safety (Vi can be large from filter output)
-  // SarInt64: arithmetic right shift — differences (Vi-Vlp, Vlp-Vhp) are signed
-  dVlp := SarInt64(Int64(FExtFilter.W0lp shr 8) * (Vi - FExtFilter.Vlp), 12);
-  dVhp := SarInt64(Int64(FExtFilter.W0hp) * (FExtFilter.Vlp - FExtFilter.Vhp), 20);
+  // As in ClockFilter: reSID does this in 32-bit `sound_sample`, so widening to
+  // Int64 is a DIFFERENT filter, not a safer one. Reproduce the 32-bit wrap.
+  {$PUSH}{$Q-}{$R-}
+  dVlp := SarLongint(LongInt(FExtFilter.W0lp shr 8) * LongInt(Vi - FExtFilter.Vlp), 12);
+  dVhp := SarLongint(LongInt(FExtFilter.W0hp) * LongInt(FExtFilter.Vlp - FExtFilter.Vhp), 20);
+  {$POP}
   FExtFilter.Vo := FExtFilter.Vlp - FExtFilter.Vhp;
   FExtFilter.Vlp := FExtFilter.Vlp + dVlp;
   FExtFilter.Vhp := FExtFilter.Vhp + dVhp;
@@ -4063,6 +4074,11 @@ begin
     Result := PInteger(PByte(FFilterF0) + AFc * SizeOf(Integer))^
   else
     Result := FFilterF0_6581[AFc];
+end;
+
+function TSedaiSIDEvo.GetWaveformOutput12Debug(AVoice: Integer): Integer;
+begin
+  Result := GetWaveformOutput12(AVoice);
 end;
 
 function TSedaiSIDEvo.GetOutput16Debug: Integer;
