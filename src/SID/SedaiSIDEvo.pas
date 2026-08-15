@@ -926,6 +926,7 @@ type
     function GetFilterW0(AFc: Integer): Integer;             // Current-model filter w0 table entry
     function GetOutput16Debug: Integer;                      // Current cycle 16-bit output (reSID output())
     function GetWaveformOutput12Debug(AVoice: Integer): Integer;  // full 12-bit waveform (OSC3 only shows the top 8)
+    function GetFilterStateDebug(out AVlp, AVbp, AVhp, AVnf, AOut: Integer): Integer;  // classic filter internals
     function FastExpDebug(V: Single): Single;                // reSID-fp fastexp (test hook)
     function ExpFDebug(V: Single): Single;                   // ported glibc expf (test hook)
 
@@ -2319,10 +2320,15 @@ end;
 
 procedure TSedaiSIDEvo.UpdateFilterCoefficients;
 const
-  // ReSID-exact w0 ceiling values
-  // w0_max_1 = 2*pi*16000*1.048576 = 105413
-  // w0_max_dt = 2*pi*4000*1.048576 = 26353
-  W0_MAX_1 = 105413;
+  // ReSID-exact w0 ceiling values, matching
+  //   static_cast<sound_sample>(2*pi*16000*1.048576)  and  (2*pi*4000*1.048576)
+  // i.e. TRUNCATED, not rounded:
+  //   2*pi*16000*1.048576 = 105414.357067 -> 105414   (this was 105413: off by one,
+  //     which made dVbp = w0_ceil_1*Vhp >> 20 land 1 low whenever the cutoff was
+  //     at the ceiling; invisible until a voice was actually routed through the
+  //     filter, which the test song never does)
+  //   2*pi*4000*1.048576  =  26353.589267 ->  26353
+  W0_MAX_1 = 105414;
   W0_MAX_DT = 26353;
 var
   FC: Integer;
@@ -4079,6 +4085,18 @@ end;
 function TSedaiSIDEvo.GetWaveformOutput12Debug(AVoice: Integer): Integer;
 begin
   Result := GetWaveformOutput12(AVoice);
+end;
+
+// Read the classic two-integrator-loop state, so a divergence can be localised
+// to the filter instead of being inferred from the mixed output.
+function TSedaiSIDEvo.GetFilterStateDebug(out AVlp, AVbp, AVhp, AVnf, AOut: Integer): Integer;
+begin
+  AVlp := FFilter.Vlp;
+  AVbp := FFilter.Vbp;
+  AVhp := FFilter.Vhp;
+  AVnf := FFilter.Vnf;
+  AOut := FilterOutput;
+  Result := FExtFilter.Vo;
 end;
 
 function TSedaiSIDEvo.GetOutput16Debug: Integer;
