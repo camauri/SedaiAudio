@@ -27,6 +27,9 @@ uses
   {$IFDEF WINDOWS}
   Windows,
   {$ENDIF}
+  {$IFDEF UNIX}
+  BaseUnix, TermIO,
+  {$ENDIF}
   SysUtils, Classes, SDL2, SedaiAudioTypes, SedaiSIDEvo, SedaiGoatTracker,
   SedaiAudioFoundation, SedaiAudioBackend;
 
@@ -206,23 +209,104 @@ begin
 end;
 
 {$ELSE}
-// Linux/Mac placeholder
-procedure InitConsoleInput;
-begin
-end;
+// ----------------------------------------------------------------------------
+// Unix console input.
+//
+// These used to be empty stubs, which meant NO key ever worked on Linux: not
+// the mute keys, not D, not even Q to quit - which is the real reason the
+// player could only be stopped with kill -9 (it was never SDL2 swallowing the
+// signal). The help screen advertised controls the platform did not have.
+//
+// The terminal is put in raw mode with VMIN = VTIME = 0, so fpRead returns
+// immediately with 0 bytes when nothing was typed and no polling call is
+// needed. ISIG is deliberately LEFT ON so Ctrl-C keeps working.
+// ----------------------------------------------------------------------------
+var
+  GTermSaved: TermIOs;
+  GTermRaw: Boolean = False;
+  GPendingKey: Char = #0;
+  GHasPending: Boolean = False;
 
 procedure RestoreConsoleInput;
 begin
+  if GTermRaw then
+  begin
+    TCSetAttr(0, TCSANOW, GTermSaved);
+    GTermRaw := False;
+  end;
+end;
+
+// A terminal left in raw mode outlives the process, so make sure the usual
+// ways of dying still put it back.
+procedure TermSignalHandler(ASignal: LongInt); cdecl;
+begin
+  RestoreConsoleInput;
+  fpSignal(ASignal, SignalHandler(SIG_DFL));
+  fpKill(fpGetpid, ASignal);
+end;
+
+procedure InitConsoleInput;
+var
+  ATerm: TermIOs;
+begin
+  // Not a terminal (piped or redirected)? TCGetAttr fails with ENOTTY, and we
+  // stay inert rather than touching anything.
+  if TCGetAttr(0, GTermSaved) <> 0 then Exit;
+
+  ATerm := GTermSaved;
+  ATerm.c_lflag := ATerm.c_lflag and (not (ICANON or ECHO));
+  ATerm.c_cc[VMIN] := 0;      // never block: return what is there, even nothing
+  ATerm.c_cc[VTIME] := 0;
+  if TCSetAttr(0, TCSANOW, ATerm) <> 0 then Exit;
+
+  GTermRaw := True;
+  fpSignal(SIGINT, SignalHandler(@TermSignalHandler));
+  fpSignal(SIGTERM, SignalHandler(@TermSignalHandler));
+  fpSignal(SIGHUP, SignalHandler(@TermSignalHandler));
+end;
+
+function ReadRawByte(out AByte: Char): Boolean;
+begin
+  Result := GTermRaw and (fpRead(0, AByte, 1) = 1);
 end;
 
 function ConsoleKeyPressed: Boolean;
+var
+  ACh: Char;
 begin
-  Result := False;
+  if GHasPending then Exit(True);
+  Result := ReadRawByte(ACh);
+  if Result then
+  begin
+    GPendingKey := ACh;
+    GHasPending := True;
+  end;
 end;
 
 function ConsoleReadKey: Char;
+var
+  ACh: Char;
 begin
-  Result := #0;
+  if GHasPending then
+  begin
+    Result := GPendingKey;
+    GHasPending := False;
+  end
+  else if not ReadRawByte(Result) then
+  begin
+    Result := #0;
+    Exit;
+  end;
+
+  // Arrow and function keys arrive as ESC '[' <code>. Without this an arrow key
+  // would read as a bare ESC and quit the player. Swallow the rest of the
+  // sequence and report "no key" instead.
+  if Result = #27 then
+    if ReadRawByte(ACh) then
+    begin
+      while ReadRawByte(ACh) do ;   // drain the remainder of the sequence
+      Result := #0;
+    end;
 end;
 {$ENDIF}
 
@@ -468,10 +552,8 @@ begin
     WriteLn('Audio Mode: Direct SDL2');
   WriteLn;
 
-  // Initialize console input
-  {$IFDEF WINDOWS}
+  // Initialize console input (implemented on Windows AND Unix)
   InitConsoleInput;
-  {$ENDIF}
 
   // Initialize SDL (needed for both modes - SAF uses SDL internally)
   if SDL_Init(SDL_INIT_AUDIO) < 0 then
@@ -709,9 +791,7 @@ begin
     if Assigned(GPlayer) then
       GPlayer.Free;
     SDL_Quit;
-    {$IFDEF WINDOWS}
     RestoreConsoleInput;
-    {$ENDIF}
   end;
 
   WriteLn('Done.');
