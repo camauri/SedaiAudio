@@ -141,10 +141,41 @@ bowed string 0.030). The trim brings a bare module to about RMS 0.15, so the
 five are usable in one patch without one burying another; it only sets the
 default of the `amp` input, which the patch still owns.
 
-Not yet modules, and deliberately: additive, partial, wavetable and sample
-playback. Those four need data — harmonic tracks, a table, a file — so they
-need a loading path in the patch file first, and wrapping them empty would give
-four silent modules and the appearance of coverage.
+## The whole library: `inst`
+
+The five above make sound from nothing. The other six techniques — classic, FM,
+wavetable, additive, partial, sample, SID — need DATA: a table, harmonic tracks,
+a recording. That data already has a home in `TSAFPart` and the `.safinst`
+registry, so `inst` hands the job to the machinery built for it, and one module
+type reaches **all eleven techniques and all nine libraries**:
+
+    module s = inst instrument="Drawbar Organ"
+    module s = inst library=library/orchestra.safinst instrument="Violin"
+    module s = inst source=additive preset=strings
+
+Quote a name that contains spaces. `library=` loads a `.safinst` file, once per
+path however many voices ask for it; a name that is not found says so and names
+the fix. See `library.patch`.
+
+Two things about `inst` are worth knowing before they surprise you:
+
+- It is **block-only**, so it cannot go inside a feedback cycle. Gate edges are
+  still sample-accurate — the block is split at each edge — but the module
+  cannot be advanced one sample at a time and does not pretend to be.
+- **Pitch is latched at the trigger.** A Part hands the frequency to the voice at
+  note-on (Karplus bakes it into the delay line right there), so an LFO on
+  `inst.pitch` chooses the note, it does not bend it. The five native instrument
+  modules *do* bend — use those when the pitch has to move while the note
+  sounds.
+
+`inst` also carries an output trim, for the same reason as the others: measured
+across the built-in library a bare Part peaks between 1.01 and 1.47, so at unity
+it would clip before the patch had done anything. The default is 0.6. Presets
+derived from recordings sit lower still — the four recorded libraries measured
+between 0.05 and 0.54 at that default — so expect to raise `amp` for those.
+
+It is one voice. Polyphony belongs to the patch voice pool, which already runs N
+independent graphs; a polyphonic Part inside each would be polyphony twice over.
 
 ## Ins and outs
 

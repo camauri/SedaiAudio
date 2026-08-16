@@ -1,0 +1,18 @@
+# L'intera libreria di strumenti dentro il grafo.
+# 'inst' raggiunge tutte e undici le tecniche e tutte e nove le librerie
+# .safinst: qui un violino derivato da registrazioni, sequenziato e mandato
+# in un riverbero stereo. Lo strumento e' a blocchi, quindi non puo' stare
+# in un anello di retroazione, ma i fronti di gate restano campione-esatti.
+module clk = lfo shape=square rate=1.6
+module seq = seq values=0,3,7,10,7,3 gatems=520
+module s   = inst library=library/orchestra.safinst instrument="Violin" freq=220
+module rv  = sreverb size=0.68 damping=0.4
+set rv.mix = 0.28
+connect clk.out  -> seq.clock
+connect seq.out  -> s.pitch
+connect seq.gate -> s.gate
+set s.amp = 3.0
+connect s.out  -> rv.in
+connect s.outR -> rv.inR
+output rv.out
+output rv.outR

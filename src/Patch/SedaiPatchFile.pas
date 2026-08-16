@@ -27,7 +27,7 @@ unit SedaiPatchFile;
 interface
 
 uses
-  SysUtils, Classes, SedaiPatchGraph, SedaiPatchModules, SedaiPatchElectronic, SedaiPatchInstruments, SedaiPatchLegacy;
+  SysUtils, Classes, SedaiPatchGraph, SedaiPatchModules, SedaiPatchElectronic, SedaiPatchInstruments, SedaiPatchPart, SedaiPatchLegacy;
 
 type
   TSedaiPatchLoadResult = record
@@ -48,6 +48,46 @@ function LoadPatchFromFile(AGraph: TSedaiPatchGraph;
 function ParseValue(const AText: string; out AValue: Single): Boolean;
 
 implementation
+
+// Split on whitespace, but keep a double-quoted run together. Needed because an
+// instrument is named the way a musician names it — "Drawbar Organ" — and the
+// name has to survive reaching the module intact.
+function SplitArgs(const S: string): TStringArray;
+var
+  I, N: Integer;
+  Cur: string;
+  InQuote: Boolean;
+
+  procedure Flush;
+  begin
+    if Cur <> '' then
+    begin
+      SetLength(Result, N + 1);
+      Result[N] := Cur;
+      Inc(N);
+      Cur := '';
+    end;
+  end;
+
+begin
+  SetLength(Result, 0);
+  N := 0;
+  Cur := '';
+  InQuote := False;
+  for I := 1 to Length(S) do
+  begin
+    if S[I] = '"' then
+    begin
+      InQuote := not InQuote;
+      Cur := Cur + S[I];        // kept: the module strips them itself
+    end
+    else if (not InQuote) and ((S[I] = ' ') or (S[I] = #9)) then
+      Flush
+    else
+      Cur := Cur + S[I];
+  end;
+  Flush;
+end;
 
 function ParseValue(const AText: string; out AValue: Single): Boolean;
 var
@@ -149,20 +189,21 @@ begin
       Rest := Trim(Copy(Line, Length(Verb) + 1, Length(Line)));
       if not SplitKeyValue(Rest, Key, Val) then
       begin Fail('module needs: module <name> = <type> [key=value ...]'); Exit; end;
-      Parts := Val.Split([' ', #9], TStringSplitOptions.ExcludeEmpty);
+      Parts := SplitArgs(Val);
       if Length(Parts) = 0 then
       begin Fail('module needs a type'); Exit; end;
 
       M := CreateModuleByType(Parts[0]);
       if M = nil then M := CreateElectronicModuleByType(Parts[0]);
       if M = nil then M := CreateInstrumentModuleByType(Parts[0]);
+      if M = nil then M := CreatePartModuleByType(Parts[0]);
       // Native modules first, then the wrappers around SAF's existing units.
       if M = nil then M := CreateLegacyModuleByType(Parts[0]);
       if M = nil then
       begin
-        Fail(Format('unknown module type "%s"'#10'  core: %s'#10'  electronic: %s'#10'  instruments: %s'#10'  bridged: %s',
+        Fail(Format('unknown module type "%s"'#10'  core: %s'#10'  electronic: %s'#10'  instruments: %s'#10'  library: %s'#10'  bridged: %s',
                     [Parts[0], KnownModuleTypes, KnownElectronicTypes,
-                     KnownInstrumentTypes, KnownLegacyTypes]));
+                     KnownInstrumentTypes, KnownPartTypes, KnownLegacyTypes]));
         Exit;
       end;
       if not AGraph.AddModule(M, Key) then
