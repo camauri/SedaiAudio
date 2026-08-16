@@ -362,7 +362,7 @@ build_target() {
     opts+=("-Fu$SRC_DIR")
     local sub
     for sub in Core Generators Modulators Processors Effects Voice Mixer \
-               Transport Project Platform SID Players FileIO Engine Wavetable; do
+               Transport Project Platform SID Players FileIO Engine Wavetable Patch; do
         [[ -d "$SRC_DIR/$sub" ]] && opts+=("-Fu$SRC_DIR/$sub")
     done
     opts+=("-Fu$TEST_DIR")

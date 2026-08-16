@@ -1,0 +1,19 @@
+# Lo stesso patch con un LFO nell'altezza. Alzando lfo1 rate in banda audio
+# questo diventa FM senza cambiare una sola connessione: e' il punto.
+module note = note
+module lfo1 = lfo    shape=sine rate=5.5
+module osc1 = osc    shape=saw freq=110
+module filt = filter mode=lowpass cutoff=900
+module env1 = env    a=0.005 d=0.2 s=0.7 r=0.3
+module amp  = amp
+
+set     filt.res   = 0.35
+
+connect note.pitch -> osc1.pitch
+connect lfo1.out   -> osc1.pitch  amount=0.02
+connect note.gate  -> env1.gate
+connect osc1.out   -> filt.in
+connect filt.out   -> amp.in
+connect env1.out   -> amp.gain  amount=0.3
+
+output  amp.out

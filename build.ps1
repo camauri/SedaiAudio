@@ -440,6 +440,7 @@ function Build-Target {
     $opts += "-Fu`"$SrcDir\FileIO`""
     $opts += "-Fu`"$SrcDir\Engine`""
     $opts += "-Fu`"$SrcDir\Wavetable`""
+    $opts += "-Fu`"$SrcDir\Patch`""
     $opts += "-Fu`"$TestDir`""
     $opts += "-Fu`"$SDL2Dir`""  # SDL2 Pascal bindings
     $opts += "-FU`"$libPath`""

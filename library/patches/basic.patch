@@ -1,0 +1,17 @@
+# Voce sottrattiva classica: oscillatore -> filtro -> amplificatore,
+# con inviluppo sul guadagno e tastiera sull'altezza.
+module note = note
+module osc1 = osc    shape=saw freq=110
+module filt = filter mode=lowpass cutoff=800
+module env1 = env    a=0.005 d=0.15 s=0.6 r=0.3
+module amp  = amp
+
+set     filt.res    = 0.4
+
+connect note.pitch -> osc1.pitch
+connect note.gate  -> env1.gate
+connect osc1.out   -> filt.in
+connect filt.out   -> amp.in
+connect env1.out   -> amp.gain  amount=0.3
+
+output  amp.out

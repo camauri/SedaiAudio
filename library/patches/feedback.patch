@@ -1,0 +1,22 @@
+# Un anello vero: l'uscita del filtro torna nel suo stesso ingresso passando
+# per un amplificatore. Il grafo deve accorgersene, isolare la componente e
+# farla girare per campione, lasciando tutto il resto a blocco.
+module note = note
+module osc1 = osc    shape=square freq=55
+module filt = filter mode=bandpass cutoff=400
+module fb   = amp
+module env1 = env    a=0.01 d=0.3 s=0.8 r=0.4
+module amp  = amp
+
+set     filt.res  = 0.6
+set     fb.gain   = 0.45
+
+connect note.pitch -> osc1.pitch
+connect note.gate  -> env1.gate
+connect osc1.out   -> filt.in
+connect filt.out   -> fb.in
+connect fb.out     -> filt.in
+connect filt.out   -> amp.in
+connect env1.out   -> amp.gain  amount=0.3
+
+output  amp.out
