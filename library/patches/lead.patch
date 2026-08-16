@@ -1,0 +1,39 @@
+# Un lead sottrattivo con del mordente. Le cose che lo rendono vivo:
+#  - due oscillatori leggermente scordati (battimenti) piu' un sub un'ottava sotto
+#  - un SECONDO inviluppo sul CUTOFF: e' questo che da' l'attacco, non il volume
+#  - risonanza alta, cosi' la spazzata del filtro si sente
+module note = note
+
+module osc1 = osc shape=saw    freq=130.81
+module osc2 = osc shape=saw    freq=130.81
+module osc3 = osc shape=square freq=130.81
+
+module fenv = env a=0.001 d=0.22 s=0.18 r=0.15    # inviluppo del filtro: corto e secco
+module aenv = env a=0.002 d=0.35 s=0.55 r=0.25    # inviluppo del volume
+
+module filt = filter mode=lowpass cutoff=420
+module amp  = amp
+
+# la tastiera pilota i tre oscillatori; osc2 scordato di ~14 cent, osc3 un'ottava sotto
+connect note.pitch -> osc1.pitch  normalled
+connect note.pitch -> osc2.pitch  normalled
+connect note.pitch -> osc3.pitch  normalled
+set     osc2.pitch = 0.012
+set     osc3.pitch = -1.0
+
+connect note.gate  -> fenv.gate   normalled
+connect note.gate  -> aenv.gate   normalled
+
+# le tre uscite si sommano da sole sullo stesso ingresso: nessun mixer necessario
+connect osc1.out -> filt.in  amount=0.5
+connect osc2.out -> filt.in  amount=0.5
+connect osc3.out -> filt.in  amount=0.28
+
+# IL punto: l'inviluppo apre il filtro di quasi quattro ottave a ogni nota
+set     filt.res    = 0.62
+connect fenv.out    -> filt.cutoff amount=3.8
+
+connect filt.out    -> amp.in
+connect aenv.out    -> amp.gain    amount=0.28
+
+output  amp.out
