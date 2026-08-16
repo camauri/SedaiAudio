@@ -1,0 +1,25 @@
+# Una patch di EFFETTO: la sorgente non e' un oscillatore ma l'audio in arrivo.
+# Stesso grafo, stesso scheduler, stessi moduli. Nessuna seconda architettura.
+module src  = input
+
+module filt = filter mode=lowpass cutoff=3000
+module lfo1 = lfo shape=sine rate=0.35
+
+module dist = sdist   drive=1.6 tone=0.7 gain=0.8
+module dly  = sdelay  time=0.28 feedback=0.42
+module rev  = sreverb size=0.68 damping=0.45 width=0.9
+
+set     filt.res = 0.3
+set     dist.mix = 0.35
+set     dly.mix  = 0.30
+set     rev.mix  = 0.25
+
+# un filtro che respira: l'LFO muove il cutoff di mezza ottava
+connect lfo1.out -> filt.cutoff amount=0.5
+
+connect src.out  -> filt.in
+connect filt.out -> dist.in
+connect dist.out -> dly.in
+connect dly.out  -> rev.in
+
+output  rev.out

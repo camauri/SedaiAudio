@@ -214,6 +214,9 @@ type
 
     function AddModule(AModule: TSedaiPatchModule; const AName: string): Boolean;
     function ModuleByName(const AName: string): TSedaiPatchModule;
+    // First module of a given type, so a host can find e.g. the audio input
+    // without dictating what the patch must call it.
+    function ModuleOfType(const ATypeName: string): TSedaiPatchModule;
     function FindPort(const APath: string): TSedaiPatchPort;   // "osc1.out"
     function Connect(const ASource, ADest: string; AAmount: Single = 1.0;
                      ANormalled: Boolean = False): Boolean;
@@ -540,6 +543,15 @@ begin
   Result := nil;
   for I := 0 to High(FModules) do
     if SameText(FModules[I].ModuleName, AName) then Exit(FModules[I]);
+end;
+
+function TSedaiPatchGraph.ModuleOfType(const ATypeName: string): TSedaiPatchModule;
+var
+  I: Integer;
+begin
+  Result := nil;
+  for I := 0 to High(FModules) do
+    if SameText(FModules[I].TypeName, ATypeName) then Exit(FModules[I]);
 end;
 
 function TSedaiPatchGraph.FindPort(const APath: string): TSedaiPatchPort;

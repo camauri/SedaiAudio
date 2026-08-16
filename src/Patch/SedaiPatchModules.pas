@@ -121,6 +121,28 @@ type
     function InternalDelay: Integer; override;
   end;
 
+  { TSedaiModInput — audio coming IN from the host.
+
+    This is what makes the design's claim true that "FX are the same machine":
+    a patch whose source is incoming audio instead of an oscillator is not a
+    second architecture, it is the same graph with a different first module. The
+    host fills a block before each render; with nothing supplied the module is
+    silent, so a patch that expects input and gets none fails audibly rather
+    than mysteriously. }
+  TSedaiModInput = class(TSedaiPatchModule)
+  private
+    FOut: TSedaiPatchPort;
+    FBlock: array of Single;
+    FCount: Integer;
+  public
+    constructor Create; override;
+    procedure Prepare(ASampleRate: Cardinal; ABlockSize: Integer); override;
+    procedure ResetState; override;
+    procedure RenderSample(AIndex: Integer); override;
+    // Called by the host before Render. ACount frames of mono audio.
+    procedure SetBlock(AData: PSingle; ACount: Integer);
+  end;
+
   { TSedaiModNote — the "keyboard": what the player or the renderer drives }
   TSedaiModNote = class(TSedaiPatchModule)
   private
@@ -539,6 +561,52 @@ begin
   FOut.Write(AIndex, ShapeValue(FShape, FPhase, Dt, 0.5, FTri));
 end;
 
+{ TSedaiModInput }
+
+constructor TSedaiModInput.Create;
+begin
+  inherited Create;
+  TypeName := 'input';
+  Rate := mrBoth;
+  FCount := 0;
+  FOut := AddOutput('out', prAudio);
+end;
+
+procedure TSedaiModInput.Prepare(ASampleRate: Cardinal; ABlockSize: Integer);
+begin
+  inherited Prepare(ASampleRate, ABlockSize);
+  if Length(FBlock) < ABlockSize then SetLength(FBlock, ABlockSize);
+end;
+
+procedure TSedaiModInput.ResetState;
+var
+  I: Integer;
+begin
+  inherited ResetState;
+  for I := 0 to High(FBlock) do FBlock[I] := 0.0;
+  FCount := 0;
+end;
+
+procedure TSedaiModInput.SetBlock(AData: PSingle; ACount: Integer);
+var
+  I: Integer;
+begin
+  if ACount > Length(FBlock) then SetLength(FBlock, ACount);
+  FCount := ACount;
+  if AData = nil then
+  begin
+    for I := 0 to ACount - 1 do FBlock[I] := 0.0;
+    Exit;
+  end;
+  for I := 0 to ACount - 1 do FBlock[I] := AData[I];
+end;
+
+procedure TSedaiModInput.RenderSample(AIndex: Integer);
+begin
+  if AIndex < FCount then FOut.Write(AIndex, FBlock[AIndex])
+                     else FOut.Write(AIndex, 0.0);
+end;
+
 { TSedaiModDelay }
 
 constructor TSedaiModDelay.Create;
@@ -641,6 +709,7 @@ begin
   else if SameText(ATypeName, 'amp') then Result := TSedaiModAmp.Create
   else if SameText(ATypeName, 'env') then Result := TSedaiModEnv.Create
   else if SameText(ATypeName, 'lfo') then Result := TSedaiModLFO.Create
+  else if SameText(ATypeName, 'input') then Result := TSedaiModInput.Create
   else if SameText(ATypeName, 'delay') then Result := TSedaiModDelay.Create
   else if SameText(ATypeName, 'note') then Result := TSedaiModNote.Create
   else Result := nil;
@@ -648,7 +717,7 @@ end;
 
 function KnownModuleTypes: string;
 begin
-  Result := 'osc, filter, amp, env, lfo, delay, note';
+  Result := 'osc, filter, amp, env, lfo, delay, input, note';
 end;
 
 end.

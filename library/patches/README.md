@@ -54,6 +54,7 @@ oldest is stolen.
 | `feedback.patch` | A real loop: the filter's output returns to its own input through a VCA. The graph detects the cycle, isolates those two modules, and runs only them one sample at a time. Everything else stays at block rate. |
 | `poly.patch` | Meant to be played. Its keyboard connections are `normalled`, so they are there until you patch something into those inputs yourself. Render it with `patch_play`. |
 | `lead.patch` | A subtractive lead with some bite. Two detuned oscillators plus a sub an octave down, and — the thing that actually matters — a SECOND envelope on the filter cutoff. Measured, its spectral centroid sweeps 4.1x from attack to sustain, where `poly.patch` sits at 1.0x and sounds static because of it. |
+| `fx_chain.patch` | An EFFECT patch: its source is a module of type `input`, so the incoming audio takes the oscillator's place. Same graph, same scheduler, same modules — no second architecture. Run it with `patch_fx`. |
 | `fx.patch` | The bridge at work: a native lead running into SAF's own distortion, chorus and reverb — units that had been written long before and that no patch could reach. |
 | `echo.patch` | A loop through a 120 ms delay line. The graph works out that the shortest cycle carries 5293 samples of delay and advances the loop in chunks of 5293 rather than one at a time - bit-identical output, 42% faster. |
 
@@ -69,7 +70,18 @@ Values take unit suffixes: `440Hz`, `2ms`, `120ms`, `50%`, or a plain number.
 Pitch inputs are volts-per-octave: `1.0` is one octave, so a constant offset is a
 transposition and any modulator is automatically musical.
 
-Native module types: `osc`, `filter`, `amp`, `env`, `lfo`, `delay`, `note`.
+Or run an existing audio file through a patch:
+
+    ./build.sh --source job/tools/saf/patch_fx.lpr --dest bin/<plat>/patch_fx
+    bin/<plat>/patch_fx in.wav library/patches/fx_chain.patch out.wav 3 0.9
+                        ^in    ^patch                         ^out  ^tail ^gain
+
+The patch needs a module of type `input`; its output is the incoming audio.
+Reads whatever SedaiAudioFileReader handles and sums multi-channel input to
+mono. The tail argument keeps rendering after the input ends so reverb and delay
+tails ring out instead of being chopped.
+
+Native module types: `osc`, `filter`, `amp`, `env`, `lfo`, `delay`, `input`, `note`.
 
 Bridged from SAF's existing units, all prefixed `s`: `sdelay`, `schorus`,
 `sflanger`, `sphaser`, `sreverb`, `scomp`, `slimiter`, `sdist`. Each takes a
