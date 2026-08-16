@@ -177,6 +177,34 @@ between 0.05 and 0.54 at that default — so expect to raise `amp` for those.
 It is one voice. Polyphony belongs to the patch voice pool, which already runs N
 independent graphs; a polyphonic Part inside each would be polyphony twice over.
 
+## Shaping and control
+
+    quant    snaps a pitch to a scale: chromatic, major, minor, dorian,
+             phrygian, pentatonic, minorpent, blues, whole, octave, fifth
+    follow   an envelope follower — turns any signal into a control voltage
+             tracking its loudness, separate `attack` and `release`
+    fold     a wavefolder — ADDS harmonics by reflecting the signal about +-1
+             instead of removing them with a filter
+    lpg      a low-pass gate — one control opens amplitude AND brightness at
+             once, through a vactrol whose lag (`resp`) is the character
+
+`quant` is what makes a random voltage into a melody rather than a warble:
+patch `noise` through `sh` into it and the sequence is in key. Verified by
+measuring the notes it produces — on `major` only degrees 0 2 4 5 7 9 11
+appear, on `minorpent` only 0 3 5 7 10, on `whole` only 0 2 4 6 8 10.
+
+`lpg` is the one worth understanding, because it is not a VCA. Sweeping its
+`cv` from 0.15 to 1.0 raises the level by 35 dB *and* the spectral centroid
+from 710 Hz to 2728 Hz — a VCA would hold the centroid flat. Quieter is also
+duller, which is what a struck object does. `westcoast.patch` builds a voice
+the Buchla way: no filter anywhere, timbre from `fold`, articulation from `lpg`.
+
+One honest note on `follow`: its attack is the time constant of the detector,
+not of a step response. On a 220 Hz saw a 3 ms setting measures about 9 ms to
+90%, because the detector needs a couple of cycles of the waveform to see the
+peak. That is inherent to following an oscillating signal, not slack in the
+module.
+
 ## The body stage
 
 What the sound radiates *through*. These are not effects applied to a finished

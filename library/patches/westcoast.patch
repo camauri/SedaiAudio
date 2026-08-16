@@ -1,0 +1,28 @@
+# Scuola californiana: il timbro NON nasce togliendo armoniche con un
+# filtro, ma aggiungendole piegando l'onda, e la nota si apre con un
+# low-pass gate invece che con un VCA — piu' piano e' anche piu' cupo,
+# che e' quello che fa un oggetto percosso.
+module clk = lfo shape=square rate=5.0
+module n   = noise
+module sh  = sh
+module q   = quant scale=minorpent
+module gl  = glide time=0.010
+module e   = env a=0.002 d=0.30 s=0.0 r=0.20
+module o   = osc shape=sine freq=110
+module w   = fold
+module g   = lpg resp=0.035
+
+connect clk.out -> sh.trig
+connect clk.out -> e.gate
+connect n.out   -> sh.in
+connect sh.out  -> q.in amount=1.2
+connect q.out   -> gl.in
+connect gl.out  -> o.pitch
+
+connect o.out   -> w.in
+# l'inviluppo apre il folder: la nota si fa piu' ricca mentre e' piu' forte
+connect e.out   -> w.fold amount=4.0
+set w.fold = 1.2
+connect w.out   -> g.in
+connect e.out   -> g.cv amount=0.9
+output g.out

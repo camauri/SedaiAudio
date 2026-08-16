@@ -123,6 +123,76 @@ type
     procedure RenderSample(AIndex: Integer); override;
   end;
 
+
+  { TSedaiModQuant — a pitch quantiser.
+
+    The sequencer and the sample-and-hold both put arbitrary voltages on a
+    pitch input, and arbitrary voltages are out of tune. A quantiser snaps to
+    the nearest degree of a scale, which is what turns a random voltage from a
+    noise source into a melody rather than a warble. }
+
+  TSedaiModQuant = class(TSedaiPatchModule)
+  private
+    FIn, FOut: TSedaiPatchPort;
+    FDegrees: array of Integer;   // semitones within an octave, ascending
+    procedure SetScale(const AName: string);
+  public
+    constructor Create; override;
+    function Configure(const AKey, AValue: string): Boolean; override;
+    procedure RenderSample(AIndex: Integer); override;
+  end;
+
+  { TSedaiModFollow — an envelope follower.
+
+    Turns any signal into a control voltage tracking its loudness. It is the
+    module that lets one sound steer another: a drum part opening the filter on
+    a pad is a follower on the drums patched to the pad's cutoff. Attack and
+    release are separate because a follower that rises as slowly as it falls is
+    useless for anything percussive. }
+
+  TSedaiModFollow = class(TSedaiPatchModule)
+  private
+    FIn, FAttIn, FRelIn, FOut: TSedaiPatchPort;
+    FLevel: Single;
+  public
+    constructor Create; override;
+    procedure ResetState; override;
+    procedure RenderSample(AIndex: Integer); override;
+  end;
+
+  { TSedaiModFold — a wavefolder.
+
+    West coast rather than east coast: instead of removing harmonics with a
+    filter, it ADDS them by reflecting the signal back on itself every time it
+    passes a threshold. Drive it from an envelope and the timbre opens as the
+    note gets louder, which is how a Buchla gets brighter without a filter. }
+
+  TSedaiModFold = class(TSedaiPatchModule)
+  private
+    FIn, FFoldIn, FSymIn, FOut: TSedaiPatchPort;
+  public
+    constructor Create; override;
+    procedure RenderSample(AIndex: Integer); override;
+  end;
+
+  { TSedaiModLPG — a low-pass gate.
+
+    The Buchla 292: one control opens BOTH the amplitude and the brightness at
+    once, through a vactrol whose sluggishness is the whole character. A quiet
+    note is also a dull note, which is what a struck physical object does and
+    what a VCA alone never does. `resp` is the vactrol lag in seconds. }
+
+  TSedaiModLPG = class(TSedaiPatchModule)
+  private
+    FIn, FCVIn, FRespIn, FOut: TSedaiPatchPort;
+    FLag: Single;
+    FZ1: Single;
+  public
+    constructor Create; override;
+    procedure ResetState; override;
+    procedure RenderSample(AIndex: Integer); override;
+  end;
+
 function CreateElectronicModuleByType(const ATypeName: string): TSedaiPatchModule;
 function KnownElectronicTypes: string;
 
@@ -396,6 +466,208 @@ end;
 
 { factory }
 
+
+{ TSedaiModQuant }
+
+constructor TSedaiModQuant.Create;
+begin
+  inherited Create;
+  TypeName := 'quant';
+  Rate := mrBoth;
+  SetScale('chromatic');
+  FIn  := AddInput('in', prPitch, 0.0);
+  FOut := AddOutput('out', prPitch);
+end;
+
+procedure TSedaiModQuant.SetScale(const AName: string);
+
+  procedure Use(const A: array of Integer);
+  var
+    I: Integer;
+  begin
+    SetLength(FDegrees, Length(A));
+    for I := 0 to High(A) do FDegrees[I] := A[I];
+  end;
+
+var
+  N: string;
+begin
+  N := LowerCase(Trim(AName));
+  if N = 'chromatic' then Use([0,1,2,3,4,5,6,7,8,9,10,11])
+  else if N = 'major' then Use([0,2,4,5,7,9,11])
+  else if N = 'minor' then Use([0,2,3,5,7,8,10])
+  else if N = 'dorian' then Use([0,2,3,5,7,9,10])
+  else if N = 'phrygian' then Use([0,1,3,5,7,8,10])
+  else if N = 'pentatonic' then Use([0,2,4,7,9])
+  else if N = 'minorpent' then Use([0,3,5,7,10])
+  else if N = 'blues' then Use([0,3,5,6,7,10])
+  else if N = 'whole' then Use([0,2,4,6,8,10])
+  else if N = 'octave' then Use([0])
+  else if N = 'fifth' then Use([0,7])
+  else raise Exception.CreateFmt('unknown scale "%s" — one of: chromatic, '
+    + 'major, minor, dorian, phrygian, pentatonic, minorpent, blues, whole, '
+    + 'octave, fifth', [AName]);
+end;
+
+function TSedaiModQuant.Configure(const AKey, AValue: string): Boolean;
+begin
+  if SameText(AKey, 'scale') then
+  begin
+    SetScale(AValue);
+    Exit(True);
+  end;
+  Result := inherited Configure(AKey, AValue);
+end;
+
+procedure TSedaiModQuant.RenderSample(AIndex: Integer);
+var
+  V, Semis, Best, D, BestD: Single;
+  Oct, I: Integer;
+begin
+  // Volts per octave in, volts per octave out: quantising happens in semitones
+  // because that is the unit a scale is written in, and the octave is carried
+  // separately so the scale repeats correctly below zero as well as above.
+  V := FIn.Read(AIndex);
+  Semis := V * 12.0;
+  Oct := Floor(Semis / 12.0);
+  Semis := Semis - Oct * 12.0;
+
+  Best := FDegrees[0];
+  BestD := Abs(Semis - Best);
+  for I := 1 to High(FDegrees) do
+  begin
+    D := Abs(Semis - FDegrees[I]);
+    if D < BestD then begin BestD := D; Best := FDegrees[I]; end;
+  end;
+  // The octave above closes the scale: without it every note in the top gap
+  // snaps down instead of up to the tonic.
+  if Abs(Semis - 12.0) < BestD then Best := 12.0;
+
+  FOut.Write(AIndex, (Oct * 12.0 + Best) / 12.0);
+end;
+
+{ TSedaiModFollow }
+
+constructor TSedaiModFollow.Create;
+begin
+  inherited Create;
+  TypeName := 'follow';
+  Rate := mrBoth;
+  FLevel := 0.0;
+  FIn    := AddInput('in', prAudio, 0.0);
+  FAttIn := AddInput('attack', prUnipolar, 0.005);
+  FAttIn.Min := 0.0001; FAttIn.Max := 2.0;
+  FRelIn := AddInput('release', prUnipolar, 0.120);
+  FRelIn.Min := 0.0001; FRelIn.Max := 8.0;
+  FOut   := AddOutput('out', prUnipolar);
+end;
+
+procedure TSedaiModFollow.ResetState;
+begin
+  inherited ResetState;
+  FLevel := 0.0;
+end;
+
+procedure TSedaiModFollow.RenderSample(AIndex: Integer);
+var
+  X, T, C: Single;
+begin
+  X := Abs(FIn.Read(AIndex));
+  // Separate coefficients: a follower that falls as slowly as it rises smears
+  // every transient it was supposed to detect.
+  if X > FLevel then T := FAttIn.Read(AIndex) else T := FRelIn.Read(AIndex);
+  if T < 0.0001 then T := 0.0001;
+  C := 1.0 - Exp(-1.0 / (T * FSR));
+  FLevel := FLevel + C * (X - FLevel);
+  FOut.Write(AIndex, FLevel);
+end;
+
+{ TSedaiModFold }
+
+constructor TSedaiModFold.Create;
+begin
+  inherited Create;
+  TypeName := 'fold';
+  Rate := mrBoth;
+  FIn    := AddInput('in', prAudio, 0.0);
+  FFoldIn := AddInput('fold', prUnipolar, 1.0);
+  FFoldIn.Min := 0.0; FFoldIn.Max := 16.0;
+  FSymIn := AddInput('sym', prBipolar, 0.0);
+  FSymIn.Min := -1.0; FSymIn.Max := 1.0;
+  FOut   := AddOutput('out', prAudio);
+end;
+
+procedure TSedaiModFold.RenderSample(AIndex: Integer);
+var
+  X: Single;
+  Guard: Integer;
+begin
+  X := FIn.Read(AIndex) * FFoldIn.Read(AIndex) + FSymIn.Read(AIndex);
+  // Reflect about +-1 until the value is back inside. Bounded rather than
+  // while(true): a runaway drive would otherwise spin here forever, and a
+  // signal that needs more than 32 reflections is already past anything useful.
+  Guard := 0;
+  while ((X > 1.0) or (X < -1.0)) and (Guard < 32) do
+  begin
+    if X > 1.0 then X := 2.0 - X else X := -2.0 - X;
+    Inc(Guard);
+  end;
+  if X > 1.0 then X := 1.0 else if X < -1.0 then X := -1.0;
+  FOut.Write(AIndex, X);
+end;
+
+{ TSedaiModLPG }
+
+constructor TSedaiModLPG.Create;
+begin
+  inherited Create;
+  TypeName := 'lpg';
+  Rate := mrBoth;
+  FLag := 0.0;
+  FZ1 := 0.0;
+  FIn     := AddInput('in', prAudio, 0.0);
+  FCVIn   := AddInput('cv', prUnipolar, 0.0);
+  FCVIn.Min := 0.0; FCVIn.Max := 1.0;
+  FRespIn := AddInput('resp', prUnipolar, 0.020);
+  FRespIn.Min := 0.0; FRespIn.Max := 1.0;
+  FOut    := AddOutput('out', prAudio);
+end;
+
+procedure TSedaiModLPG.ResetState;
+begin
+  inherited ResetState;
+  FLag := 0.0;
+  FZ1 := 0.0;
+end;
+
+procedure TSedaiModLPG.RenderSample(AIndex: Integer);
+var
+  CV, T, C, Cut, G, A: Single;
+begin
+  CV := FCVIn.Read(AIndex);
+  if CV < 0.0 then CV := 0.0 else if CV > 1.0 then CV := 1.0;
+
+  // The vactrol. Its lag is not a defect to be minimised — it is the reason a
+  // low-pass gate sounds like something being struck rather than switched.
+  T := FRespIn.Read(AIndex);
+  if T < 0.0001 then FLag := CV
+  else
+  begin
+    C := 1.0 - Exp(-1.0 / (T * FSR));
+    FLag := FLag + C * (CV - FLag);
+  end;
+
+  // One control, both parameters: quieter is also duller, which is what a
+  // struck object does and what a VCA on its own never does.
+  Cut := 40.0 + FLag * FLag * 9000.0;
+  if Cut > FSR * 0.45 then Cut := FSR * 0.45;
+  A := 1.0 - Exp(-2.0 * Pi * Cut / FSR);
+  FZ1 := FZ1 + A * (FIn.Read(AIndex) - FZ1);
+
+  G := FLag * FLag;
+  FOut.Write(AIndex, FZ1 * G);
+end;
+
 function CreateElectronicModuleByType(const ATypeName: string): TSedaiPatchModule;
 begin
   if SameText(ATypeName, 'seq') then Result := TSedaiModSeq.Create
@@ -403,12 +675,16 @@ begin
   else if SameText(ATypeName, 'ring') then Result := TSedaiModRing.Create
   else if SameText(ATypeName, 'glide') then Result := TSedaiModGlide.Create
   else if SameText(ATypeName, 'noise') then Result := TSedaiModNoise.Create
+  else if SameText(ATypeName, 'quant') then Result := TSedaiModQuant.Create
+  else if SameText(ATypeName, 'follow') then Result := TSedaiModFollow.Create
+  else if SameText(ATypeName, 'fold') then Result := TSedaiModFold.Create
+  else if SameText(ATypeName, 'lpg') then Result := TSedaiModLPG.Create
   else Result := nil;
 end;
 
 function KnownElectronicTypes: string;
 begin
-  Result := 'seq, sh, ring, glide, noise';
+  Result := 'seq, sh, ring, glide, noise, quant, follow, fold, lpg';
 end;
 
 end.
