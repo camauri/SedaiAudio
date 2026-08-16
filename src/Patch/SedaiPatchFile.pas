@@ -26,7 +26,7 @@ unit SedaiPatchFile;
 interface
 
 uses
-  SysUtils, Classes, SedaiPatchGraph, SedaiPatchModules;
+  SysUtils, Classes, SedaiPatchGraph, SedaiPatchModules, SedaiPatchLegacy;
 
 type
   TSedaiPatchLoadResult = record
@@ -153,9 +153,12 @@ begin
       begin Fail('module needs a type'); Exit; end;
 
       M := CreateModuleByType(Parts[0]);
+      // Native modules first, then the wrappers around SAF's existing units.
+      if M = nil then M := CreateLegacyModuleByType(Parts[0]);
       if M = nil then
       begin
-        Fail(Format('unknown module type "%s" (known: %s)', [Parts[0], KnownModuleTypes]));
+        Fail(Format('unknown module type "%s"'#10'  native: %s'#10'  bridged: %s',
+                    [Parts[0], KnownModuleTypes, KnownLegacyTypes]));
         Exit;
       end;
       if not AGraph.AddModule(M, Key) then

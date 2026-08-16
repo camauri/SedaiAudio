@@ -54,6 +54,7 @@ oldest is stolen.
 | `feedback.patch` | A real loop: the filter's output returns to its own input through a VCA. The graph detects the cycle, isolates those two modules, and runs only them one sample at a time. Everything else stays at block rate. |
 | `poly.patch` | Meant to be played. Its keyboard connections are `normalled`, so they are there until you patch something into those inputs yourself. Render it with `patch_play`. |
 | `lead.patch` | A subtractive lead with some bite. Two detuned oscillators plus a sub an octave down, and — the thing that actually matters — a SECOND envelope on the filter cutoff. Measured, its spectral centroid sweeps 4.1x from attack to sustain, where `poly.patch` sits at 1.0x and sounds static because of it. |
+| `fx.patch` | The bridge at work: a native lead running into SAF's own distortion, chorus and reverb — units that had been written long before and that no patch could reach. |
 | `echo.patch` | A loop through a 120 ms delay line. The graph works out that the shortest cycle carries 5293 samples of delay and advances the loop in chunks of 5293 rather than one at a time - bit-identical output, 42% faster. |
 
 Format:
@@ -68,7 +69,14 @@ Values take unit suffixes: `440Hz`, `2ms`, `120ms`, `50%`, or a plain number.
 Pitch inputs are volts-per-octave: `1.0` is one octave, so a constant offset is a
 transposition and any modulator is automatically musical.
 
-Module types: `osc`, `filter`, `amp`, `env`, `lfo`, `delay`, `note`.
+Native module types: `osc`, `filter`, `amp`, `env`, `lfo`, `delay`, `note`.
+
+Bridged from SAF's existing units, all prefixed `s`: `sdelay`, `schorus`,
+`sflanger`, `sphaser`, `sreverb`, `scomp`, `slimiter`, `sdist`. Each takes a
+`mix` input for dry/wet, provided by the bridge itself so a patch does not have
+to know which units have one of their own. They are block-oriented, so they
+declare `supports=block` and the graph refuses to put them inside a feedback
+cycle.
 
 A connection marked `normalled` is a default that yields: it is dropped the
 moment anything else is patched into the same input. That is what a semi-modular

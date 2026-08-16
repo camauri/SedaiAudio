@@ -1,0 +1,39 @@
+# Il ponte al lavoro: il lead nativo entra negli effetti che SAF aveva gia'
+# scritto da tempo e che nessuna patch poteva raggiungere.
+# I moduli con la "s" davanti sono unit SAF esistenti, avvolte.
+module note = note
+
+module osc1 = osc shape=saw    freq=130.81
+module osc2 = osc shape=square freq=130.81
+module fenv = env a=0.001 d=0.20 s=0.15 r=0.15
+module aenv = env a=0.002 d=0.30 s=0.5  r=0.30
+module filt = filter mode=lowpass cutoff=420
+module amp  = amp
+
+connect note.pitch -> osc1.pitch normalled
+connect note.pitch -> osc2.pitch normalled
+set     osc2.pitch = -1.0
+connect note.gate  -> fenv.gate  normalled
+connect note.gate  -> aenv.gate  normalled
+
+connect osc1.out -> filt.in amount=0.5
+connect osc2.out -> filt.in amount=0.3
+set     filt.res = 0.55
+connect fenv.out -> filt.cutoff amount=3.4
+connect filt.out -> amp.in
+connect aenv.out -> amp.gain amount=0.3
+
+# --- da qui in poi sono le unit storiche di SAF ---
+module dist = sdist   drive=2.2 tone=0.6 gain=0.7
+module cho  = schorus rate=0.6 depth=0.4
+module rev  = sreverb size=0.72 damping=0.4 width=0.9
+
+set     dist.mix = 0.55
+set     cho.mix  = 0.35
+set     rev.mix  = 0.28
+
+connect amp.out  -> dist.in
+connect dist.out -> cho.in
+connect cho.out  -> rev.in
+
+output  rev.out

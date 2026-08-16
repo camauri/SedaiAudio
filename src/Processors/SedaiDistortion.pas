@@ -297,25 +297,29 @@ begin
   Result := FToneState[AChannel];
 end;
 
+// NB: the local used to be called Processed, which collides with the inherited
+// TSedaiSignalNode.Processed property and made this unit fail to compile. It had
+// never been caught because nothing in the project referenced SedaiDistortion —
+// the patch-graph bridge is the first thing that does.
 function TSedaiDistortion.ProcessSample(AInput: Single; AChannel: Integer): Single;
 var
-  Processed, Filtered: Single;
+  Shaped, Filtered: Single;
 begin
   // Apply distortion based on type
   case FDistortionType of
-    dtSoftClip:    Processed := ProcessSoftClip(AInput);
-    dtHardClip:    Processed := ProcessHardClip(AInput);
-    dtFoldback:    Processed := ProcessFoldback(AInput);
-    dtBitcrush:    Processed := ProcessBitcrush(AInput, AChannel);
-    dtTube:        Processed := ProcessTube(AInput);
-    dtTape:        Processed := ProcessTape(AInput);
-    dtRectify:     Processed := ProcessRectify(AInput);
-    dtAsymmetric:  Processed := ProcessAsymmetric(AInput);
-    else           Processed := AInput;
+    dtSoftClip:    Shaped := ProcessSoftClip(AInput);
+    dtHardClip:    Shaped := ProcessHardClip(AInput);
+    dtFoldback:    Shaped := ProcessFoldback(AInput);
+    dtBitcrush:    Shaped := ProcessBitcrush(AInput, AChannel);
+    dtTube:        Shaped := ProcessTube(AInput);
+    dtTape:        Shaped := ProcessTape(AInput);
+    dtRectify:     Shaped := ProcessRectify(AInput);
+    dtAsymmetric:  Shaped := ProcessAsymmetric(AInput);
+    else           Shaped := AInput;
   end;
 
   // Apply tone filter
-  Filtered := ApplyToneFilter(Processed, AChannel);
+  Filtered := ApplyToneFilter(Shaped, AChannel);
 
   // Apply output gain
   Filtered := Filtered * FOutputGain;
