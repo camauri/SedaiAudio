@@ -1,0 +1,18 @@
+# Le famiglie sostenute: arco e ancia, con vibrato dal LFO sul pitch.
+module clk = lfo shape=square rate=1.2
+module seq = seq values=0,4,7,5 gatems=700
+module vib = lfo shape=sine rate=5.2
+module bw  = bowed freq=196
+module rd  = reed  freq=196
+module m   = amp
+connect clk.out -> seq.clock
+connect seq.out -> bw.pitch
+connect seq.out -> rd.pitch
+connect vib.out -> bw.pitch amount=0.006
+connect vib.out -> rd.pitch amount=0.006
+connect seq.gate -> bw.gate
+connect seq.gate -> rd.gate
+connect bw.out -> m.in amount=0.55
+connect rd.out -> m.in amount=0.45
+set m.gain = 0.9
+output m.out

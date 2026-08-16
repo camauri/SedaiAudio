@@ -13,7 +13,8 @@
 //   connect osc1.out -> filt.in
 //   connect note.pitch -> osc1.pitch normalled   # a default that yields
 //   connect lfo1.out -> osc1.pitch amount=0.02
-//   output  amp.out
+//   output  pan.l           # ogni riga output aggiunge un CANALE, in ordine
+//   output  pan.r
 //
 // Numbers accept unit suffixes: 440Hz, 2ms, 120ms, 50%, plain floats.
 //
@@ -26,7 +27,7 @@ unit SedaiPatchFile;
 interface
 
 uses
-  SysUtils, Classes, SedaiPatchGraph, SedaiPatchModules, SedaiPatchElectronic, SedaiPatchLegacy;
+  SysUtils, Classes, SedaiPatchGraph, SedaiPatchModules, SedaiPatchElectronic, SedaiPatchInstruments, SedaiPatchLegacy;
 
 type
   TSedaiPatchLoadResult = record
@@ -154,12 +155,14 @@ begin
 
       M := CreateModuleByType(Parts[0]);
       if M = nil then M := CreateElectronicModuleByType(Parts[0]);
+      if M = nil then M := CreateInstrumentModuleByType(Parts[0]);
       // Native modules first, then the wrappers around SAF's existing units.
       if M = nil then M := CreateLegacyModuleByType(Parts[0]);
       if M = nil then
       begin
-        Fail(Format('unknown module type "%s"'#10'  core: %s'#10'  electronic: %s'#10'  bridged: %s',
-                    [Parts[0], KnownModuleTypes, KnownElectronicTypes, KnownLegacyTypes]));
+        Fail(Format('unknown module type "%s"'#10'  core: %s'#10'  electronic: %s'#10'  instruments: %s'#10'  bridged: %s',
+                    [Parts[0], KnownModuleTypes, KnownElectronicTypes,
+                     KnownInstrumentTypes, KnownLegacyTypes]));
         Exit;
       end;
       if not AGraph.AddModule(M, Key) then
@@ -234,7 +237,7 @@ begin
     begin
       if Length(Parts) < 2 then
       begin Fail('output needs: output <module>.<port>'); Exit; end;
-      if not AGraph.SetOutput(Parts[1]) then
+      if not AGraph.AddOutputChannel(Parts[1]) then
       begin Fail(AGraph.LastError); Exit; end;
       Continue;
     end;

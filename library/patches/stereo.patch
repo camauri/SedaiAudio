@@ -1,0 +1,40 @@
+# Due uscite: due segnali SCORRELATI, non un segnale panpottato.
+# La larghezza nasce dalla differenza fra i due, che e' il modo in cui l'orecchio
+# la percepisce davvero — non da uno strumento a sinistra e uno a destra.
+module clk  = lfo shape=square rate=6.0
+module seq  = seq values=0,7,12,7,3,10,15,10 gatems=90
+module osc1 = osc shape=saw freq=110
+module osc2 = osc shape=saw freq=110
+module aenv = env a=0.002 d=0.22 s=0.3 r=0.2
+module fenv = env a=0.001 d=0.16 s=0.1 r=0.1
+
+# due filtri leggermente diversi: la decorrelazione nasce qui
+module fl   = filter mode=lowpass cutoff=520 res=0.6
+module fr   = filter mode=lowpass cutoff=545 res=0.6
+module al   = amp
+module ar   = amp
+
+connect clk.out  -> seq.clock
+connect seq.out  -> osc1.pitch
+connect seq.out  -> osc2.pitch
+set     osc2.pitch = 0.004        # scordatura minima: battimenti lenti
+connect seq.gate -> aenv.gate
+connect seq.gate -> fenv.gate
+
+# ENTRAMBI gli oscillatori vanno a ENTRAMBI i filtri: i due canali sono la
+# stessa sorgente colorata diversamente, non due strumenti separati. E' cosi'
+# che si ottiene larghezza senza che il suono si sfaldi in due meta'.
+connect osc1.out -> fl.in amount=0.6
+connect osc2.out -> fl.in amount=0.4
+connect osc1.out -> fr.in amount=0.4
+connect osc2.out -> fr.in amount=0.6
+connect fenv.out -> fl.cutoff amount=3.2
+connect fenv.out -> fr.cutoff amount=3.0
+
+connect fl.out   -> al.in
+connect fr.out   -> ar.in
+connect aenv.out -> al.gain amount=0.45
+connect aenv.out -> ar.gain amount=0.45
+
+output al.out
+output ar.out

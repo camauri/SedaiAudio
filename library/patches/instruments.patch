@@ -1,0 +1,16 @@
+# I motori di sintesi di SAF dentro il grafo: la corda pizzicata suona,
+# la percussione modale la accompagna, tutto guidato dallo stesso sequencer.
+module clk = lfo shape=square rate=4.0
+module seq = seq values=0,12,7,3,5,0,10,7 gatems=110
+module kp  = karplus freq=110
+module md  = modal freq=220
+module m   = amp
+connect clk.out -> seq.clock
+connect seq.out -> kp.pitch
+connect seq.out -> md.pitch
+connect seq.gate -> kp.gate
+connect seq.gate -> md.gate
+connect kp.out  -> m.in amount=0.7
+connect md.out  -> m.in amount=0.3
+set m.gain = 0.8
+output m.out

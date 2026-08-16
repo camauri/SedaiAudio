@@ -52,7 +52,7 @@ type
   TSedaiPatchVoicePool = class
   private
     FVoices: array of TSedaiPatchVoice;
-    FMix: array of Single;
+    FMix: array of array of Single;   // [channel][sample]
     FSampleRate: Cardinal;
     FBlockSize: Integer;
     FClock: QWord;
@@ -79,7 +79,8 @@ type
     // Render ACount frames of the mix. Only voices that are actually sounding
     // are walked, so an idle pool costs nothing.
     procedure Render(ACount: Integer);
-    function MixSample(AIndex: Integer): Single; inline;
+    function MixSample(AChannel, AIndex: Integer): Single; inline;
+    function OutputCount: Integer;
     function ActiveVoices: Integer;
 
     function Describe: string;
@@ -189,7 +190,9 @@ var
 begin
   FSampleRate := ASampleRate;
   FBlockSize := ABlockSize;
-  if Length(FMix) < ABlockSize then SetLength(FMix, ABlockSize);
+  SetLength(FMix, OutputCount);
+  for I := 0 to High(FMix) do
+    if Length(FMix[I]) < ABlockSize then SetLength(FMix[I], ABlockSize);
   for I := 0 to High(FVoices) do
   begin
     FVoices[I].FGraph.Prepare(ASampleRate, ABlockSize);
@@ -288,12 +291,17 @@ end;
 
 procedure TSedaiPatchVoicePool.Render(ACount: Integer);
 var
-  I, K: Integer;
+  I, K, C, NCh: Integer;
   V: TSedaiPatchVoice;
   S, Peak: Single;
 begin
-  if ACount > Length(FMix) then SetLength(FMix, ACount);
-  for K := 0 to ACount - 1 do FMix[K] := 0.0;
+  NCh := OutputCount;
+  if Length(FMix) < NCh then SetLength(FMix, NCh);
+  for C := 0 to NCh - 1 do
+  begin
+    if Length(FMix[C]) < ACount then SetLength(FMix[C], ACount);
+    for K := 0 to ACount - 1 do FMix[C][K] := 0.0;
+  end;
 
   for I := 0 to High(FVoices) do
   begin
@@ -302,12 +310,13 @@ begin
 
     V.FGraph.Render(ACount);
     Peak := 0.0;
-    for K := 0 to ACount - 1 do
-    begin
-      S := V.FGraph.OutputSample(K);
-      if Abs(S) > Peak then Peak := Abs(S);
-      FMix[K] := FMix[K] + S;
-    end;
+    for C := 0 to NCh - 1 do
+      for K := 0 to ACount - 1 do
+      begin
+        S := V.FGraph.OutputSample(C, K);
+        if Abs(S) > Peak then Peak := Abs(S);
+        FMix[C][K] := FMix[C][K] + S;
+      end;
 
     // Retire the voice when the gate is shut and the sound has actually gone,
     // measured on the output rather than guessed from the envelope.
@@ -326,13 +335,24 @@ begin
   end;
 
   if FMasterGain <> 1.0 then
-    for K := 0 to ACount - 1 do FMix[K] := FMix[K] * FMasterGain;
+    for C := 0 to NCh - 1 do
+      for K := 0 to ACount - 1 do FMix[C][K] := FMix[C][K] * FMasterGain;
 end;
 
-function TSedaiPatchVoicePool.MixSample(AIndex: Integer): Single;
+function TSedaiPatchVoicePool.MixSample(AChannel, AIndex: Integer): Single;
 begin
-  if (AIndex >= 0) and (AIndex < Length(FMix)) then Result := FMix[AIndex]
-  else Result := 0.0;
+  if (AChannel >= 0) and (AChannel < Length(FMix)) and
+     (AIndex >= 0) and (AIndex < Length(FMix[AChannel])) then
+    Result := FMix[AChannel][AIndex]
+  else
+    Result := 0.0;
+end;
+
+// Every voice is the same patch, so they all declare the same channel count.
+function TSedaiPatchVoicePool.OutputCount: Integer;
+begin
+  if Length(FVoices) = 0 then Result := 1
+  else Result := FVoices[0].FGraph.OutputCount;
 end;
 
 function TSedaiPatchVoicePool.VoiceCount: Integer;

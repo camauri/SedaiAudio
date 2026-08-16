@@ -193,7 +193,7 @@ type
     FSampleRate: Cardinal;
     FBlockSize: Integer;
     FCompiled: Boolean;
-    FOutputPort: TSedaiPatchPort;
+    FOutputs: array of TSedaiPatchPort;
     FLastError: string;
     // Tarjan working state
     FIndex: array of Integer;
@@ -221,7 +221,12 @@ type
     function Connect(const ASource, ADest: string; AAmount: Single = 1.0;
                      ANormalled: Boolean = False): Boolean;
     function SetValue(const APath: string; AValue: Single): Boolean;
-    function SetOutput(const APath: string): Boolean;
+    // Each `output` line adds a CHANNEL, in declaration order. One line is a
+    // mono patch, two are stereo, eight are 7.1 — the number of output channels
+    // is a property of the patch, not of the ports, which stay one signal each.
+    function AddOutputChannel(const APath: string): Boolean;
+    function OutputCount: Integer;
+    function ModuleAt(AIndex: Integer): TSedaiPatchModule;
 
     // Decompose, order, validate. AForceSampleRate makes every stage advance one
     // sample at a time (`mode = sample` in the patch file) — useful to compare
@@ -233,7 +238,7 @@ type
     // Render ACount frames. Acyclic stages go through RenderBlock in one call;
     // cyclic stages advance sample by sample, and only those.
     procedure Render(ACount: Integer);
-    function OutputSample(AIndex: Integer): Single; inline;
+    function OutputSample(AChannel, AIndex: Integer): Single; inline;
 
     function StageCount: Integer;
     function StageIsCycle(AIndex: Integer): Boolean;
@@ -246,7 +251,7 @@ type
     property SampleRate: Cardinal read FSampleRate;
     property BlockSize: Integer read FBlockSize;
     property Compiled: Boolean read FCompiled;
-    property OutputPort: TSedaiPatchPort read FOutputPort;
+
   end;
 
 implementation
@@ -525,7 +530,7 @@ begin
   FSampleRate := 44100;
   FBlockSize := 256;
   FCompiled := False;
-  FOutputPort := nil;
+  SetLength(FOutputs, 0);
   FLastError := '';
   FCompCount := 0;
 end;
@@ -646,9 +651,10 @@ begin
   P.Value := AValue;
 end;
 
-function TSedaiPatchGraph.SetOutput(const APath: string): Boolean;
+function TSedaiPatchGraph.AddOutputChannel(const APath: string): Boolean;
 var
   P: TSedaiPatchPort;
+  N: Integer;
 begin
   P := FindPort(APath);
   if P = nil then Exit(False);
@@ -657,8 +663,21 @@ begin
     FLastError := Format('"%s" is not an output', [APath]);
     Exit(False);
   end;
-  FOutputPort := P;
+  N := Length(FOutputs);
+  SetLength(FOutputs, N + 1);
+  FOutputs[N] := P;
   Result := True;
+end;
+
+function TSedaiPatchGraph.OutputCount: Integer;
+begin
+  Result := Length(FOutputs);
+end;
+
+function TSedaiPatchGraph.ModuleAt(AIndex: Integer): TSedaiPatchModule;
+begin
+  if (AIndex >= 0) and (AIndex < Length(FModules)) then Result := FModules[AIndex]
+  else Result := nil;
 end;
 
 function TSedaiPatchGraph.ModuleIndex(AModule: TSedaiPatchModule): Integer;
@@ -961,9 +980,10 @@ begin
     end;
   end;
 
-  if FOutputPort = nil then
+  if Length(FOutputs) = 0 then
   begin
-    FLastError := 'the patch declares no output (use: output <module>.<port>)';
+    FLastError := 'the patch declares no output (use: output <module>.<port>;' +
+                  ' repeat the line for more channels)';
     Exit;
   end;
 
@@ -1018,9 +1038,12 @@ begin
   end;
 end;
 
-function TSedaiPatchGraph.OutputSample(AIndex: Integer): Single;
+function TSedaiPatchGraph.OutputSample(AChannel, AIndex: Integer): Single;
 begin
-  if FOutputPort <> nil then Result := FOutputPort.Sample(AIndex) else Result := 0.0;
+  if (AChannel >= 0) and (AChannel < Length(FOutputs)) and (FOutputs[AChannel] <> nil) then
+    Result := FOutputs[AChannel].Sample(AIndex)
+  else
+    Result := 0.0;
 end;
 
 function TSedaiPatchGraph.StageCount: Integer;
@@ -1077,8 +1100,8 @@ begin
     else
       Result := Result + Format('  stage %d  [block]       %s'#10, [S, Line]);
   end;
-  Result := Result + Format('  %d modules in %d stages, %d of which need sample rate'#10,
-                            [NMod, Length(FStages), NCyc]);
+  Result := Result + Format('  %d modules in %d stages, %d of which need sample rate, %d output channel(s)'#10,
+                            [NMod, Length(FStages), NCyc, Length(FOutputs)]);
 end;
 
 end.

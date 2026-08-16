@@ -134,8 +134,11 @@ type
     FOut: TSedaiPatchPort;
     FBlock: array of Single;
     FCount: Integer;
+    FChannel: Integer;
   public
     constructor Create; override;
+    function Configure(const AKey, AValue: string): Boolean; override;
+    property Channel: Integer read FChannel;
     procedure Prepare(ASampleRate: Cardinal; ABlockSize: Integer); override;
     procedure ResetState; override;
     procedure RenderSample(AIndex: Integer); override;
@@ -569,7 +572,18 @@ begin
   TypeName := 'input';
   Rate := mrBoth;
   FCount := 0;
+  FChannel := 0;
   FOut := AddOutput('out', prAudio);
+end;
+
+// `module l = input channel=0` / `module r = input channel=1`: a patch declares
+// how many inputs it wants and which channel each takes, the same way `output`
+// lines declare the outputs.
+function TSedaiModInput.Configure(const AKey, AValue: string): Boolean;
+begin
+  Result := True;
+  if SameText(AKey, 'channel') then FChannel := StrToIntDef(AValue, 0)
+  else Result := inherited Configure(AKey, AValue);
 end;
 
 procedure TSedaiModInput.Prepare(ASampleRate: Cardinal; ABlockSize: Integer);

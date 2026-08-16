@@ -123,7 +123,46 @@ Oscillators are band-limited (PolyBLEP on the discontinuities, and the triangle
 is built by integrating the corrected square), which puts residual aliasing 17
 to 18 dB below the naive shapes.
 
+## The instruments
+
+SAF's synthesis engines are modules too — `karplus` (plucked string), `modal`
+(struck percussion), `bowed` (bowed string), `reed` (single-reed wind) and
+`fmop` (an FM operator). Each takes `pitch`, `gate` and `amp`, and `freq=` at
+declaration sets the note the pitch input is relative to. Pitch stays live
+between triggers, so an LFO patched into it gives vibrato on a sounding note
+rather than only at the attack — see `sustained.patch`.
+
+They are sample-first, so unlike the bridged effects they may sit inside a
+feedback cycle.
+
+Each carries an output trim, because the engines were validated separately and
+land as much as 24 dB apart on their own (at 220 Hz, RMS: FM operator 0.458,
+bowed string 0.030). The trim brings a bare module to about RMS 0.15, so the
+five are usable in one patch without one burying another; it only sets the
+default of the `amp` input, which the patch still owns.
+
+Not yet modules, and deliberately: additive, partial, wavetable and sample
+playback. Those four need data — harmonic tracks, a table, a file — so they
+need a loading path in the patch file first, and wrapping them empty would give
+four silent modules and the appearance of coverage.
+
+## Ins and outs
+
 A port carries **one mono signal**. That is a decision, not an omission: stereo
 inside a port would force every module to know a channel count and every patch to
-care about it. Stereo arrives later as a pair of ports or an explicit per-port
-channel count.
+care about it.
+
+The *boundary* is where channels exist. Repeat the `output` line and the patch
+has that many channels, in declaration order; `module l = input channel=0` takes
+a channel of the source file. So a patch can be mono in and stereo out, stereo
+in and stereo out, or anything else — `stereo.patch` and `fx_stereo.patch` are
+the two examples.
+
+Width comes from the two channels being *different*, not from one signal panned.
+But not arbitrarily different: two wholly independent voices measure a left/right
+correlation near zero, which is the abuse of the early stereo era — one
+instrument hard left, another hard right, a picture no room produces. A real
+violin measured here sits at correlation 0.771. So `stereo.patch` sends both
+oscillators to both filters at different amounts and detunes slightly: measured
+correlation 0.923, side/mid 0.201, and it survives a mono fold with no
+cancellation.
