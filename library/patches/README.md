@@ -31,6 +31,16 @@ octave, SPACE releases everything, `R` forces a reload, `I` prints the compiled
 stages, `Q` quits. It needs a REAL terminal — with stdin redirected the keyboard
 stays inert by design.
 
+Or play a MIDI file through the patch:
+
+    ./build.sh --source job/tools/saf/patch_midi.lpr --dest bin/<plat>/patch_midi
+    bin/<plat>/patch_midi song.mid library/patches/poly.patch out.wav 16 0 0 0.35
+                          ^mid     ^patch                    ^wav  ^voices ^s ^transpose ^gain
+
+Voices sum, so a chord is louder than a single note and the gain is yours to
+set — a dynamic normaliser would pump. `seconds = 0` renders the whole file plus
+two seconds for the tails to ring out.
+
 Notes are MIDI numbers, and 60 sounds the patch's own base frequency. Give them
 onsets to arpeggiate: `60:0,64:0.3,67:0.6`. A patch is a VOICE TEMPLATE — the
 pool builds N independent instances of it, so each note has its own oscillator
