@@ -1,0 +1,27 @@
+# Lo stack completo in una patch: sorgente -> corpo -> spazialita'.
+# Un'ancia fisica, dentro un tubo accordato, messa in movimento nella stanza.
+module clk = lfo shape=square rate=1.1
+module seq = seq values=0,3,7,10,12,10,7,3 gatems=680
+module vib = lfo shape=sine rate=5.0
+module rd  = reed freq=147
+module tb  = tube mode=odd freq=294 res=0.86
+module lx  = lfo shape=sine rate=0.22
+module lz  = lfo shape=sine rate=0.22 phase=0.25
+module sp  = space ref=1.2 max=25 rolloff=1.0
+module wd  = width
+set sp.z = 0.0
+set tb.mix = 0.45
+set wd.width = 1.15
+set rd.amp = 4.0        # recupera cio' che la distanza toglie
+connect clk.out  -> seq.clock
+connect seq.out  -> rd.pitch
+connect vib.out  -> rd.pitch amount=0.004
+connect seq.gate -> rd.gate
+connect rd.out   -> tb.in
+connect tb.out   -> sp.in
+connect lx.out   -> sp.x amount=3.0
+connect lz.out   -> sp.z amount=3.0
+connect sp.out   -> wd.in
+connect sp.outR  -> wd.inR
+output wd.out
+output wd.outR
