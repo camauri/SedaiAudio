@@ -147,6 +147,14 @@ type
     constructor Create; override;
   end;
 
+  TSedaiLegacyEQ = class(TSedaiLegacyModule)
+  protected
+    function CreateUnit: TSedaiSignalNode; override;
+    function ConfigureUnit(const AKey, AValue: string; AFloat: Single): Boolean; override;
+  public
+    constructor Create; override;
+  end;
+
 function CreateLegacyModuleByType(const ATypeName: string): TSedaiPatchModule;
 function KnownLegacyTypes: string;
 
@@ -481,8 +489,10 @@ begin
   else Result := False;
 end;
 
-{ sconv — convolution. The impulse response comes from a patch that loaded it;
-  with no IR it is a pass-through rather than silence. }
+{ sconv — convolution. `ir=<path>` loads the impulse response from any file the
+  SAF reader handles; without one it is a pass-through. Shipping it without a
+  way to load an IR, as it first went out, made it a module that could never do
+  anything. }
 
 constructor TSedaiLegacyConvolver.Create;
 begin
@@ -499,6 +509,80 @@ function TSedaiLegacyConvolver.ConfigureUnit(const AKey, AValue: string;
   AFloat: Single): Boolean;
 begin
   Result := False;
+  if SameText(AKey, 'ir') then
+  begin
+    if not TSedaiConvolver(WrappedUnit).LoadIRFromFile(Trim(AValue), True) then
+      raise Exception.CreateFmt('cannot load impulse response "%s"', [AValue]);
+    Result := True;
+  end
+  else if SameText(AKey, 'irraw') then
+  begin
+    // Same file, level left alone — for an IR that was already normalised
+    // on-axis upstream and would be wrong to rescale here.
+    if not TSedaiConvolver(WrappedUnit).LoadIRFromFile(Trim(AValue), False) then
+      raise Exception.CreateFmt('cannot load impulse response "%s"', [AValue]);
+    Result := True;
+  end;
+end;
+
+
+{ seq3 — the parametric EQ. Named for its shape, not its band count: `seq` was
+  already taken by the step sequencer, and an EQ that could be mistaken for a
+  sequencer in a patch file is worse than an awkward name.
+
+  Bands are addressed by index in the key: `b0type=peaking b0freq=800 b0gain=-4
+  b0q=1.4`, up to eight. A band is enabled by the first key that mentions it,
+  so an unmentioned band stays out of the way. }
+
+constructor TSedaiLegacyEQ.Create;
+begin
+  inherited Create;
+  TypeName := 'seq3';
+end;
+
+function TSedaiLegacyEQ.CreateUnit: TSedaiSignalNode;
+begin
+  Result := TSedaiEQ.Create;
+end;
+
+function TSedaiLegacyEQ.ConfigureUnit(const AKey, AValue: string;
+  AFloat: Single): Boolean;
+var
+  K, Field, V: string;
+  Idx: Integer;
+  BT: TEQBandType;
+begin
+  K := LowerCase(Trim(AKey));
+  if SameText(K, 'gain') then
+  begin
+    TSedaiEQ(WrappedUnit).OutputGain := AFloat;
+    Exit(True);
+  end;
+  // bN<field>
+  if (Length(K) < 3) or (K[1] <> 'b') then Exit(False);
+  Idx := Ord(K[2]) - Ord('0');
+  if (Idx < 0) or (Idx >= MAX_EQ_BANDS) then Exit(False);
+  Field := Copy(K, 3, MaxInt);
+
+  TSedaiEQ(WrappedUnit).SetBandEnabled(Idx, True);
+  Result := True;
+  if Field = 'type' then
+  begin
+    V := LowerCase(Trim(AValue));
+    if V = 'lowcut' then BT := eqLowCut
+    else if V = 'lowshelf' then BT := eqLowShelf
+    else if V = 'peaking' then BT := eqPeaking
+    else if V = 'highshelf' then BT := eqHighShelf
+    else if V = 'highcut' then BT := eqHighCut
+    else raise Exception.CreateFmt('unknown EQ band type "%s" — one of: '
+      + 'lowcut, lowshelf, peaking, highshelf, highcut', [AValue]);
+    TSedaiEQ(WrappedUnit).SetBandType(Idx, BT);
+  end
+  else if Field = 'freq' then TSedaiEQ(WrappedUnit).SetBandFrequency(Idx, AFloat)
+  else if Field = 'gain' then TSedaiEQ(WrappedUnit).SetBandGain(Idx, AFloat)
+  else if Field = 'q' then TSedaiEQ(WrappedUnit).SetBandQ(Idx, AFloat)
+  else if Field = 'off' then TSedaiEQ(WrappedUnit).SetBandEnabled(Idx, False)
+  else Result := False;
 end;
 
 function CreateLegacyModuleByType(const ATypeName: string): TSedaiPatchModule;
@@ -514,13 +598,14 @@ begin
   else if SameText(ATypeName, 'sautospace') then Result := TSedaiLegacyAutoSpace.Create
   else if SameText(ATypeName, 'sbody') then Result := TSedaiLegacyBodyRes.Create
   else if SameText(ATypeName, 'sconv') then Result := TSedaiLegacyConvolver.Create
+  else if SameText(ATypeName, 'seq3') then Result := TSedaiLegacyEQ.Create
   else Result := nil;
 end;
 
 function KnownLegacyTypes: string;
 begin
   Result := 'sdelay, schorus, sflanger, sphaser, sreverb, scomp, slimiter, sdist, '
-          + 'sautospace, sbody, sconv';
+          + 'sautospace, sbody, sconv, seq3';
 end;
 
 end.

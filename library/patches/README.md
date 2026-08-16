@@ -102,7 +102,18 @@ Any `key=value` at a module declaration also sets an input port of the same
 name, so `module gl = glide time=0.012` needs no separate `set` line.
 
 Bridged from SAF's existing units, all prefixed `s`: `sdelay`, `schorus`,
-`sflanger`, `sphaser`, `sreverb`, `scomp`, `slimiter`, `sdist`. Each takes a
+`sflanger`, `sphaser`, `sreverb`, `scomp`, `slimiter`, `sdist`, `sautospace`,
+`sbody`, `sconv`, `seq3`.
+
+`seq3` is the parametric EQ — named for its shape because `seq` was already the
+step sequencer, and an EQ mistakable for a sequencer in a patch file is worse
+than an awkward name. Bands are addressed by index: `b0type=peaking b0freq=800
+b0gain=-4 b0q=1.4`, up to eight, plus `gain` for the output and `bNoff` to
+disable one. A band turns on with the first key that names it.
+
+`sconv` takes `ir=<path>` (or `irraw=` to skip normalisation) and loads the
+impulse response through the SAF reader — `job/ir/` has measured violin, guitar
+and sax bodies. Without an IR it is a pass-through. Each takes a
 `mix` input for dry/wet, provided by the bridge itself so a patch does not have
 to know which units have one of their own. They are block-oriented, so they
 declare `supports=block` and the graph refuses to put them inside a feedback
