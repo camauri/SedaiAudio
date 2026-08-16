@@ -84,6 +84,17 @@ type
     // Processing buffers
     FMasterBuffer: array of Single;
     FProjectBlockSize: Integer;
+    // Per-block scratch for ProcessBlock. These used to be locals, which meant a
+    // SetLength (allocate + free) for the input table, for the buffer table, and
+    // once PER TRACK, on EVERY audio block. FPC's heap takes a lock and cthreads
+    // is installed on Unix, so allocating inside the audio callback is exactly
+    // how dropouts happen. Grown once by EnsureBufferSize, like FMasterBuffer.
+    // Sized by MAX_MIXER_CHANNELS rather than FTrackCount: the render loop only
+    // advances its index for tracks with a valid channel slot, so that is the
+    // real upper bound - and it also removes a latent range error if FTrackCount
+    // ever ran lower than the number of qualifying tracks.
+    FTrackInputs: array of PSingle;
+    FTrackBuffers: array of array of Single;
 
     procedure MarkModified;
     procedure EnsureBufferSize(AFrameCount: Integer);
@@ -250,6 +261,8 @@ begin
 
   SetLength(FUndoStack, 0);
   SetLength(FMasterBuffer, 0);
+  SetLength(FTrackInputs, 0);
+  SetLength(FTrackBuffers, 0);
 
   inherited Destroy;
 end;
@@ -285,11 +298,20 @@ begin
 end;
 
 procedure TSedaiProject.EnsureBufferSize(AFrameCount: Integer);
+var
+  I: Integer;
 begin
+  if Length(FTrackInputs) < MAX_MIXER_CHANNELS then
+    SetLength(FTrackInputs, MAX_MIXER_CHANNELS);
+  if Length(FTrackBuffers) < MAX_MIXER_CHANNELS then
+    SetLength(FTrackBuffers, MAX_MIXER_CHANNELS);
+
   if FProjectBlockSize < AFrameCount then
   begin
     FProjectBlockSize := AFrameCount;
     SetLength(FMasterBuffer, AFrameCount * 2);
+    for I := 0 to MAX_MIXER_CHANNELS - 1 do
+      SetLength(FTrackBuffers[I], AFrameCount * 2);
   end;
 end;
 
@@ -756,9 +778,9 @@ procedure TSedaiProject.ProcessBlock(AOutput: PSingle; AFrameCount: Integer);
 var
   I, J, Ch: Integer;
   Position: Int64;
-  TrackInputs: array of PSingle;
-  TrackBuffers: array of array of Single;
 begin
+  // Allocation-free from here on: EnsureBufferSize has already grown every
+  // scratch array, so nothing below touches the heap.
   EnsureBufferSize(AFrameCount);
 
   // Get current position
@@ -766,11 +788,9 @@ begin
 
   // Inputs are indexed by MIXER CHANNEL SLOT (each track routes to its own
   // channel via MixerChannelIndex), not by a compacted track counter — the
-  // mixer reads AInputs[channelSlot]. TrackBuffers holds the per-track storage.
-  SetLength(TrackInputs, MAX_MIXER_CHANNELS);
+  // mixer reads AInputs[channelSlot]. FTrackBuffers holds the per-track storage.
   for I := 0 to MAX_MIXER_CHANNELS - 1 do
-    TrackInputs[I] := nil;
-  SetLength(TrackBuffers, FTrackCount);
+    FTrackInputs[I] := nil;
 
   // Render each track into its channel slot: audio tracks read their clips,
   // MIDI tracks play their clips through their instrument.
@@ -784,19 +804,20 @@ begin
     Ch := FTracks[I].MixerChannelIndex;
     if (Ch < 0) or (Ch >= MAX_MIXER_CHANNELS) then Continue;
 
-    SetLength(TrackBuffers[J], AFrameCount * 2);
-    if FTracks[I] is TSedaiAudioTrack then
-      FTracks[I].ReadAudio(Position, @TrackBuffers[J][0], AFrameCount, 2)
-    else
-      TSedaiMIDITrack(FTracks[I]).RenderInstrument(Position, @TrackBuffers[J][0], AFrameCount);
+    if J >= MAX_MIXER_CHANNELS then Break;   // scratch is sized to the channel count
 
-    TrackInputs[Ch] := @TrackBuffers[J][0];
+    if FTracks[I] is TSedaiAudioTrack then
+      FTracks[I].ReadAudio(Position, @FTrackBuffers[J][0], AFrameCount, 2)
+    else
+      TSedaiMIDITrack(FTracks[I]).RenderInstrument(Position, @FTrackBuffers[J][0], AFrameCount);
+
+    FTrackInputs[Ch] := @FTrackBuffers[J][0];
     Inc(J);
   end;
 
   // Process through mixer
   if J > 0 then
-    FMixer.ProcessBlock(TrackInputs, AOutput, AFrameCount)
+    FMixer.ProcessBlock(FTrackInputs, AOutput, AFrameCount)
   else
   begin
     // No tracks - silence
