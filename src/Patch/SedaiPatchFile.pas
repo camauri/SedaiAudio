@@ -11,6 +11,7 @@
 //   module  osc1 = osc shape=saw freq=110
 //   set     filt.cutoff = 2.0
 //   connect osc1.out -> filt.in
+//   connect note.pitch -> osc1.pitch normalled   # a default that yields
 //   connect lfo1.out -> osc1.pitch amount=0.02
 //   output  amp.out
 //
@@ -103,6 +104,7 @@ var
   Parts: TStringArray;
   M: TSedaiPatchModule;
   V, Amount: Single;
+  Normalled: Boolean;
 
   procedure Fail(const AMsg: string);
   begin
@@ -199,8 +201,14 @@ begin
       Dst := Parts[0];
 
       Amount := 1.0;
+      Normalled := False;
       for I := 1 to High(Parts) do
       begin
+        if SameText(Parts[I], 'normalled') then
+        begin
+          Normalled := True;
+          Continue;
+        end;
         if not SplitKeyValue(Parts[I], Key, Val) then
         begin Fail(Format('"%s" is not key=value', [Parts[I]])); Exit; end;
         if SameText(Key, 'amount') then
@@ -212,7 +220,7 @@ begin
         begin Fail(Format('connect does not understand "%s"', [Key])); Exit; end;
       end;
 
-      if not AGraph.Connect(Src, Dst, Amount) then
+      if not AGraph.Connect(Src, Dst, Amount, Normalled) then
       begin Fail(AGraph.LastError); Exit; end;
       Continue;
     end;

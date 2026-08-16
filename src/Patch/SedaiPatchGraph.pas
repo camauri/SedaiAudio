@@ -62,7 +62,8 @@ type
   TSedaiPortLink = record
     Source: TSedaiPatchPort;
     Amount: Single;
-    Delayed: Boolean;   // back edge inside a cycle: read the previous sample
+    Delayed: Boolean;    // back edge inside a cycle: read the previous sample
+    Normalled: Boolean;  // a default that yields the moment the input is patched
   end;
 
   { TSedaiPatchPort }
@@ -83,7 +84,13 @@ type
     constructor Create(AOwner: TSedaiPatchModule; const AName: string;
                        AKind: TSedaiPortKind; ARole: TSedaiPortRole);
     procedure EnsureBuffer(ASize: Integer);
-    procedure AddLink(ASource: TSedaiPatchPort; AAmount: Single);
+    procedure AddLink(ASource: TSedaiPatchPort; AAmount: Single;
+                      ANormalled: Boolean = False);
+    // Normalling, the idea that keeps a modular usable: a jack has a default
+    // internal connection which is broken the instant something is plugged into
+    // it. So an instrument makes a sound before you patch anything, and every
+    // patch is a delta from something that already works.
+    procedure DropNormalledIfPatched;
     function LinkCount: Integer;
     function LinkSource(AIndex: Integer): TSedaiPatchPort;
     procedure MarkLinkDelayed(AIndex: Integer);
@@ -208,7 +215,8 @@ type
     function AddModule(AModule: TSedaiPatchModule; const AName: string): Boolean;
     function ModuleByName(const AName: string): TSedaiPatchModule;
     function FindPort(const APath: string): TSedaiPatchPort;   // "osc1.out"
-    function Connect(const ASource, ADest: string; AAmount: Single = 1.0): Boolean;
+    function Connect(const ASource, ADest: string; AAmount: Single = 1.0;
+                     ANormalled: Boolean = False): Boolean;
     function SetValue(const APath: string; AValue: Single): Boolean;
     function SetOutput(const APath: string): Boolean;
 
@@ -274,7 +282,8 @@ begin
   end;
 end;
 
-procedure TSedaiPatchPort.AddLink(ASource: TSedaiPatchPort; AAmount: Single);
+procedure TSedaiPatchPort.AddLink(ASource: TSedaiPatchPort; AAmount: Single;
+  ANormalled: Boolean);
 var
   N: Integer;
 begin
@@ -283,6 +292,27 @@ begin
   FLinks[N].Source := ASource;
   FLinks[N].Amount := AAmount;
   FLinks[N].Delayed := False;
+  FLinks[N].Normalled := ANormalled;
+end;
+
+procedure TSedaiPatchPort.DropNormalledIfPatched;
+var
+  I, W: Integer;
+  Explicit: Boolean;
+begin
+  Explicit := False;
+  for I := 0 to High(FLinks) do
+    if not FLinks[I].Normalled then Explicit := True;
+  if not Explicit then Exit;          // nothing plugged in: the default stands
+
+  W := 0;
+  for I := 0 to High(FLinks) do
+    if not FLinks[I].Normalled then
+    begin
+      if W <> I then FLinks[W] := FLinks[I];
+      Inc(W);
+    end;
+  SetLength(FLinks, W);
 end;
 
 function TSedaiPatchPort.LinkCount: Integer;
@@ -536,7 +566,8 @@ begin
                          [M.ModuleName, Copy(APath, P + 1, Length(APath))]);
 end;
 
-function TSedaiPatchGraph.Connect(const ASource, ADest: string; AAmount: Single): Boolean;
+function TSedaiPatchGraph.Connect(const ASource, ADest: string; AAmount: Single;
+  ANormalled: Boolean): Boolean;
 var
   S, D: TSedaiPatchPort;
 begin
@@ -555,7 +586,7 @@ begin
     FLastError := Format('"%s" is an output; a connection must end at an input', [ADest]);
     Exit;
   end;
-  D.AddLink(S, AAmount);
+  D.AddLink(S, AAmount, ANormalled);
   FCompiled := False;
   Result := True;
 end;
@@ -788,6 +819,14 @@ begin
     FLastError := 'the patch has no modules';
     Exit;
   end;
+
+  // Resolve normalling BEFORE anything looks at the graph: a dropped default
+  // must not appear as an edge, or it would create cycles and stages that the
+  // finished patch does not have.
+  for I := 0 to N - 1 do
+    for J := 0 to FModules[I].PortCount - 1 do
+      if FModules[I].Port(J).Kind = pkInput then
+        FModules[I].Port(J).DropNormalledIfPatched;
 
   SetLength(FStages, 0);
   SetLength(FIndex, N);

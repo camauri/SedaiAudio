@@ -4,17 +4,30 @@ Text patches for the SAF Patch Workbench. A patch is a table of modules, values
 and connections — the ARP 2500 / EMS VCS3 matrix written as rows instead of pins,
 which is why it diffs and versions like source.
 
-Render one to a WAV:
+Render one to a WAV, monophonically:
 
     ./build.sh --source job/tools/saf/patch_render.lpr --dest bin/<plat>/patch_render
     bin/<plat>/patch_render library/patches/basic.patch out.wav 2 0 1.2
                             ^patch                     ^wav   ^s ^semitones ^gate
+
+Or play notes through it polyphonically:
+
+    ./build.sh --source job/tools/saf/patch_play.lpr --dest bin/<plat>/patch_play
+    bin/<plat>/patch_play library/patches/poly.patch out.wav 3 8 60,64,67 1.5
+                          ^patch                     ^wav   ^s ^voices ^notes ^gate
+
+Notes are MIDI numbers, and 60 sounds the patch's own base frequency. Give them
+onsets to arpeggiate: `60:0,64:0.3,67:0.6`. A patch is a VOICE TEMPLATE — the
+pool builds N independent instances of it, so each note has its own oscillator
+phase, filter state and envelope, and when the notes outnumber the voices the
+oldest is stolen.
 
 | Patch | What it shows |
 |---|---|
 | `basic.patch` | The classic subtractive voice: oscillator → filter → amplifier, envelope on the gain, keyboard on pitch. Every stage is acyclic, so the whole graph runs at block rate. |
 | `vibrato.patch` | The same voice with an LFO patched into pitch. Raise `lfo1 rate` into the audio range and it becomes FM without changing a single connection — that is the point of having one signal type. |
 | `feedback.patch` | A real loop: the filter's output returns to its own input through a VCA. The graph detects the cycle, isolates those two modules, and runs only them one sample at a time. Everything else stays at block rate. |
+| `poly.patch` | Meant to be played. Its keyboard connections are `normalled`, so they are there until you patch something into those inputs yourself. Render it with `patch_play`. |
 | `echo.patch` | A loop through a 120 ms delay line. The graph works out that the shortest cycle carries 5293 samples of delay and advances the loop in chunks of 5293 rather than one at a time - bit-identical output, 42% faster. |
 
 Format:
@@ -22,7 +35,7 @@ Format:
     mode    = block | sample          # sample forces every stage per-sample
     module  <name> = <type> [key=value ...]
     set     <module>.<port> = <value>
-    connect <module>.<out> -> <module>.<in> [amount=x]
+    connect <module>.<out> -> <module>.<in> [amount=x] [normalled]
     output  <module>.<port>
 
 Values take unit suffixes: `440Hz`, `2ms`, `120ms`, `50%`, or a plain number.
@@ -30,6 +43,12 @@ Pitch inputs are volts-per-octave: `1.0` is one octave, so a constant offset is 
 transposition and any modulator is automatically musical.
 
 Module types: `osc`, `filter`, `amp`, `env`, `lfo`, `delay`, `note`.
+
+A connection marked `normalled` is a default that yields: it is dropped the
+moment anything else is patched into the same input. That is what a semi-modular
+does with its internal wiring, and it is why an instrument makes a sound before
+you have patched anything — every patch is then a delta from something that
+already works.
 
 Every module also understands `supports=block`, which declares that it must not
 be advanced one sample at a time. Put such a module inside a feedback cycle and

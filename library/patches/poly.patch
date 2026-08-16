@@ -1,0 +1,17 @@
+# Un patch pensato per essere suonato: i collegamenti della tastiera sono
+# NORMALLED, quindi ci sono finche' non colleghi qualcosa a quegli ingressi.
+module note = note
+module osc1 = osc    shape=saw freq=261.63
+module filt = filter mode=lowpass cutoff=1400
+module env1 = env    a=0.008 d=0.25 s=0.45 r=0.35
+module amp  = amp
+
+set     filt.res   = 0.35
+
+connect note.pitch -> osc1.pitch  normalled
+connect note.gate  -> env1.gate   normalled
+connect osc1.out   -> filt.in
+connect filt.out   -> amp.in
+connect env1.out   -> amp.gain    amount=0.2
+
+output  amp.out
