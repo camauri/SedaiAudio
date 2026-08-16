@@ -428,9 +428,18 @@ begin
   for I := 0 to High(FPorts) do FPorts[I].Reset;
 end;
 
+// Understood by every module, so a patch can declare that one of them must not
+// be advanced a sample at a time. That is what a wrapper around a legacy
+// block-oriented SAF unit will report, and declaring it by hand is also how the
+// refusal path is exercised before that wrapper exists.
 function TSedaiPatchModule.Configure(const AKey, AValue: string): Boolean;
 begin
   Result := False;
+  if SameText(AKey, 'supports') then
+  begin
+    if SameText(AValue, 'block') then begin FRate := mrBlockOnly; Result := True; end
+    else if SameText(AValue, 'both') then begin FRate := mrBoth; Result := True; end;
+  end;
 end;
 
 procedure TSedaiPatchModule.RenderRange(AStart, ACount: Integer);

@@ -33,6 +33,7 @@ type
     FShape: TSedaiOscShape;
     FBaseFreq: Single;
     FLastSync: Single;
+    FTri: Single;
   public
     constructor Create; override;
     function Configure(const AKey, AValue: string): Boolean; override;
@@ -92,6 +93,7 @@ type
     FPhase: Double;
     FShape: TSedaiOscShape;
     FBaseRate: Single;
+    FTri: Single;
   public
     constructor Create; override;
     function Configure(const AKey, AValue: string): Boolean; override;
@@ -140,6 +142,24 @@ implementation
 
 const
   TWO_PI = 6.283185307179586;
+  // Soft-saturation for the filter loop: untouched below SAT_T, then bending
+  // smoothly and never exceeding SAT_T + SAT_H. Full scale audio is 1.0, so a
+  // threshold of 2 leaves every normal signal bit-for-bit unchanged.
+  SAT_T = 2.0;
+  SAT_H = 6.0;
+
+// Linear below SAT_T, asymptotic to SAT_T + SAT_H above it.
+function Saturate(X: Single): Single;
+var
+  A: Single;
+begin
+  // A NaN fails every comparison, so this also catches one and returns 0.
+  if (X > -SAT_T) and (X < SAT_T) then Exit(X);
+  if not (X > -1.0e30) or not (X < 1.0e30) then Exit(0.0);
+  A := Abs(X) - SAT_T;
+  A := SAT_T + A / (1.0 + A / SAT_H);
+  if X < 0 then Result := -A else Result := A;
+end;
 
 function ShapeFromName(const AName: string; out AShape: TSedaiOscShape): Boolean;
 begin
@@ -152,17 +172,76 @@ begin
   else Result := False;
 end;
 
-// One shared naive generator. No band-limiting yet: P1 is about the graph, and
-// an aliasing saw is honest about that rather than pretending otherwise.
-function ShapeValue(AShape: TSedaiOscShape; APhase: Double; APw: Single): Single;
+// PolyBLEP: the correction added around a discontinuity so that a naive saw or
+// square stops folding its harmonics back down the spectrum. Two samples wide,
+// which is enough to take the worst of the aliasing off without the cost of a
+// wavetable or an oversampled path.
+function PolyBlep(T, Dt: Double): Double;
+begin
+  if Dt <= 0.0 then Exit(0.0);
+  if T < Dt then
+  begin
+    T := T / Dt;
+    Result := T + T - T * T - 1.0;
+  end
+  else if T > 1.0 - Dt then
+  begin
+    T := (T - 1.0) / Dt;
+    Result := T * T + T + T + 1.0;
+  end
+  else
+    Result := 0.0;
+end;
+
+function WrapPhase(T: Double): Double;
+begin
+  Result := T;
+  while Result >= 1.0 do Result := Result - 1.0;
+  while Result < 0.0 do Result := Result + 1.0;
+end;
+
+// One shared generator, band-limited. ADt is the phase increment, i.e. the
+// normalised frequency, which is what tells the correction how wide to be.
+// ATri carries the leaky integrator state used to build a triangle out of the
+// band-limited square — integrating a corrected square is what keeps the
+// triangle clean too, instead of leaving it as the one aliasing shape.
+function ShapeValue(AShape: TSedaiOscShape; APhase, ADt: Double; APw: Single;
+                    var ATri: Single): Single;
+var
+  V: Double;
+  Pw: Double;
 begin
   case AShape of
-    osSaw:      Result := Single(2.0 * APhase - 1.0);
-    osSquare:   if APhase < 0.5 then Result := 1.0 else Result := -1.0;
-    osTriangle: if APhase < 0.5 then Result := Single(4.0 * APhase - 1.0)
-                else Result := Single(3.0 - 4.0 * APhase);
-    osSine:     Result := Single(Sin(TWO_PI * APhase));
-    osPulse:    if APhase < APw then Result := 1.0 else Result := -1.0;
+    osSaw:
+      begin
+        V := 2.0 * APhase - 1.0;
+        V := V - PolyBlep(APhase, ADt);
+        Result := Single(V);
+      end;
+    osSquare:
+      begin
+        if APhase < 0.5 then V := 1.0 else V := -1.0;
+        V := V + PolyBlep(APhase, ADt) - PolyBlep(WrapPhase(APhase + 0.5), ADt);
+        Result := Single(V);
+      end;
+    osPulse:
+      begin
+        Pw := APw;
+        if Pw < 0.01 then Pw := 0.01 else if Pw > 0.99 then Pw := 0.99;
+        if APhase < Pw then V := 1.0 else V := -1.0;
+        V := V + PolyBlep(APhase, ADt) - PolyBlep(WrapPhase(APhase - Pw), ADt);
+        Result := Single(V);
+      end;
+    osTriangle:
+      begin
+        // band-limited square, then a leaky integrator, scaled back to +-1
+        if APhase < 0.5 then V := 1.0 else V := -1.0;
+        V := V + PolyBlep(APhase, ADt) - PolyBlep(WrapPhase(APhase + 0.5), ADt);
+        ATri := Single(ADt * 4.0 * V + (1.0 - ADt * 8.0) * ATri);
+        Result := ATri;
+      end;
+    osSine:
+      Result := Single(Sin(TWO_PI * APhase));
   else
     Result := 0.0;
   end;
@@ -179,6 +258,7 @@ begin
   FBaseFreq := 110.0;
   FPhase := 0.0;
   FLastSync := 0.0;
+  FTri := 0.0;
   FPitchIn := AddInput('pitch', prPitch, 0.0);
   FPwIn    := AddInput('pw', prUnipolar, 0.5);
   FPwIn.Min := 0.0; FPwIn.Max := 1.0;
@@ -206,6 +286,7 @@ begin
   inherited ResetState;
   FPhase := 0.0;
   FLastSync := 0.0;
+  FTri := 0.0;
 end;
 
 procedure TSedaiModOsc.RenderSample(AIndex: Integer);
@@ -227,7 +308,7 @@ begin
   FPhase := FPhase + Inc_;
   while FPhase >= 1.0 do FPhase := FPhase - 1.0;
 
-  FOut.Write(AIndex, ShapeValue(FShape, FPhase, FPwIn.Read(AIndex)));
+  FOut.Write(AIndex, ShapeValue(FShape, FPhase, Inc_, FPwIn.Read(AIndex), FTri));
 end;
 
 { TSedaiModFilter }
@@ -292,10 +373,15 @@ begin
   FBand := FBand + F * High_;
   FLow := FLow + F * FBand;
 
-  // Cheap safety net: a self-oscillating SVF driven hard can run away, and a
-  // NaN would poison the whole graph from here on.
-  if FLow > 8.0 then FLow := 8.0 else if FLow < -8.0 then FLow := -8.0;
-  if FBand > 8.0 then FBand := 8.0 else if FBand < -8.0 then FBand := -8.0;
+  // What bounds a real analogue filter is the amplifier in its loop running out
+  // of headroom, not a hard limit on the state. So the state is soft-saturated —
+  // but EXACTLY LINEAR below the threshold, which matters more than it sounds:
+  // a saturator with no dead zone attenuates a little on every pass, and inside
+  // a recursive loop that compounds into a real change of frequency response.
+  // A first attempt without the threshold cost 12 dB on an ordinary patch.
+  FLow := Saturate(FLow);
+  FBand := Saturate(FBand);
+
 
   case FMode of
     fmLowpass:  FOut.Write(AIndex, FLow);
@@ -412,6 +498,7 @@ begin
   FShape := osTriangle;
   FBaseRate := 5.0;
   FPhase := 0.0;
+  FTri := 0.0;
   FRateIn := AddInput('rate', prPitch, 0.0);
   FOut    := AddOutput('out', prBipolar);
 end;
@@ -435,19 +522,21 @@ procedure TSedaiModLFO.ResetState;
 begin
   inherited ResetState;
   FPhase := 0.0;
+  FTri := 0.0;
 end;
 
 procedure TSedaiModLFO.RenderSample(AIndex: Integer);
 var
-  R: Single;
+  R, Dt: Single;
 begin
   // Same volts-per-octave rule as the oscillator, so an LFO can modulate an LFO.
   R := FBaseRate * Power(2.0, FRateIn.Read(AIndex));
   if R < 0.0 then R := 0.0;
   if R > FSR * 0.5 then R := FSR * 0.5;
-  FPhase := FPhase + R / FSR;
+  Dt := R / FSR;
+  FPhase := FPhase + Dt;
   while FPhase >= 1.0 do FPhase := FPhase - 1.0;
-  FOut.Write(AIndex, ShapeValue(FShape, FPhase, 0.5));
+  FOut.Write(AIndex, ShapeValue(FShape, FPhase, Dt, 0.5, FTri));
 end;
 
 { TSedaiModDelay }

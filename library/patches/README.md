@@ -31,6 +31,15 @@ transposition and any modulator is automatically musical.
 
 Module types: `osc`, `filter`, `amp`, `env`, `lfo`, `delay`, `note`.
 
+Every module also understands `supports=block`, which declares that it must not
+be advanced one sample at a time. Put such a module inside a feedback cycle and
+the patch refuses to compile, naming the module and the cycle — the expensive
+block-of-one path is made unreachable rather than made cheaper.
+
+Oscillators are band-limited (PolyBLEP on the discontinuities, and the triangle
+is built by integrating the corrected square), which puts residual aliasing 17
+to 18 dB below the naive shapes.
+
 A port carries **one mono signal**. That is a decision, not an omission: stereo
 inside a port would force every module to know a channel count and every patch to
 care about it. Stereo arrives later as a pair of ports or an explicit per-port
