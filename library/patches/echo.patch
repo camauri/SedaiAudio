@@ -1,0 +1,26 @@
+# Un anello attraverso una linea di ritardo da 120 ms. Il grafo deve accorgersi
+# che il ciclo contiene 5292 campioni di ritardo e avanzarlo a blocchi di 5293
+# invece che uno alla volta.
+module note = note
+module osc1 = osc    shape=pulse freq=220
+module env1 = env    a=0.002 d=0.08 s=0.0 r=0.05
+module amp  = amp
+module dly  = delay  time=0.120
+module fb   = amp
+module mix  = amp
+
+set     fb.gain  = 0.55
+set     mix.gain = 1.0
+
+connect note.pitch -> osc1.pitch
+connect note.gate  -> env1.gate
+connect osc1.out   -> amp.in
+connect env1.out   -> amp.gain  amount=0.4
+
+connect amp.out    -> dly.in
+connect fb.out     -> dly.in
+connect dly.out    -> fb.in
+connect dly.out    -> mix.in
+connect amp.out    -> mix.in
+
+output  mix.out

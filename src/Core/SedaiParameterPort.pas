@@ -7,6 +7,23 @@
  *
  * (c) 2024 Artiforge - Licensed under GPL-3.0
  *}
+// ============================================================================
+// NOT WIRED TO ANYTHING (noted 2026-08-16).
+//
+// This unit is referenced by no other unit in the project. It models a UI-facing
+// parameter: a value normalised to 0..1, mapped through a range, a curve and a
+// skew, with smoothing and a unit label.
+//
+// The Patch Workbench deliberately did NOT build on it. A patch port carries a
+// signal at full audio rate and any output may drive any input; forcing a
+// normalised 0..1 UI parameter to serve as the signal-level primitive was the
+// wrong fit, so src/Patch/SedaiPatchGraph.pas defines its own port and carries
+// the small amount of range metadata it needs directly.
+//
+// What is here is still the right shape for the day a GUI needs curves, skew and
+// display units. Until then it is dead weight, and should be either folded into
+// the patch port or removed — decided deliberately, not left to rot.
+// ============================================================================
 unit SedaiParameterPort;
 
 {$mode objfpc}{$H+}

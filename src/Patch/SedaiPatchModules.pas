@@ -99,6 +99,26 @@ type
     procedure RenderSample(AIndex: Integer); override;
   end;
 
+  { TSedaiModDelay — a delay line, and the first module with real latency.
+    Its InternalDelay is what lets a feedback loop through it be advanced in
+    chunks instead of one sample at a time. }
+  TSedaiModDelay = class(TSedaiPatchModule)
+  private
+    FIn, FOut: TSedaiPatchPort;
+    FLine: array of Single;
+    FWrite: Integer;
+    FLenSamples: Integer;
+    FTimeSec: Single;
+    procedure Rebuild;
+  public
+    constructor Create; override;
+    function Configure(const AKey, AValue: string): Boolean; override;
+    procedure Prepare(ASampleRate: Cardinal; ABlockSize: Integer); override;
+    procedure ResetState; override;
+    procedure RenderSample(AIndex: Integer); override;
+    function InternalDelay: Integer; override;
+  end;
+
   { TSedaiModNote — the "keyboard": what the player or the renderer drives }
   TSedaiModNote = class(TSedaiPatchModule)
   private
@@ -161,6 +181,7 @@ begin
   FLastSync := 0.0;
   FPitchIn := AddInput('pitch', prPitch, 0.0);
   FPwIn    := AddInput('pw', prUnipolar, 0.5);
+  FPwIn.Min := 0.0; FPwIn.Max := 1.0;
   FSyncIn  := AddInput('sync', prGate, 0.0);
   FOut     := AddOutput('out', prAudio);
 end;
@@ -222,6 +243,7 @@ begin
   FIn       := AddInput('in', prAudio, 0.0);
   FCutoffIn := AddInput('cutoff', prPitch, 0.0);
   FResIn    := AddInput('res', prUnipolar, 0.2);
+  FResIn.Min := 0.0; FResIn.Max := 1.0;
   FOut      := AddOutput('out', prAudio);
 end;
 
@@ -295,6 +317,7 @@ begin
   // amplifier could never be closed by an envelope: it would read 1 + env and
   // sit at up to double unity. An unpatched VCA is silent, as it should be.
   FGainIn := AddInput('gain', prUnipolar, 0.0);
+  FGainIn.Min := 0.0; FGainIn.Max := 16.0;
   FOut    := AddOutput('out', prAudio);
 end;
 
@@ -427,6 +450,74 @@ begin
   FOut.Write(AIndex, ShapeValue(FShape, FPhase, 0.5));
 end;
 
+{ TSedaiModDelay }
+
+constructor TSedaiModDelay.Create;
+begin
+  inherited Create;
+  TypeName := 'delay';
+  Rate := mrBoth;
+  FTimeSec := 0.010;
+  FLenSamples := 441;
+  FWrite := 0;
+  FIn  := AddInput('in', prAudio, 0.0);
+  FOut := AddOutput('out', prAudio);
+end;
+
+function TSedaiModDelay.Configure(const AKey, AValue: string): Boolean;
+begin
+  Result := True;
+  if SameText(AKey, 'time') then
+  begin
+    FTimeSec := StrToFloatDef(AValue, FTimeSec);
+    Rebuild;
+  end
+  else
+    Result := inherited Configure(AKey, AValue);
+end;
+
+procedure TSedaiModDelay.Rebuild;
+begin
+  // The delay time is fixed at load: InternalDelay has to be a constant the
+  // scheduler can trust when it sizes a cycle's chunk. A modulated delay would
+  // have to report its MINIMUM length instead, which is a P2 problem.
+  FLenSamples := Round(FTimeSec * FSR);
+  if FLenSamples < 1 then FLenSamples := 1;
+  SetLength(FLine, FLenSamples);
+  ResetState;
+end;
+
+procedure TSedaiModDelay.Prepare(ASampleRate: Cardinal; ABlockSize: Integer);
+begin
+  inherited Prepare(ASampleRate, ABlockSize);
+  Rebuild;
+end;
+
+procedure TSedaiModDelay.ResetState;
+var
+  I: Integer;
+begin
+  inherited ResetState;
+  for I := 0 to High(FLine) do FLine[I] := 0.0;
+  FWrite := 0;
+end;
+
+function TSedaiModDelay.InternalDelay: Integer;
+begin
+  Result := FLenSamples;
+end;
+
+procedure TSedaiModDelay.RenderSample(AIndex: Integer);
+var
+  Old: Single;
+begin
+  Old := FLine[FWrite];                  // oldest sample: FLenSamples ago
+  FLine[FWrite] := FIn.Read(AIndex);
+  Inc(FWrite);
+  if FWrite >= FLenSamples then FWrite := 0;
+  FOut.Write(AIndex, Old);
+end;
+
 { TSedaiModNote }
 
 constructor TSedaiModNote.Create;
@@ -461,13 +552,14 @@ begin
   else if SameText(ATypeName, 'amp') then Result := TSedaiModAmp.Create
   else if SameText(ATypeName, 'env') then Result := TSedaiModEnv.Create
   else if SameText(ATypeName, 'lfo') then Result := TSedaiModLFO.Create
+  else if SameText(ATypeName, 'delay') then Result := TSedaiModDelay.Create
   else if SameText(ATypeName, 'note') then Result := TSedaiModNote.Create
   else Result := nil;
 end;
 
 function KnownModuleTypes: string;
 begin
-  Result := 'osc, filter, amp, env, lfo, note';
+  Result := 'osc, filter, amp, env, lfo, delay, note';
 end;
 
 end.
