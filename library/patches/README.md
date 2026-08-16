@@ -53,6 +53,9 @@ oldest is stolen.
 | `vibrato.patch` | The same voice with an LFO patched into pitch. Raise `lfo1 rate` into the audio range and it becomes FM without changing a single connection — that is the point of having one signal type. |
 | `feedback.patch` | A real loop: the filter's output returns to its own input through a VCA. The graph detects the cycle, isolates those two modules, and runs only them one sample at a time. Everything else stays at block rate. |
 | `poly.patch` | Meant to be played. Its keyboard connections are `normalled`, so they are there until you patch something into those inputs yourself. Render it with `patch_play`. |
+| `sequence.patch` | A sequencer driving everything, no keyboard at all — the music is made by the clock. A square LFO IS the clock; no dedicated module was needed. |
+| `burble.patch` | Noise into a sample-and-hold, clocked, driving pitch. No notes written anywhere: the melody is random but stepped. |
+| `ringmod.patch` | Two sines multiplied. The spectrum comes out at the sum and the difference and nowhere else — measured at 97 and 537 Hz from 220 and 317, with nothing left at either original. |
 | `lead.patch` | A subtractive lead with some bite. Two detuned oscillators plus a sub an octave down, and — the thing that actually matters — a SECOND envelope on the filter cutoff. Measured, its spectral centroid sweeps 4.1x from attack to sustain, where `poly.patch` sits at 1.0x and sounds static because of it. |
 | `fx_chain.patch` | An EFFECT patch: its source is a module of type `input`, so the incoming audio takes the oscillator's place. Same graph, same scheduler, same modules — no second architecture. Run it with `patch_fx`. |
 | `fx.patch` | The bridge at work: a native lead running into SAF's own distortion, chorus and reverb — units that had been written long before and that no patch could reach. |
@@ -81,7 +84,22 @@ Reads whatever SedaiAudioFileReader handles and sums multi-channel input to
 mono. The tail argument keeps rendering after the input ends so reverb and delay
 tails ring out instead of being chopped.
 
-Native module types: `osc`, `filter`, `amp`, `env`, `lfo`, `delay`, `input`, `note`.
+Core module types: `osc`, `filter`, `amp`, `env`, `lfo`, `delay`, `input`, `note`.
+
+For electronic sound design: `seq` (clock-driven step sequencer), `sh`
+(sample and hold), `ring` (multiplier — ring modulator with two audio signals,
+plain VCA with a control signal on one side), `glide` (portamento), `noise`
+(white, pink, brown, blue, violet, from SAF's own generator).
+
+Three things are deliberately NOT modules, because the port model already gives
+them: an **attenuverter** is `amount=` on a connection, and it may be negative;
+a **CV mixer** is several connections into one input, which sum, with the
+input's own value as the offset; and **FM** is one oscillator patched into
+another's pitch — exponential FM, which is what the analogue instruments of that
+period actually did. Fewer module types with more inputs, as Serge argued.
+
+Any `key=value` at a module declaration also sets an input port of the same
+name, so `module gl = glide time=0.012` needs no separate `set` line.
 
 Bridged from SAF's existing units, all prefixed `s`: `sdelay`, `schorus`,
 `sflanger`, `sphaser`, `sreverb`, `scomp`, `slimiter`, `sdist`. Each takes a

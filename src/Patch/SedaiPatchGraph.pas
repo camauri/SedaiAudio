@@ -466,12 +466,35 @@ end;
 // block-oriented SAF unit will report, and declaring it by hand is also how the
 // refusal path is exercised before that wrapper exists.
 function TSedaiPatchModule.Configure(const AKey, AValue: string): Boolean;
+var
+  P: TSedaiPatchPort;
+  V: Single;
+  FS: TFormatSettings;
 begin
   Result := False;
   if SameText(AKey, 'supports') then
   begin
     if SameText(AValue, 'block') then begin FRate := mrBlockOnly; Result := True; end
     else if SameText(AValue, 'both') then begin FRate := mrBoth; Result := True; end;
+    Exit;
+  end;
+
+  // Fall back to setting an input port of the same name, so a module can be
+  // written `module gl = glide time=0.012` instead of needing a separate `set`
+  // line. A subclass that claims the key first still wins, which is how the
+  // filter keeps `cutoff` meaning its base frequency in Hz while the port of
+  // the same name stays the volts-per-octave offset patched into it.
+  P := PortByName(AKey);
+  if (P <> nil) and (P.Kind = pkInput) then
+  begin
+    FS := DefaultFormatSettings;
+    FS.DecimalSeparator := '.';
+    if TryStrToFloat(Trim(AValue), V, FS) then
+    begin
+      if not P.InRange(V) then Exit(False);
+      P.Value := V;
+      Result := True;
+    end;
   end;
 end;
 

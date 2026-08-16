@@ -1,0 +1,29 @@
+# Un sequencer che pilota tutto, come su quei dischi. Nessuna tastiera: la
+# musica la fa il clock. L'LFO quadra E' il clock — non serviva un modulo apposta.
+module clk  = lfo shape=square rate=8.0        # 8 passi al secondo
+module seq  = seq values=0,12,7,3,0,15,7,10 gatems=45
+module gl   = glide time=0.012                  # portamento corto: scivola appena
+
+module osc1 = osc shape=saw    freq=110
+module osc2 = osc shape=square freq=110
+module fenv = env a=0.001 d=0.13 s=0.05 r=0.08
+module aenv = env a=0.001 d=0.16 s=0.25 r=0.10
+module filt = filter mode=lowpass cutoff=300
+module amp  = amp
+
+connect clk.out  -> seq.clock
+connect seq.out  -> gl.in
+connect gl.out   -> osc1.pitch
+connect gl.out   -> osc2.pitch
+set     osc2.pitch = -1.0
+connect seq.gate -> fenv.gate
+connect seq.gate -> aenv.gate
+
+connect osc1.out -> filt.in amount=0.5
+connect osc2.out -> filt.in amount=0.35
+set     filt.res = 0.7
+connect fenv.out -> filt.cutoff amount=4.0
+connect filt.out -> amp.in
+connect aenv.out -> amp.gain amount=0.42
+
+output amp.out

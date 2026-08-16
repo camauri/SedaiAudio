@@ -1,0 +1,21 @@
+# Ring modulation: due oscillatori moltiplicati danno somma e differenza e
+# nient'altro, quindi il risultato e' inarmonico. E' il suono piu' riconoscibile
+# dell'elettronica di quegli anni: campane, gong, voci robotiche.
+module clk  = lfo shape=square rate=3.0
+module seq  = seq values=0,5,-2,7 gatems=260
+
+module car  = osc shape=sine freq=220     # portante
+module mod  = osc shape=sine freq=317     # modulante, rapporto irrazionale
+module rm   = ring
+module aenv = env a=0.004 d=0.6 s=0.0 r=0.3
+module amp  = amp
+
+connect clk.out  -> seq.clock
+connect seq.out  -> car.pitch
+connect seq.gate -> aenv.gate
+
+connect car.out  -> rm.a
+connect mod.out  -> rm.b
+connect rm.out   -> amp.in
+connect aenv.out -> amp.gain amount=0.6
+output amp.out

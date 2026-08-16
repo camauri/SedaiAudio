@@ -1,0 +1,23 @@
+# Il gorgoglio: rumore campionato da un clock, che pilota l'altezza.
+# Nessuna nota scritta da nessuna parte: la melodia e' casuale ma quantizzata
+# dal fatto che cambia solo a ogni colpo di clock.
+module clk  = lfo   shape=square rate=11.0
+module nz   = noise color=white
+module sh   = sh
+module gl   = glide time=0.004
+
+module osc1 = osc shape=triangle freq=440
+module aenv = env a=0.002 d=0.09 s=0.0 r=0.06
+module filt = filter mode=bandpass cutoff=1200 res=0.75
+module amp  = amp
+
+connect nz.out   -> sh.in
+connect clk.out  -> sh.trig
+connect sh.out   -> gl.in         amount=1.6
+connect gl.out   -> osc1.pitch
+connect clk.out  -> aenv.gate
+
+connect osc1.out -> filt.in
+connect filt.out -> amp.in
+connect aenv.out -> amp.gain amount=0.5
+output amp.out
