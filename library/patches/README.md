@@ -16,6 +16,21 @@ Or play notes through it polyphonically:
     bin/<plat>/patch_play library/patches/poly.patch out.wav 3 8 60,64,67 1.5
                           ^patch                     ^wav   ^s ^voices ^notes ^gate
 
+Or keep the patch playing while you edit it — this is the ear loop the workbench
+exists for:
+
+    ./build.sh --source job/tools/saf/patch_live.lpr --dest bin/<plat>/patch_live
+    bin/<plat>/patch_live library/patches/poly.patch 8
+
+Edit the file in any editor, save, and the sound changes without a restart. A
+save that does not compile prints the error and leaves the previous version
+playing, so a typo never drops you into silence wondering what happened.
+
+Keys: `z s x d c v g b h n j m` are one octave from C, `,` and `.` change
+octave, SPACE releases everything, `R` forces a reload, `I` prints the compiled
+stages, `Q` quits. It needs a REAL terminal — with stdin redirected the keyboard
+stays inert by design.
+
 Notes are MIDI numbers, and 60 sounds the patch's own base frequency. Give them
 onsets to arpeggiate: `60:0,64:0.3,67:0.6`. A patch is a VOICE TEMPLATE — the
 pool builds N independent instances of it, so each note has its own oscillator
