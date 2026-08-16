@@ -40,7 +40,7 @@ type
   TSedaiLegacyModule = class(TSedaiPatchModule)
   private
     FUnit: TSedaiSignalNode;
-    FIn, FMixIn, FOut: TSedaiPatchPort;
+    FIn, FInR, FMixIn, FOut, FOutR: TSedaiPatchPort;
     FScratchIn, FScratchOut: array of Single;
   protected
     // Subclasses build their unit here and answer Configure keys.
@@ -135,11 +135,15 @@ begin
   Rate := mrBlockOnly;             // the whole point of the supports flag
   FUnit := CreateUnit;
   FIn    := AddInput('in', prAudio, 0.0);
+  // Right side. Left unpatched it follows the left, so a mono patch reads and
+  // behaves exactly as before this port existed.
+  FInR   := AddInput('inR', prAudio, 0.0);
   // A dry/wet control the wrapper provides itself, because not every legacy
   // unit has one and a patch should not have to know which do.
   FMixIn := AddInput('mix', prUnipolar, 1.0);
   FMixIn.Min := 0.0; FMixIn.Max := 1.0;
   FOut   := AddOutput('out', prAudio);
+  FOutR  := AddOutput('outR', prAudio);
 end;
 
 destructor TSedaiLegacyModule.Destroy;
@@ -205,22 +209,37 @@ begin
     SetLength(FScratchOut, ACount * 2);
   end;
 
-  for I := 0 to ACount - 1 do
-  begin
-    Dry := FIn.Read(I);
-    FScratchIn[I * 2] := Dry;
-    FScratchIn[I * 2 + 1] := Dry;
-  end;
+  // These units are stereo internally. The bridge used to fan mono in and throw
+  // the right channel away, which silently flattened every stereo chorus and
+  // reverb in the library. Now the right side is its own port, normalled to the
+  // left: patch nothing and the behaviour is the old mono one exactly, patch
+  // something and the unit is stereo end to end.
+  if FInR.LinkCount > 0 then
+    for I := 0 to ACount - 1 do
+    begin
+      FScratchIn[I * 2] := FIn.Read(I);
+      FScratchIn[I * 2 + 1] := FInR.Read(I);
+    end
+  else
+    for I := 0 to ACount - 1 do
+    begin
+      Dry := FIn.Read(I);
+      FScratchIn[I * 2] := Dry;
+      FScratchIn[I * 2 + 1] := Dry;
+    end;
 
   FUnit.ProcessBlock(@FScratchIn[0], @FScratchOut[0], ACount);
 
   for I := 0 to ACount - 1 do
   begin
-    Wet := FScratchOut[I * 2];
     Mix := FMixIn.Read(I);
     if Mix < 0.0 then Mix := 0.0 else if Mix > 1.0 then Mix := 1.0;
     Dry := FScratchIn[I * 2];
+    Wet := FScratchOut[I * 2];
     FOut.Write(I, Dry * (1.0 - Mix) + Wet * Mix);
+    Dry := FScratchIn[I * 2 + 1];
+    Wet := FScratchOut[I * 2 + 1];
+    FOutR.Write(I, Dry * (1.0 - Mix) + Wet * Mix);
   end;
 end;
 

@@ -1,14 +1,11 @@
-# Effetto stereo vero: due ingressi, due uscite, trattati separatamente.
-module l    = input channel=0
-module r    = input channel=1
-module dl   = sdelay time=0.21 feedback=0.35
-module dr   = sdelay time=0.29 feedback=0.35
-module rv   = sreverb size=0.6 damping=0.4
-set  dl.mix = 0.35
-set  dr.mix = 0.35
-set  rv.mix = 0.22
-connect l.out  -> dl.in
-connect r.out  -> dr.in
-connect dl.out -> rv.in
-output dl.out
-output dr.out
+# Effetto stereo con UNA unita' stereo, non due mono affiancate.
+# Il riverbero di SAF e' stereo dentro: gli si danno due canali e se ne
+# riprendono due, con la sua immagine intatta.
+module l  = input channel=0
+module r  = input channel=1
+module rv = sreverb size=0.72 damping=0.35
+set rv.mix = 0.30
+connect l.out -> rv.in
+connect r.out -> rv.inR
+output rv.out
+output rv.outR
