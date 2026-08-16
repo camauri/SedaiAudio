@@ -27,7 +27,7 @@ unit SedaiPatchFile;
 interface
 
 uses
-  SysUtils, Classes, SedaiPatchGraph, SedaiPatchModules, SedaiPatchElectronic, SedaiPatchInstruments, SedaiPatchPart, SedaiPatchLegacy;
+  SysUtils, Classes, SedaiPatchGraph, SedaiPatchModules, SedaiPatchElectronic, SedaiPatchInstruments, SedaiPatchPart, SedaiPatchSpace, SedaiPatchBody, SedaiPatchLegacy;
 
 type
   TSedaiPatchLoadResult = record
@@ -197,13 +197,16 @@ begin
       if M = nil then M := CreateElectronicModuleByType(Parts[0]);
       if M = nil then M := CreateInstrumentModuleByType(Parts[0]);
       if M = nil then M := CreatePartModuleByType(Parts[0]);
+      if M = nil then M := CreateSpaceModuleByType(Parts[0]);
+      if M = nil then M := CreateBodyModuleByType(Parts[0]);
       // Native modules first, then the wrappers around SAF's existing units.
       if M = nil then M := CreateLegacyModuleByType(Parts[0]);
       if M = nil then
       begin
-        Fail(Format('unknown module type "%s"'#10'  core: %s'#10'  electronic: %s'#10'  instruments: %s'#10'  library: %s'#10'  bridged: %s',
+        Fail(Format('unknown module type "%s"'#10'  core: %s'#10'  electronic: %s'#10'  instruments: %s'#10'  library: %s'#10'  space: %s'#10'  body: %s'#10'  bridged: %s',
                     [Parts[0], KnownModuleTypes, KnownElectronicTypes,
-                     KnownInstrumentTypes, KnownPartTypes, KnownLegacyTypes]));
+                     KnownInstrumentTypes, KnownPartTypes, KnownSpaceTypes,
+                     KnownBodyTypes, KnownLegacyTypes]));
         Exit;
       end;
       if not AGraph.AddModule(M, Key) then

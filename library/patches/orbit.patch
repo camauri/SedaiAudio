@@ -1,0 +1,16 @@
+# Una sorgente che gira attorno all'ascoltatore.
+# Due LFO alla stessa velocita' sfasati di un quarto di giro danno x e z:
+# un cerchio, e nient'altro. Il raggio e' 4 metri, e il centro e' la testa
+# di chi ascolta — quindi z resta a 0, altrimenti l'orbita ci passa dentro.
+module lx  = lfo shape=sine rate=0.35
+module lz  = lfo shape=sine rate=0.35 phase=0.25
+module o   = osc shape=saw freq=110
+module f   = filter mode=lowpass cutoff=900 res=0.4
+module sp  = space ref=1.0 max=30 rolloff=1.0
+set sp.z = 0.0
+connect o.out -> f.in
+connect f.out -> sp.in
+connect lx.out -> sp.x amount=4.0
+connect lz.out -> sp.z amount=4.0
+output sp.out
+output sp.outR

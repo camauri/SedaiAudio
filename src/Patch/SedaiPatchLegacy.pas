@@ -32,7 +32,8 @@ interface
 uses
   SysUtils, SedaiAudioTypes, SedaiSignalNode, SedaiPatchGraph,
   SedaiDelay, SedaiChorus, SedaiFlanger, SedaiPhaser, SedaiReverb,
-  SedaiCompressor, SedaiLimiter, SedaiDistortion, SedaiEQ;
+  SedaiCompressor, SedaiLimiter, SedaiDistortion, SedaiEQ,
+  SedaiAutoSpace, SedaiBodyResonator, SedaiConvolver;
 
 type
   { TSedaiLegacyModule }
@@ -122,6 +123,30 @@ type
   end;
 
 // Factory for the bridged types, consulted after the native ones.
+  TSedaiLegacyAutoSpace = class(TSedaiLegacyModule)
+  protected
+    function CreateUnit: TSedaiSignalNode; override;
+    function ConfigureUnit(const AKey, AValue: string; AFloat: Single): Boolean; override;
+  public
+    constructor Create; override;
+  end;
+
+  TSedaiLegacyBodyRes = class(TSedaiLegacyModule)
+  protected
+    function CreateUnit: TSedaiSignalNode; override;
+    function ConfigureUnit(const AKey, AValue: string; AFloat: Single): Boolean; override;
+  public
+    constructor Create; override;
+  end;
+
+  TSedaiLegacyConvolver = class(TSedaiLegacyModule)
+  protected
+    function CreateUnit: TSedaiSignalNode; override;
+    function ConfigureUnit(const AKey, AValue: string; AFloat: Single): Boolean; override;
+  public
+    constructor Create; override;
+  end;
+
 function CreateLegacyModuleByType(const ATypeName: string): TSedaiPatchModule;
 function KnownLegacyTypes: string;
 
@@ -399,6 +424,83 @@ end;
 
 { factory }
 
+
+{ sautospace — the stereo widener written for the workbench }
+
+constructor TSedaiLegacyAutoSpace.Create;
+begin
+  inherited Create;
+  TypeName := 'sautospace';
+end;
+
+function TSedaiLegacyAutoSpace.CreateUnit: TSedaiSignalNode;
+begin
+  Result := TSedaiAutoSpace.Create;
+end;
+
+function TSedaiLegacyAutoSpace.ConfigureUnit(const AKey, AValue: string;
+  AFloat: Single): Boolean;
+begin
+  Result := True;
+  if SameText(AKey, 'width') then TSedaiAutoSpace(WrappedUnit).Width := AFloat
+  else if SameText(AKey, 'size') then TSedaiAutoSpace(WrappedUnit).Size := AFloat
+  else if SameText(AKey, 'reflect') then TSedaiAutoSpace(WrappedUnit).Reflect := AFloat
+  else Result := False;
+end;
+
+{ sbody — the measured modal body: sax, violin, guitar }
+
+constructor TSedaiLegacyBodyRes.Create;
+begin
+  inherited Create;
+  TypeName := 'sbody';
+end;
+
+function TSedaiLegacyBodyRes.CreateUnit: TSedaiSignalNode;
+begin
+  Result := TSedaiBodyResonator.Create;
+end;
+
+function TSedaiLegacyBodyRes.ConfigureUnit(const AKey, AValue: string;
+  AFloat: Single): Boolean;
+var
+  V: string;
+begin
+  Result := True;
+  if SameText(AKey, 'kind') or SameText(AKey, 'body') then
+  begin
+    V := LowerCase(Trim(AValue));
+    if V = 'none' then TSedaiBodyResonator(WrappedUnit).LoadBody(bodyNone)
+    else if V = 'sax' then TSedaiBodyResonator(WrappedUnit).LoadBody(bodySax)
+    else if V = 'violin' then TSedaiBodyResonator(WrappedUnit).LoadBody(bodyViolin)
+    else if V = 'guitar' then TSedaiBodyResonator(WrappedUnit).LoadBody(bodyGuitar)
+    else raise Exception.CreateFmt('unknown body "%s" — one of: none, sax, '
+      + 'violin, guitar', [AValue]);
+  end
+  else if SameText(AKey, 'width') then TSedaiBodyResonator(WrappedUnit).Width := AFloat
+  else Result := False;
+end;
+
+{ sconv — convolution. The impulse response comes from a patch that loaded it;
+  with no IR it is a pass-through rather than silence. }
+
+constructor TSedaiLegacyConvolver.Create;
+begin
+  inherited Create;
+  TypeName := 'sconv';
+end;
+
+function TSedaiLegacyConvolver.CreateUnit: TSedaiSignalNode;
+begin
+  Result := TSedaiConvolver.Create;
+end;
+
+function TSedaiLegacyConvolver.ConfigureUnit(const AKey, AValue: string;
+  AFloat: Single): Boolean;
+begin
+  Result := False;
+end;
+
 function CreateLegacyModuleByType(const ATypeName: string): TSedaiPatchModule;
 begin
   if SameText(ATypeName, 'sdelay') then Result := TSedaiLegacyDelay.Create
@@ -409,12 +511,16 @@ begin
   else if SameText(ATypeName, 'scomp') then Result := TSedaiLegacyCompressor.Create
   else if SameText(ATypeName, 'slimiter') then Result := TSedaiLegacyLimiter.Create
   else if SameText(ATypeName, 'sdist') then Result := TSedaiLegacyDistortion.Create
+  else if SameText(ATypeName, 'sautospace') then Result := TSedaiLegacyAutoSpace.Create
+  else if SameText(ATypeName, 'sbody') then Result := TSedaiLegacyBodyRes.Create
+  else if SameText(ATypeName, 'sconv') then Result := TSedaiLegacyConvolver.Create
   else Result := nil;
 end;
 
 function KnownLegacyTypes: string;
 begin
-  Result := 'sdelay, schorus, sflanger, sphaser, sreverb, scomp, slimiter, sdist';
+  Result := 'sdelay, schorus, sflanger, sphaser, sreverb, scomp, slimiter, sdist, '
+          + 'sautospace, sbody, sconv';
 end;
 
 end.

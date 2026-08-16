@@ -177,6 +177,61 @@ between 0.05 and 0.54 at that default — so expect to raise `amp` for those.
 It is one voice. Polyphony belongs to the patch voice pool, which already runs N
 independent graphs; a polyphonic Part inside each would be polyphony twice over.
 
+## The body stage
+
+What the sound radiates *through*. These are not effects applied to a finished
+sound — a tube, a violin's box, a plate is the thing that turns an excitation
+into an instrument.
+
+    formant   kind=none|violin|viola|cello|sax|clarinet, mix
+    tube      mode=full|odd, freq, res, mix
+    sbody     kind=none|sax|violin|guitar, width, mix   (block, measured modes)
+    sconv     convolution; a pass-through until an impulse response is loaded
+
+`formant` and `tube` are sample-first, so they may sit inside a feedback cycle —
+which matters more here than anywhere else, because an excitation feeding a body
+that feeds back into the excitation *is* the physical model. The tube's `freq`
+is a port, so the body can be retuned while it sounds; no real instrument does
+that, and it is the first thing anyone tries with a patch cord in hand.
+
+## The spatial stage
+
+Where a mono signal becomes a pair. This is the only place in the graph where
+that happens — every port before it carries one signal, and that stays true.
+
+    pan     mono -> pair, constant power, `pan` from -1 to 1
+    width   pair -> pair, mid/side, `width` 0 = mono, 1 = unchanged, 2 = double
+    space   mono -> pair, a position in a room: x, y, z in metres, distance
+            attenuation, interaural time and level difference, Doppler
+    sautospace   the block-oriented widener (width, size, reflect, mix)
+
+All three natives are sample-first, which is the point: `x` and `z` are ports
+like any other, so a source can be *moved* while it sounds. `orbit.patch` circles
+the listener with two LFOs at the same rate a quarter turn apart, and nothing
+else — that is what the `phase=` on the LFO is for.
+
+`width` scales the side and leaves the mid alone, so a mono fold returns exactly
+the same signal at any width; measured across width 0, 1 and 2 the mid RMS is
+identical to four decimals.
+
+Two things `space` will do that are worth expecting. It has a **front/back
+ambiguity**: a source at 60°, 90° and 120° measures the same, because interaural
+time and level differences alone cannot separate them — that is the cone of
+confusion, and resolving it needs spectral cues this model does not have. And it
+keeps a **head-shadow floor**: a source straight to one side sits about 15 dB
+down in the far ear, not silent, because sound diffracts around a head. Without
+that floor the far ear goes to exactly zero and the result is the hard-panned
+ping-pong of early stereo rather than anything a room does.
+
+## Why there is no mixer module
+
+Summing is what a port already does: several links into one input, each with its
+own `amount`. Aux sends are more links from the same output. Inserts are modules
+in series. What `TSedaiMixer` adds beyond that is solo, mute and metering, which
+are things a user interface does, not things a signal graph does. A mixer module
+would be a second way to do what the wires already do — the same reason there is
+no attenuverter, no CV mixer and no FM module.
+
 ## Ins and outs
 
 A port carries **one mono signal**. That is a decision, not an omission: stereo

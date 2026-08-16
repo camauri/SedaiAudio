@@ -91,6 +91,7 @@ type
   private
     FRateIn, FOut: TSedaiPatchPort;
     FPhase: Double;
+    FStartPhase: Double;
     FShape: TSedaiOscShape;
     FBaseRate: Single;
     FTri: Single;
@@ -522,6 +523,7 @@ begin
   Rate := mrBoth;
   FShape := osTriangle;
   FBaseRate := 5.0;
+  FStartPhase := 0.0;
   FPhase := 0.0;
   FTri := 0.0;
   FRateIn := AddInput('rate', prPitch, 0.0);
@@ -539,6 +541,14 @@ begin
   end
   else if SameText(AKey, 'rate') then
     FBaseRate := StrToFloatDef(AValue, FBaseRate)
+  else if SameText(AKey, 'phase') then
+  begin
+    // In turns, 0..1. Two LFOs at the same rate a quarter turn apart are a
+    // quadrature pair, which is how a source is made to circle a listener.
+    FStartPhase := Frac(StrToFloatDef(AValue, 0.0));
+    if FStartPhase < 0.0 then FStartPhase := FStartPhase + 1.0;
+    FPhase := FStartPhase;
+  end
   else
     Result := inherited Configure(AKey, AValue);
 end;
@@ -546,7 +556,7 @@ end;
 procedure TSedaiModLFO.ResetState;
 begin
   inherited ResetState;
-  FPhase := 0.0;
+  FPhase := FStartPhase;
   FTri := 0.0;
 end;
 

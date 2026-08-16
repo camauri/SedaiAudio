@@ -231,6 +231,13 @@ function DefaultSpatialSourceParams: TSpatialSourceParams;
 
 implementation
 
+const
+  // cos((0.7717+1)*pi/4) = 0.178, i.e. the quiet ear sits 15 dB down when the
+  // source is straight to one side. Measured interaural level differences at
+  // 90 deg run from a few dB at low frequency to about 20 dB above 2 kHz; one
+  // broadband figure in that range beats an infinity.
+  MAX_SHADOW_ANGLE = 0.7717;
+
 // ============================================================================
 // VECTOR OPERATIONS
 // ============================================================================
@@ -491,6 +498,7 @@ var
   PanAngle: Single;
   ITD: Single;
   DelaySamples: Single;
+  GainAngle: Single;
 begin
   // Calculate vector from source to listener in listener space
   SourceToListener := Vec3Normalize(Vec3Sub(FParams.Position, FListener.Position));
@@ -505,9 +513,17 @@ begin
   PanAngle := Azimuth;
   PanAngle := Max(-1.0, Min(1.0, PanAngle));
 
-  // Constant power panning
-  ALeftGain := Cos((PanAngle + 1.0) * Pi / 4.0);
-  ARightGain := Sin((PanAngle + 1.0) * Pi / 4.0);
+  // Constant power panning, but with a head-shadow floor. A source at 90 deg
+  // is not SILENT in the far ear: the sound diffracts around the head and
+  // arrives 10-20 dB down, frequency dependent, not gone. Panning on the raw
+  // angle drives the far gain to exactly zero at 90 deg, which is the hard
+  // left / hard right of early stereo rather than anything a room does. So the
+  // angle is limited for the GAIN only, to about 15 dB of level difference;
+  // the frequency-dependent part of the shadow is the low-pass below, and ITD
+  // keeps the unclamped angle because the far ear really does hear it late.
+  GainAngle := Max(-MAX_SHADOW_ANGLE, Min(MAX_SHADOW_ANGLE, PanAngle));
+  ALeftGain := Cos((GainAngle + 1.0) * Pi / 4.0);
+  ARightGain := Sin((GainAngle + 1.0) * Pi / 4.0);
 
   // Calculate ITD (interaural time difference)
   // For a head of ~17cm diameter, max ITD is ~0.5ms
