@@ -47,6 +47,11 @@ type
     procedure TriggerOn(AFreq: Single; ANote: Integer; AVelocity: Single); virtual; abstract;
     procedure TriggerOff; virtual;
     function ConfigureGen(const AKey, AValue: string; AFloat: Single): Boolean; virtual;
+    // Called once per sample, after the pitch is set and before the generator
+    // produces. It exists for engines that take an input as well as a note —
+    // the FM operator's phase modulation is the only one today, and without it
+    // an operator can only ever be a sine with an envelope on it.
+    procedure BeforeSample(AIndex: Integer); virtual;
     // Output trim. The engines were each validated on their own and land as
     // much as 24 dB apart (measured at 220 Hz: FM operator RMS 0.458, bowed
     // string 0.030). Patched together the loud one buries the quiet one, so
@@ -102,10 +107,28 @@ type
     constructor Create; override;
   end;
 
+  { TSedaiModFMOp — one FM operator, with its phase modulation input exposed.
+
+    That input is the whole technique. An operator whose phase nothing drives
+    is a sine with an envelope; an operator driven by another operator is a
+    DX7. The engine underneath always had it (SetModInput, summed into the
+    phase before the sine is taken) — this module simply did not offer it.
+
+    NOTE ON THE INDEX. There is no separate index control, and there should not
+    be: the modulator's own output level IS the index, so `amp` on the
+    modulating operator does that job. Patch an envelope or velocity into the
+    modulator's `amp` and the tone gets brighter as it gets louder, which is
+    what makes an FM electric piano behave like an instrument rather than a
+    recording of one. }
+
   TSedaiModFMOp = class(TSedaiInstrumentModule)
+  private
+    FPhaseMIn: TSedaiPatchPort;
   protected
     function CreateGen: TSedaiSignalGenerator; override;
     function DefaultTrim: Single; override;
+    function ConfigureGen(const AKey, AValue: string; AFloat: Single): Boolean; override;
+    procedure BeforeSample(AIndex: Integer); override;
     procedure TriggerOn(AFreq: Single; ANote: Integer; AVelocity: Single); override;
     procedure TriggerOff; override;
   public
@@ -162,6 +185,11 @@ begin
   Result := 1.0;
 end;
 
+procedure TSedaiInstrumentModule.BeforeSample(AIndex: Integer);
+begin
+  // Most engines want nothing here.
+end;
+
 function TSedaiInstrumentModule.ConfigureGen(const AKey, AValue: string;
   AFloat: Single): Boolean;
 begin
@@ -212,6 +240,7 @@ begin
   // Pitch stays live between triggers, so a glide or an LFO on the pitch input
   // bends the note as it sounds instead of only setting it at the attack.
   FGen.Frequency := Freq;
+  BeforeSample(AIndex);
   FOut.Write(AIndex, FGen.GenerateSample * FAmpIn.Read(AIndex));
 end;
 
@@ -323,6 +352,7 @@ constructor TSedaiModFMOp.Create;
 begin
   inherited Create;
   TypeName := 'fmop';
+  FPhaseMIn := AddInput('phasem', prAudio, 0.0);
 end;
 
 function TSedaiModFMOp.DefaultTrim: Single;
@@ -333,6 +363,30 @@ end;
 function TSedaiModFMOp.CreateGen: TSedaiSignalGenerator;
 begin
   Result := TSedaiFMOperator.Create;
+end;
+
+function TSedaiModFMOp.ConfigureGen(const AKey, AValue: string;
+  AFloat: Single): Boolean;
+begin
+  Result := True;
+  // The ratio is what makes an operator a partial of the note rather than a
+  // note of its own: 1 is the fundamental, 14 is the metallic tine of a
+  // Rhodes, and a non-integer like 3.5 is a bell, because it is not a harmonic
+  // of anything.
+  if SameText(AKey, 'ratio') then TSedaiFMOperator(FGen).Ratio := AFloat
+  else if SameText(AKey, 'detune') then TSedaiFMOperator(FGen).Detune := AFloat
+  else if SameText(AKey, 'feedback') then TSedaiFMOperator(FGen).FeedbackLevel := AFloat
+  else if SameText(AKey, 'fixedfreq') then
+  begin
+    TSedaiFMOperator(FGen).Fixed := True;
+    TSedaiFMOperator(FGen).FixedFreq := AFloat;
+  end
+  else Result := inherited ConfigureGen(AKey, AValue, AFloat);
+end;
+
+procedure TSedaiModFMOp.BeforeSample(AIndex: Integer);
+begin
+  TSedaiFMOperator(FGen).SetModInput(0, FPhaseMIn.Read(AIndex));
 end;
 
 procedure TSedaiModFMOp.TriggerOn(AFreq: Single; ANote: Integer; AVelocity: Single);
