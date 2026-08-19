@@ -4,7 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Critical Rules
 
-- **NEVER compile or run**: Do not run `build.ps1`, `build.sh`, `fpc`, `lazbuild`, or launch any executable (`sng_player.exe`, `demo_synth.exe`, ...). The user builds and runs manually to hear/see output himself. Provide the command instead.
+- **Building and running headless is allowed** (changed 2026-08-19). Claude may run `build.sh`/`build.ps1`, `qbuild`, and any binary that **does not open the audio device**: `saf_regression`, `sedaisid_test`, `saf_play`, `sng_dump`, `sng_render`, `patch_render`, `patch_play`, `patch_midi`, `patch_fx`, `patch_doc`, `patch_fixture`, `gateprobe`, `space_probe`, and the measurement harnesses in `job/tools/`. Build errors and PASS/FAIL are things to fix, not to hand over.
+- **NEVER launch what makes a sound**: `patch_live`, `sng_player`, `demo_synth`, `audiotest`, `keyprobe`, `TestSAFMain`. These want an ear or a keyboard at the machine, and that is the user's. Provide the command instead. (To tell them apart: they are the programs that use `SedaiAudioBackend` or `SDL2`.)
 - **NEVER take initiative on code changes**: When asked a question, answer it. Propose changes and wait for explicit confirmation ("sì"/"procedi") before editing source. Creating docs/memory the user requested is fine; touching `.pas`/`.lpr` without a go-ahead is not.
 - **NEVER perform destructive git operations** on the working tree (`reset --hard`, `checkout --`, `restore`, `clean`). There are local, unpushed modifications.
 - **NEVER delete or move user files** without explicit authorization.
