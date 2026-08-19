@@ -46,7 +46,9 @@ type
     // string is driven continuously. The subclass knows which.
     procedure TriggerOn(AFreq: Single; ANote: Integer; AVelocity: Single); virtual; abstract;
     procedure TriggerOff; virtual;
-    function ConfigureGen(const AKey, AValue: string; AFloat: Single): Boolean; virtual;
+    function ConfigureGen(const AKey, AValue: string;
+      AFloat: Single): Boolean; virtual;
+    function ConfigKeys: string; override;
     // Called once per sample, after the pitch is set and before the generator
     // produces. It exists for engines that take an input as well as a note —
     // the FM operator's phase modulation is the only one today, and without it
@@ -127,7 +129,9 @@ type
   protected
     function CreateGen: TSedaiSignalGenerator; override;
     function DefaultTrim: Single; override;
-    function ConfigureGen(const AKey, AValue: string; AFloat: Single): Boolean; override;
+    function ConfigureGen(const AKey, AValue: string;
+      AFloat: Single): Boolean; override;
+    function ConfigKeys: string; override;
     procedure BeforeSample(AIndex: Integer); override;
     procedure TriggerOn(AFreq: Single; ANote: Integer; AVelocity: Single); override;
     procedure TriggerOff; override;
@@ -188,6 +192,11 @@ end;
 procedure TSedaiInstrumentModule.BeforeSample(AIndex: Integer);
 begin
   // Most engines want nothing here.
+end;
+
+function TSedaiInstrumentModule.ConfigKeys: string;
+begin
+  Result := 'freq';
 end;
 
 function TSedaiInstrumentModule.ConfigureGen(const AKey, AValue: string;
@@ -363,6 +372,11 @@ end;
 function TSedaiModFMOp.CreateGen: TSedaiSignalGenerator;
 begin
   Result := TSedaiFMOperator.Create;
+end;
+
+function TSedaiModFMOp.ConfigKeys: string;
+begin
+  Result := 'detune, feedback, fixedfreq, ratio';
 end;
 
 function TSedaiModFMOp.ConfigureGen(const AKey, AValue: string;

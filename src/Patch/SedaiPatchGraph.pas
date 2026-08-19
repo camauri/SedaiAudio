@@ -145,6 +145,11 @@ type
     constructor Create; override;
     destructor Destroy; override;
 
+    // What key=value pairs this type accepts at its module declaration. Not
+    // introspectable from the ports, because these are not ports — a shape, a
+    // filter mode, a file path. Declared here so the reference can be
+    // GENERATED rather than transcribed, which is the only way it stays true.
+    function ConfigKeys: string; virtual;
     function PortByName(const AName: string): TSedaiPatchPort;
     function PortCount: Integer;
     function Port(AIndex: Integer): TSedaiPatchPort;
@@ -429,6 +434,11 @@ begin
   N := Length(FPorts);
   SetLength(FPorts, N + 1);
   FPorts[N] := Result;
+end;
+
+function TSedaiPatchModule.ConfigKeys: string;
+begin
+  Result := '';        // most modules are configured entirely through their ports
 end;
 
 function TSedaiPatchModule.PortByName(const AName: string): TSedaiPatchPort;

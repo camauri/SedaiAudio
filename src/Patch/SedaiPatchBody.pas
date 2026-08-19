@@ -41,6 +41,7 @@ type
     destructor Destroy; override;
     procedure Prepare(ASampleRate: Cardinal; ABlockSize: Integer); override;
     function Configure(const AKey, AValue: string): Boolean; override;
+    function ConfigKeys: string; override;
     procedure RenderSample(AIndex: Integer); override;
   end;
 
@@ -57,6 +58,7 @@ type
     destructor Destroy; override;
     procedure Prepare(ASampleRate: Cardinal; ABlockSize: Integer); override;
     function Configure(const AKey, AValue: string): Boolean; override;
+    function ConfigKeys: string; override;
     procedure RenderSample(AIndex: Integer); override;
   end;
 
@@ -96,6 +98,11 @@ begin
   // convention the block bridge uses — otherwise two mix controls multiply and
   // the module reads as a pass-through.
   FBody.SetMix(1.0);
+end;
+
+function TSedaiModFormant.ConfigKeys: string;
+begin
+  Result := 'body, kind';
 end;
 
 function TSedaiModFormant.Configure(const AKey, AValue: string): Boolean;
@@ -165,6 +172,11 @@ begin
   FTube.SetMix(1.0);          // see the note in TSedaiModFormant.Prepare
   FLastFreq := -1.0;
   FLastRes := -1.0;
+end;
+
+function TSedaiModTube.ConfigKeys: string;
+begin
+  Result := 'mode';
 end;
 
 function TSedaiModTube.Configure(const AKey, AValue: string): Boolean;

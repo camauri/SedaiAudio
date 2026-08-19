@@ -64,7 +64,9 @@ type
   TSedaiLegacyDelay = class(TSedaiLegacyModule)
   protected
     function CreateUnit: TSedaiSignalNode; override;
-    function ConfigureUnit(const AKey, AValue: string; AFloat: Single): Boolean; override;
+    function ConfigureUnit(const AKey, AValue: string;
+      AFloat: Single): Boolean; override;
+    function ConfigKeys: string; override;
   public
     constructor Create; override;
   end;
@@ -72,7 +74,9 @@ type
   TSedaiLegacyChorus = class(TSedaiLegacyModule)
   protected
     function CreateUnit: TSedaiSignalNode; override;
-    function ConfigureUnit(const AKey, AValue: string; AFloat: Single): Boolean; override;
+    function ConfigureUnit(const AKey, AValue: string;
+      AFloat: Single): Boolean; override;
+    function ConfigKeys: string; override;
   public
     constructor Create; override;
   end;
@@ -94,7 +98,9 @@ type
   TSedaiLegacyReverb = class(TSedaiLegacyModule)
   protected
     function CreateUnit: TSedaiSignalNode; override;
-    function ConfigureUnit(const AKey, AValue: string; AFloat: Single): Boolean; override;
+    function ConfigureUnit(const AKey, AValue: string;
+      AFloat: Single): Boolean; override;
+    function ConfigKeys: string; override;
   public
     constructor Create; override;
   end;
@@ -102,7 +108,9 @@ type
   TSedaiLegacyCompressor = class(TSedaiLegacyModule)
   protected
     function CreateUnit: TSedaiSignalNode; override;
-    function ConfigureUnit(const AKey, AValue: string; AFloat: Single): Boolean; override;
+    function ConfigureUnit(const AKey, AValue: string;
+      AFloat: Single): Boolean; override;
+    function ConfigKeys: string; override;
   public
     constructor Create; override;
   end;
@@ -117,7 +125,9 @@ type
   TSedaiLegacyDistortion = class(TSedaiLegacyModule)
   protected
     function CreateUnit: TSedaiSignalNode; override;
-    function ConfigureUnit(const AKey, AValue: string; AFloat: Single): Boolean; override;
+    function ConfigureUnit(const AKey, AValue: string;
+      AFloat: Single): Boolean; override;
+    function ConfigKeys: string; override;
   public
     constructor Create; override;
   end;
@@ -126,7 +136,9 @@ type
   TSedaiLegacyAutoSpace = class(TSedaiLegacyModule)
   protected
     function CreateUnit: TSedaiSignalNode; override;
-    function ConfigureUnit(const AKey, AValue: string; AFloat: Single): Boolean; override;
+    function ConfigureUnit(const AKey, AValue: string;
+      AFloat: Single): Boolean; override;
+    function ConfigKeys: string; override;
   public
     constructor Create; override;
   end;
@@ -134,7 +146,9 @@ type
   TSedaiLegacyBodyRes = class(TSedaiLegacyModule)
   protected
     function CreateUnit: TSedaiSignalNode; override;
-    function ConfigureUnit(const AKey, AValue: string; AFloat: Single): Boolean; override;
+    function ConfigureUnit(const AKey, AValue: string;
+      AFloat: Single): Boolean; override;
+    function ConfigKeys: string; override;
   public
     constructor Create; override;
   end;
@@ -142,7 +156,9 @@ type
   TSedaiLegacyConvolver = class(TSedaiLegacyModule)
   protected
     function CreateUnit: TSedaiSignalNode; override;
-    function ConfigureUnit(const AKey, AValue: string; AFloat: Single): Boolean; override;
+    function ConfigureUnit(const AKey, AValue: string;
+      AFloat: Single): Boolean; override;
+    function ConfigKeys: string; override;
   public
     constructor Create; override;
   end;
@@ -150,6 +166,7 @@ type
   TSedaiLegacyEQ = class(TSedaiLegacyModule)
   protected
     function CreateUnit: TSedaiSignalNode; override;
+    function ConfigKeys: string; override;
     function ConfigureUnit(const AKey, AValue: string; AFloat: Single): Boolean; override;
   public
     constructor Create; override;
@@ -289,6 +306,11 @@ begin
   Result := TSedaiDelay.Create;
 end;
 
+function TSedaiLegacyDelay.ConfigKeys: string;
+begin
+  Result := 'feedback, moddepth, modrate, time';
+end;
+
 function TSedaiLegacyDelay.ConfigureUnit(const AKey, AValue: string;
   AFloat: Single): Boolean;
 begin
@@ -311,6 +333,11 @@ end;
 function TSedaiLegacyChorus.CreateUnit: TSedaiSignalNode;
 begin
   Result := TSedaiChorus.Create;
+end;
+
+function TSedaiLegacyChorus.ConfigKeys: string;
+begin
+  Result := 'depth, rate, voices';
 end;
 
 function TSedaiLegacyChorus.ConfigureUnit(const AKey, AValue: string;
@@ -362,6 +389,11 @@ begin
   Result := TSedaiReverb.Create;
 end;
 
+function TSedaiLegacyReverb.ConfigKeys: string;
+begin
+  Result := 'damping, size, width';
+end;
+
 function TSedaiLegacyReverb.ConfigureUnit(const AKey, AValue: string;
   AFloat: Single): Boolean;
 begin
@@ -383,6 +415,11 @@ end;
 function TSedaiLegacyCompressor.CreateUnit: TSedaiSignalNode;
 begin
   Result := TSedaiCompressor.Create;
+end;
+
+function TSedaiLegacyCompressor.ConfigKeys: string;
+begin
+  Result := 'ratio, threshold';
 end;
 
 function TSedaiLegacyCompressor.ConfigureUnit(const AKey, AValue: string;
@@ -420,6 +457,11 @@ begin
   Result := TSedaiDistortion.Create;
 end;
 
+function TSedaiLegacyDistortion.ConfigKeys: string;
+begin
+  Result := 'drive, gain, tone';
+end;
+
 function TSedaiLegacyDistortion.ConfigureUnit(const AKey, AValue: string;
   AFloat: Single): Boolean;
 begin
@@ -446,6 +488,11 @@ begin
   Result := TSedaiAutoSpace.Create;
 end;
 
+function TSedaiLegacyAutoSpace.ConfigKeys: string;
+begin
+  Result := 'reflect, size, width';
+end;
+
 function TSedaiLegacyAutoSpace.ConfigureUnit(const AKey, AValue: string;
   AFloat: Single): Boolean;
 begin
@@ -467,6 +514,11 @@ end;
 function TSedaiLegacyBodyRes.CreateUnit: TSedaiSignalNode;
 begin
   Result := TSedaiBodyResonator.Create;
+end;
+
+function TSedaiLegacyBodyRes.ConfigKeys: string;
+begin
+  Result := 'body, kind, width';
 end;
 
 function TSedaiLegacyBodyRes.ConfigureUnit(const AKey, AValue: string;
@@ -505,6 +557,11 @@ begin
   Result := TSedaiConvolver.Create;
 end;
 
+function TSedaiLegacyConvolver.ConfigKeys: string;
+begin
+  Result := 'ir, irraw';
+end;
+
 function TSedaiLegacyConvolver.ConfigureUnit(const AKey, AValue: string;
   AFloat: Single): Boolean;
 begin
@@ -538,6 +595,13 @@ constructor TSedaiLegacyEQ.Create;
 begin
   inherited Create;
   TypeName := 'seq3';
+end;
+
+function TSedaiLegacyEQ.ConfigKeys: string;
+begin
+  // Indexed, band 0 to 7: b0type=lowcut|lowshelf|peaking|highshelf|highcut,
+  // b0freq, b0gain, b0q, b0off — and the same for b1..b7.
+  Result := 'gain, bNtype, bNfreq, bNgain, bNq, bNoff  (N = 0..7)';
 end;
 
 function TSedaiLegacyEQ.CreateUnit: TSedaiSignalNode;

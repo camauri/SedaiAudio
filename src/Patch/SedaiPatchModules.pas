@@ -37,6 +37,7 @@ type
   public
     constructor Create; override;
     function Configure(const AKey, AValue: string): Boolean; override;
+    function ConfigKeys: string; override;
     procedure ResetState; override;
     procedure RenderSample(AIndex: Integer); override;
   end;
@@ -53,6 +54,7 @@ type
   public
     constructor Create; override;
     function Configure(const AKey, AValue: string): Boolean; override;
+    function ConfigKeys: string; override;
     procedure ResetState; override;
     procedure RenderSample(AIndex: Integer); override;
   end;
@@ -80,6 +82,7 @@ type
   public
     constructor Create; override;
     function Configure(const AKey, AValue: string): Boolean; override;
+    function ConfigKeys: string; override;
     procedure ResetState; override;
     procedure RenderSample(AIndex: Integer); override;
   end;
@@ -98,6 +101,7 @@ type
   public
     constructor Create; override;
     function Configure(const AKey, AValue: string): Boolean; override;
+    function ConfigKeys: string; override;
     procedure ResetState; override;
     procedure RenderSample(AIndex: Integer); override;
   end;
@@ -116,6 +120,7 @@ type
   public
     constructor Create; override;
     function Configure(const AKey, AValue: string): Boolean; override;
+    function ConfigKeys: string; override;
     procedure Prepare(ASampleRate: Cardinal; ABlockSize: Integer); override;
     procedure ResetState; override;
     procedure RenderSample(AIndex: Integer); override;
@@ -139,6 +144,7 @@ type
   public
     constructor Create; override;
     function Configure(const AKey, AValue: string): Boolean; override;
+    function ConfigKeys: string; override;
     property Channel: Integer read FChannel;
     procedure Prepare(ASampleRate: Cardinal; ABlockSize: Integer); override;
     procedure ResetState; override;
@@ -292,6 +298,11 @@ begin
   FOut     := AddOutput('out', prAudio);
 end;
 
+function TSedaiModOsc.ConfigKeys: string;
+begin
+  Result := 'freq, shape';
+end;
+
 function TSedaiModOsc.Configure(const AKey, AValue: string): Boolean;
 var
   S: TSedaiOscShape;
@@ -352,6 +363,11 @@ begin
   FResIn    := AddInput('res', prUnipolar, 0.2);
   FResIn.Min := 0.0; FResIn.Max := 1.0;
   FOut      := AddOutput('out', prAudio);
+end;
+
+function TSedaiModFilter.ConfigKeys: string;
+begin
+  Result := 'cutoff, mode';
 end;
 
 function TSedaiModFilter.Configure(const AKey, AValue: string): Boolean;
@@ -453,6 +469,11 @@ begin
   FOut    := AddOutput('out', prUnipolar);
 end;
 
+function TSedaiModEnv.ConfigKeys: string;
+begin
+  Result := 'a, d, r, s';
+end;
+
 function TSedaiModEnv.Configure(const AKey, AValue: string): Boolean;
 begin
   Result := True;
@@ -530,6 +551,11 @@ begin
   FOut    := AddOutput('out', prBipolar);
 end;
 
+function TSedaiModLFO.ConfigKeys: string;
+begin
+  Result := 'phase, rate, shape';
+end;
+
 function TSedaiModLFO.Configure(const AKey, AValue: string): Boolean;
 var
   S: TSedaiOscShape;
@@ -589,6 +615,11 @@ end;
 // `module l = input channel=0` / `module r = input channel=1`: a patch declares
 // how many inputs it wants and which channel each takes, the same way `output`
 // lines declare the outputs.
+function TSedaiModInput.ConfigKeys: string;
+begin
+  Result := 'channel';
+end;
+
 function TSedaiModInput.Configure(const AKey, AValue: string): Boolean;
 begin
   Result := True;
@@ -643,6 +674,11 @@ begin
   FWrite := 0;
   FIn  := AddInput('in', prAudio, 0.0);
   FOut := AddOutput('out', prAudio);
+end;
+
+function TSedaiModDelay.ConfigKeys: string;
+begin
+  Result := 'time';
 end;
 
 function TSedaiModDelay.Configure(const AKey, AValue: string): Boolean;

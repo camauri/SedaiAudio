@@ -71,6 +71,7 @@ type
     procedure Prepare(ASampleRate: Cardinal; ABlockSize: Integer); override;
     procedure ResetState; override;
     function Configure(const AKey, AValue: string): Boolean; override;
+    function ConfigKeys: string; override;
     procedure RenderSample(AIndex: Integer); override;
   end;
 
@@ -194,6 +195,11 @@ procedure TSedaiModSpace.ResetState;
 begin
   inherited ResetState;
   if FProc <> nil then Rebuild;
+end;
+
+function TSedaiModSpace.ConfigKeys: string;
+begin
+  Result := 'doppler, max, ref, rolloff';
 end;
 
 function TSedaiModSpace.Configure(const AKey, AValue: string): Boolean;

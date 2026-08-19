@@ -20,16 +20,31 @@ Or keep the patch playing while you edit it — this is the ear loop the workben
 exists for:
 
     ./build.sh --source job/tools/saf/patch_live.lpr --dest bin/<plat>/patch_live
-    bin/<plat>/patch_live library/patches/poly.patch 8
+    bin/<plat>/patch_live library/patches/poly.patch 8 128 48000
+                          ^patch                     ^voices ^buffer ^rate
 
 Edit the file in any editor, save, and the sound changes without a restart. A
 save that does not compile prints the error and leaves the previous version
 playing, so a typo never drops you into silence wondering what happened.
 
-Keys: `z s x d c v g b h n j m` are one octave from C, `,` and `.` change
-octave, SPACE releases everything, `R` forces a reload, `I` prints the compiled
-stages, `Q` quits. It needs a REAL terminal — with stdin redirected the keyboard
-stays inert by design.
+Keys: `z x c v b n m` are the white notes and `s d g h j` the black ones, one
+octave from C; `,` and `.` change octave, SPACE releases everything, `R` forces a
+reload, `I` prints the compiled stages, `Q` quits.
+
+It opens a small **SDL2 window** — give it focus and play there. A terminal
+reports key-down and never key-up, so a note could be struck but never held, and
+you cannot judge a pad you cannot hold. With no display it falls back to the
+terminal, where a note releases itself after a fixed time.
+
+Buffer and rate are worth setting. **Match the rate to your audio server** or it
+resamples, and the resampler costs latency: `pw-metadata -n settings | grep
+clock.rate` tells you. The buffer is the other half — measured key-to-sound, 1024
+samples is about 59 ms and unplayable, 128 is about 8 ms and inside what an
+acoustic player already lives with.
+
+One thing no software can fix: a PC keyboard is a matrix without diodes and stops
+reporting past three or four simultaneous keys, whichever they are. Measured here
+on two different keyboards. Chords need MIDI.
 
 Or play a MIDI file through the patch:
 
@@ -46,6 +61,67 @@ onsets to arpeggiate: `60:0,64:0.3,67:0.6`. A patch is a VOICE TEMPLATE — the
 pool builds N independent instances of it, so each note has its own oscillator
 phase, filter state and envelope, and when the notes outnumber the voices the
 oldest is stolen.
+
+## The syntax, in full
+
+Five statements, one per line. Anything after `#` is a comment, and blank lines
+are ignored. Order matters only in that a module must be declared before it is
+named.
+
+    mode    sample                     # optional; forces every stage sample-by-sample
+    module  <name> = <type> [key=value ...]
+    set     <module>.<port> = <value>
+    connect <module>.<port> -> <module>.<port> [amount=<value>] [normalled]
+    output  <module>.<port>            # repeat the line for more channels
+
+**`module`** names an instance and its type. Any `key=value` after the type does
+one of two things, in this order: the module gets first refusal (that is how
+`osc shape=saw`, `inst instrument="Drawbar Organ"` and `sconv ir=body.wav` work,
+since none of those is a number), and anything it does not claim is used to set
+an input port of the same name. So `module gl = glide time=0.012` needs no `set`
+line. A value containing spaces must be double-quoted.
+
+**`set`** writes a port's constant — the knob under the modulation. It does not
+disconnect anything: a port holds this value *plus* whatever is patched into it.
+
+**`connect`** adds a source to an input. Several connections into the same input
+**sum**, which is why there is no mixer module. `amount=` scales that one source
+and **may be negative**, which is the attenuverter of a modular system. A
+connection marked `normalled` is a default that yields: it disappears the moment
+anything else is patched into that input.
+
+**`output`** declares a channel. One line is mono, two are stereo, eight are 7.1
+— the channel count belongs to the patch, and the ports stay one signal each.
+
+### Values
+
+Plain numbers, written with a **dot** whatever the machine's locale says.
+Suffixes are accepted and converted:
+
+| written | means |
+|---|---|
+| `440` `440Hz` | 440 |
+| `120ms` | 0.12 |
+| `1.5s` | 1.5 |
+| `35%` | 0.35 |
+
+⚠️ `dB` is accepted as a suffix and **stripped without converting** — `-6dB`
+gives you −6, not 0.5. Write the linear value until that is fixed.
+
+### Ports
+
+`<module>.<port>`, and the port names are the module's own: `in`, `out`, `pitch`,
+`gate`, `cutoff`, `gain`, and so on. A patch that names a port a module does not
+have fails to compile and says which module and which port, rather than ignoring
+the line.
+
+### Where the shape comes from
+
+A patch is a **table**: modules, values, connections. That is the ARP 2500 and
+EMS VCS3 matrix written as rows instead of pins — the same information, and it
+diffs and versions like source because a table is a file. The mechanical
+matrices had a real drawback, crosstalk between adjacent buses; in software that
+drawback does not exist, so the metaphor is taken without its price.
 
 | Patch | What it shows |
 |---|---|
@@ -133,6 +209,133 @@ block-of-one path is made unreachable rather than made cheaper.
 Oscillators are band-limited (PolyBLEP on the discontinuities, and the triangle
 is built by integrating the corrected square), which puts residual aliasing 17
 to 18 dB below the naive shapes.
+
+## Traps
+
+Every one of these cost real time to find. They are here so they cost nobody
+else any.
+
+**The note module must be NAMED `note`.** The voice pool looks it up by name,
+not by type, so `module kbd = note` is a perfectly good note module that nothing
+will ever find — the patch compiles, renders, and is silent. The loader does say
+so (*"the patch has no module named note, so it cannot be played by note"*), and
+the tools print it, so **read the warning line**. A patch with no keyboard at all
+is legitimate — a drone, a sequenced piece — which is why this is a warning and
+not an error.
+
+**`set` writes a PORT; declaration keys go on the `module` line.** `sdist` takes
+`drive` as a declaration key, not a port, so `set drv.drive = 1.6` fails with
+*"module drv has no port drive"* while `module drv = sdist drive=1.6` works. The
+module reference above says which is which: the `declaration keys` column is the
+`module` line, the `inputs` column is `set` and `connect`.
+
+**`amount=` must not have a space after the `=`.** `amount= 0.5` splits into two
+tokens and reports *"amount is not a number"*.
+
+**⚠️ `dB` is accepted as a suffix and stripped WITHOUT converting.** `-6dB`
+becomes −6, not 0.5. On a port with a range you get an error — *"gain = -6 is
+outside 0 .. 16"* — but on a bipolar input or an `amount=` it passes silently and
+is wrong by a factor of a hundred. Write the linear value.
+
+**Block-only modules cannot go in a feedback cycle.** Everything prefixed `s`,
+plus `inst`. The patch refuses to compile and names the module and the cycle,
+rather than running the expensive block-of-one path or sounding wrong quietly.
+
+**A silent patch is usually a closed gate.** `patch_render` does not play notes
+at all — it renders the graph with the gate shut, which for any patch with an
+envelope on the amplifier means silence. Use `patch_play` to hear notes.
+
+**Voices sum.** Three notes of an ordinary patch pass 1.0; the pool now has a
+soft limiter on the output, linear below 0.70 and asymptotic above, so chords no
+longer square off. Below the knee the signal is untouched.
+
+## Module reference
+
+<!-- BEGIN MODULE REFERENCE -->
+<!-- GENERATED BY patch_doc — do not edit by hand.
+     Regenerate with: bin/<plat>/patch_doc >> library/patches/README.md -->
+
+Every row below is produced by building the module and asking it, so it
+cannot drift from the code. `rate` says whether the module may sit inside a
+feedback cycle: `both` may, `block` may not and the patch refuses to compile
+if you try. Inputs show their role, the value they hold when nothing is
+patched in, and the range they clamp to.
+
+### Core
+
+| type | rate | declaration keys | inputs `[role default min..max]` | outputs |
+|---|---|---|---|---|
+| `osc` | both | freq, shape | pitch [pitch 0], pw [0..+ 0.5 0..1], sync [gate 0] | out |
+| `filter` | both | cutoff, mode | in [audio 0], cutoff [pitch 0], res [0..+ 0.2 0..1] | out |
+| `amp` | both | — | in [audio 0], gain [0..+ 0 0..16] | out |
+| `env` | both | a, d, r, s | gate [gate 0] | out |
+| `lfo` | both | phase, rate, shape | rate [pitch 0] | out |
+| `delay` | both | time | in [audio 0] | out |
+| `input` | both | channel | — | out |
+| `note` | both | — | — | pitch, gate |
+
+### Electronic
+
+| type | rate | declaration keys | inputs `[role default min..max]` | outputs |
+|---|---|---|---|---|
+| `seq` | both | gatems, gates, steps, values | clock [gate 0], reset [gate 0] | out, gate |
+| `sh` | both | — | in [-..+ 0], trig [gate 0] | out |
+| `ring` | both | — | a [audio 0], b [audio 0] | out |
+| `glide` | both | — | in [pitch 0], time [0..+ 0.08 0..10] | out |
+| `noise` | both | color, seed, type | — | out |
+| `quant` | both | scale | in [pitch 0] | out |
+| `follow` | both | — | in [audio 0], attack [0..+ 0.005 0.0001..2], release [0..+ 0.12 0.0001..8] | out |
+| `fold` | both | — | in [audio 0], fold [0..+ 1 0..16], sym [-..+ 0 -1..1] | out |
+| `lpg` | both | — | in [audio 0], cv [0..+ 0 0..1], resp [0..+ 0.02 0..1] | out |
+
+### Instruments
+
+| type | rate | declaration keys | inputs `[role default min..max]` | outputs |
+|---|---|---|---|---|
+| `karplus` | both | freq | pitch [pitch 0], gate [gate 0], amp [0..+ 1 0..8] | out |
+| `modal` | both | freq | pitch [pitch 0], gate [gate 0], amp [0..+ 1.25 0..8] | out |
+| `bowed` | both | freq | pitch [pitch 0], gate [gate 0], amp [0..+ 5 0..8] | out |
+| `reed` | both | freq | pitch [pitch 0], gate [gate 0], amp [0..+ 1.8 0..8] | out |
+| `fmop` | both | detune, feedback, fixedfreq, ratio | pitch [pitch 0], gate [gate 0], amp [0..+ 0.33 0..8], phasem [audio 0] | out |
+
+### Instrument library
+
+| type | rate | declaration keys | inputs `[role default min..max]` | outputs |
+|---|---|---|---|---|
+| `inst` | block | freq, instrument, library, preset, source | pitch [pitch 0], gate [gate 0], amp [0..+ 0.6 0..8] | out, outR |
+
+### Space
+
+| type | rate | declaration keys | inputs `[role default min..max]` | outputs |
+|---|---|---|---|---|
+| `pan` | both | — | in [audio 0], pan [-..+ 0 -1..1] | out, outR |
+| `width` | both | — | in [audio 0], inR [audio 0], width [0..+ 1 0..2] | out, outR |
+| `space` | both | doppler, max, ref, rolloff | in [audio 0], x [-..+ 0 -100..100], y [-..+ 0 -100..100], z [-..+ -1 -100..100] | out, outR |
+
+### Body
+
+| type | rate | declaration keys | inputs `[role default min..max]` | outputs |
+|---|---|---|---|---|
+| `formant` | both | body, kind | in [audio 0], mix [0..+ 1 0..1] | out |
+| `tube` | both | mode | in [audio 0], freq [0..+ 220 20..8000], res [0..+ 0.9 0..0.999], mix [0..+ 1 0..1] | out |
+
+### Bridged from SAF units
+
+| type | rate | declaration keys | inputs `[role default min..max]` | outputs |
+|---|---|---|---|---|
+| `sdelay` | block | feedback, moddepth, modrate, time | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
+| `schorus` | block | depth, rate, voices | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
+| `sflanger` | block | — | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
+| `sphaser` | block | — | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
+| `sreverb` | block | damping, size, width | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
+| `scomp` | block | ratio, threshold | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
+| `slimiter` | block | — | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
+| `sdist` | block | drive, gain, tone | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
+| `sautospace` | block | reflect, size, width | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
+| `sbody` | block | body, kind, width | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
+| `sconv` | block | ir, irraw | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
+| `seq3` | block | gain, bNtype, bNfreq, bNgain, bNq, bNoff  (N = 0..7) | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
+<!-- END MODULE REFERENCE -->
 
 ## The instruments
 

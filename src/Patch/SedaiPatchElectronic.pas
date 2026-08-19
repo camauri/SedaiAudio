@@ -56,6 +56,7 @@ type
   public
     constructor Create; override;
     function Configure(const AKey, AValue: string): Boolean; override;
+    function ConfigKeys: string; override;
     procedure Prepare(ASampleRate: Cardinal; ABlockSize: Integer); override;
     procedure ResetState; override;
     procedure RenderSample(AIndex: Integer); override;
@@ -118,6 +119,7 @@ type
     constructor Create; override;
     destructor Destroy; override;
     function Configure(const AKey, AValue: string): Boolean; override;
+    function ConfigKeys: string; override;
     procedure Prepare(ASampleRate: Cardinal; ABlockSize: Integer); override;
     procedure ResetState; override;
     procedure RenderSample(AIndex: Integer); override;
@@ -139,6 +141,7 @@ type
   public
     constructor Create; override;
     function Configure(const AKey, AValue: string): Boolean; override;
+    function ConfigKeys: string; override;
     procedure RenderSample(AIndex: Integer); override;
   end;
 
@@ -249,6 +252,11 @@ begin
   FCount := Length(Parts);
   FStep := FCount - 1;
   Result := True;
+end;
+
+function TSedaiModSeq.ConfigKeys: string;
+begin
+  Result := 'gatems, gates, steps, values';
 end;
 
 function TSedaiModSeq.Configure(const AKey, AValue: string): Boolean;
@@ -429,6 +437,11 @@ begin
   inherited Destroy;
 end;
 
+function TSedaiModNoise.ConfigKeys: string;
+begin
+  Result := 'color, seed, type';
+end;
+
 function TSedaiModNoise.Configure(const AKey, AValue: string): Boolean;
 begin
   Result := True;
@@ -507,6 +520,11 @@ begin
   else raise Exception.CreateFmt('unknown scale "%s" — one of: chromatic, '
     + 'major, minor, dorian, phrygian, pentatonic, minorpent, blues, whole, '
     + 'octave, fifth', [AName]);
+end;
+
+function TSedaiModQuant.ConfigKeys: string;
+begin
+  Result := 'scale';
 end;
 
 function TSedaiModQuant.Configure(const AKey, AValue: string): Boolean;

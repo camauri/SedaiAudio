@@ -65,6 +65,7 @@ type
     procedure Prepare(ASampleRate: Cardinal; ABlockSize: Integer); override;
     procedure ResetState; override;
     function Configure(const AKey, AValue: string): Boolean; override;
+    function ConfigKeys: string; override;
     procedure RenderSample(AIndex: Integer); override;
     procedure RenderBlock(ACount: Integer); override;
   end;
@@ -184,6 +185,11 @@ begin
   FLastGate := 0.0;
   FSounding := False;
   FPart.AllNotesOff;
+end;
+
+function TSedaiModPart.ConfigKeys: string;
+begin
+  Result := 'freq, instrument, library, preset, source';
 end;
 
 function TSedaiModPart.Configure(const AKey, AValue: string): Boolean;

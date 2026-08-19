@@ -1,0 +1,77 @@
+# ADDITIVO MODELLABILE — otto sinusoidi, e ogni armonica ha il SUO inviluppo.
+# Le alte decadono prima delle basse: e' questo che fa un suono di campana
+# invece di un organo. Con inst non si puo' fare: li' le armoniche sono dati
+# analizzati da una registrazione e non hanno porte. Qui sono otto moduli.
+module note = note
+module vel  = lfo shape=triangle rate=0.13   # al posto della velocity, per ora
+module amp  = amp
+module h0 = osc shape=sine freq=110.0
+module e0 = env a=0.003 d=2.6 s=0.0 r=0.5
+module a0 = amp
+module h1 = osc shape=sine freq=220.0
+module e1 = env a=0.003 d=1.9 s=0.0 r=0.5
+module a1 = amp
+module h2 = osc shape=sine freq=330.0
+module e2 = env a=0.003 d=1.4 s=0.0 r=0.5
+module a2 = amp
+module h3 = osc shape=sine freq=440.0
+module e3 = env a=0.003 d=1.05 s=0.0 r=0.5
+module a3 = amp
+module h4 = osc shape=sine freq=550.0
+module e4 = env a=0.003 d=0.8 s=0.0 r=0.5
+module a4 = amp
+module h5 = osc shape=sine freq=660.0
+module e5 = env a=0.003 d=0.6 s=0.0 r=0.5
+module a5 = amp
+module h6 = osc shape=sine freq=770.0
+module e6 = env a=0.003 d=0.45 s=0.0 r=0.45
+module a6 = amp
+module h7 = osc shape=sine freq=880.0
+module e7 = env a=0.003 d=0.34 s=0.0 r=0.34
+module a7 = amp
+connect note.pitch -> h0.pitch
+connect note.gate  -> e0.gate
+connect h0.out -> a0.in
+connect e0.out -> a0.gain amount=1.000
+connect a0.out -> amp.in amount=0.34
+connect note.pitch -> h1.pitch
+connect note.gate  -> e1.gate
+connect h1.out -> a1.in
+connect e1.out -> a1.gain amount=0.620
+connect a1.out -> amp.in amount=0.34
+connect note.pitch -> h2.pitch
+connect note.gate  -> e2.gate
+connect h2.out -> a2.in
+connect e2.out -> a2.gain amount=0.440
+connect a2.out -> amp.in amount=0.34
+connect note.pitch -> h3.pitch
+connect note.gate  -> e3.gate
+connect h3.out -> a3.in
+connect e3.out -> a3.gain amount=0.300
+connect a3.out -> amp.in amount=0.34
+connect note.pitch -> h4.pitch
+connect note.gate  -> e4.gate
+connect h4.out -> a4.in
+connect e4.out -> a4.gain amount=0.220
+connect a4.out -> amp.in amount=0.34
+connect note.pitch -> h5.pitch
+connect note.gate  -> e5.gate
+connect h5.out -> a5.in
+connect e5.out -> a5.gain amount=0.160
+connect a5.out -> amp.in amount=0.34
+connect note.pitch -> h6.pitch
+connect note.gate  -> e6.gate
+connect h6.out -> a6.in
+connect e6.out -> a6.gain amount=0.110
+connect a6.out -> amp.in amount=0.34
+connect note.pitch -> h7.pitch
+connect note.gate  -> e7.gate
+connect h7.out -> a7.in
+connect e7.out -> a7.gain amount=0.080
+connect a7.out -> amp.in amount=0.34
+connect vel.out -> a0.gain amount=-0.18
+connect vel.out -> a5.gain amount=0.14
+connect vel.out -> a6.gain amount=0.12
+connect vel.out -> a7.gain amount=0.10
+set amp.gain = 0.55
+output amp.out
