@@ -59,6 +59,22 @@ Sedai Audio Foundation (SAF) is a modular Free Pascal audio framework.
 
 ## Documentation Status
 
-Current as of 2026-08-14: the **Installation/Building** sections (Linux/macOS via `setup.sh`/`build.sh`, the SDL2 `-dev` requirement) and the whole **License** section (GPL-3.0 only — the commercial option was withdrawn, see `LICENSING.md`) were rewritten this session. The **SID Evo** and **GoatTracker Player** sections were audited 2026-06-22 and remain accurate.
+**Patch Workbench (2026-08-19): documentato per intero.** `library/patches/README.md`
+è la fonte: grammatica completa (sette istruzioni), sezione **Trappole** con i
+messaggi d'errore veri, e la **referenza dei moduli generata** da `patch_doc`
+interrogando il registro — non trascritta, quindi non può divergere. Si rigenera
+con `bin/<plat>/patch_doc`.
 
-Everything else in README, plus ARCHITECTURE_PROPOSAL.md / TODO.md (both gitignored), may still have drifted (audit 2026-06-21): some documented APIs/demos no longer exist and some implemented units are undocumented. Verify against sources before relying on those parts. Working notes live outside git in `job/docs/` and `NEXT_SESSION_PROMPT.md`.
+Fixture sonore in `library/patches/fixtures.txt`: `bin/<plat>/patch_fixture` dice
+quali patch sono cambiate e di quanto (picco, RMS, centroide). `--update` per
+riscrivere i riferimenti, deliberatamente.
+
+Le sezioni **Installation/Building** e **License** del README di progetto sono
+state riscritte il 2026-08-14 (GPL-3.0 only, vedi `LICENSING.md`). **SID Evo** e
+**GoatTracker Player** verificate il 2026-06-22.
+
+Il resto del README di progetto, più ARCHITECTURE_PROPOSAL.md e TODO.md (entrambi
+gitignored), può essere ancora alla deriva (audit 2026-06-21): alcune API
+documentate non esistono più e alcune unit implementate non sono documentate.
+Verificare sui sorgenti prima di fidarsi. Note di lavoro fuori da git in
+`job/docs/` e `NEXT_SESSION_PROMPT.md`.
