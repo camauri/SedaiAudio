@@ -64,6 +64,8 @@ type
     FBlockSize: Integer;
     FClock: QWord;
     FLastError: string;
+    FWarnings: string;
+    FPatchVoices: Integer;
     FForceSampleRate: Boolean;
     FMasterGain: Single;
     FLimit: Boolean;
@@ -89,12 +91,23 @@ type
     procedure Render(ACount: Integer);
     function MixSample(AChannel, AIndex: Integer): Single; inline;
     function OutputCount: Integer;
+    // True when the patch takes audio from outside rather than making its own.
+    // Such a patch is an EFFECT: rendering it with nothing connected measures
+    // silence, which proves nothing about the effect, so callers that generate
+    // fixtures or previews skip it rather than recording a zero.
+    function HasAudioInput: Boolean;
     function ActiveVoices: Integer;
 
     function Describe: string;
 
     function VoiceCount: Integer;
     property LastError: string read FLastError;
+    // Non-fatal things the patch said. Print them: they are the only notice you
+    // get that an included file changed under you.
+    property Warnings: string read FWarnings;
+    // What the patch itself asked for, 0 if it did not say. Polyphony is a
+    // property of the instrument, not of how it was launched.
+    property PatchVoices: Integer read FPatchVoices;
     property MasterGain: Single read FMasterGain write FMasterGain;
     // On by default: an instrument that crackles when you play a chord is
     // broken, and nobody should have to know why. Switch it off to measure the
@@ -157,15 +170,29 @@ var
 begin
   Result := False;
   FLastError := '';
+  FWarnings := '';
+  FPatchVoices := 0;
   if APolyphony < 1 then APolyphony := 1;
 
   for I := 0 to High(FVoices) do FVoices[I].Free;
   SetLength(FVoices, 0);
 
-  for I := 0 to APolyphony - 1 do
+  // The patch may state its own polyphony, and when it does it wins: a
+  // monophonic bass is monophonic by nature, not because of how it was
+  // launched. The caller's number is the default for a patch that says nothing.
+  I := 0;
+  while I < APolyphony do
   begin
     V := TSedaiPatchVoice.Create;
     Res := LoadPatchFromFile(V.FGraph, AFilename);
+    // Warnings survive: an include that has moved on since the patch was
+    // written is exactly the thing nobody notices until the sound is wrong.
+    if (I = 0) and (Res.Warnings <> '') then FWarnings := Res.Warnings;
+    if (I = 0) and (Res.Voices > 0) then
+    begin
+      FPatchVoices := Res.Voices;
+      APolyphony := Res.Voices;
+    end;
     if not Res.Success then
     begin
       if Res.ErrorLine > 0 then
@@ -187,6 +214,7 @@ begin
 
     SetLength(FVoices, Length(FVoices) + 1);
     FVoices[High(FVoices)] := V;
+    Inc(I);
   end;
 
   if (Length(FVoices) > 0) and (FVoices[0].FNote = nil) then
@@ -382,6 +410,16 @@ begin
 end;
 
 // Every voice is the same patch, so they all declare the same channel count.
+function TSedaiPatchVoicePool.HasAudioInput: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  if Length(FVoices) = 0 then Exit;
+  for I := 0 to FVoices[0].FGraph.ModuleCount - 1 do
+    if SameText(FVoices[0].FGraph.ModuleAt(I).TypeName, 'input') then Exit(True);
+end;
+
 function TSedaiPatchVoicePool.OutputCount: Integer;
 begin
   if Length(FVoices) = 0 then Result := 1

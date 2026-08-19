@@ -134,6 +134,8 @@ type
   private
     FPorts: TSedaiPatchPortArray;
     FModuleName: string;
+    FSourceFile: string;
+    FSourcePrefix: string;
     FTypeName: string;
     FRate: TSedaiModuleRate;
   protected
@@ -176,6 +178,12 @@ type
     function InternalDelay: Integer; virtual;
 
     property ModuleName: string read FModuleName write FModuleName;
+    // Where this module came from. A patch that includes another keeps the
+    // trail, so a tool can later materialise the included part into the file
+    // that uses it — which is what "edit an include and it becomes yours"
+    // needs. Empty means it was written in the patch itself.
+    property SourceFile: string read FSourceFile write FSourceFile;
+    property SourcePrefix: string read FSourcePrefix write FSourcePrefix;
     property TypeName: string read FTypeName write FTypeName;
     property Rate: TSedaiModuleRate read FRate write FRate;
   end;
@@ -198,7 +206,16 @@ type
     FSampleRate: Cardinal;
     FBlockSize: Integer;
     FCompiled: Boolean;
-    FOutputs: array of TSedaiPatchPort;
+    // An output is a point the instrument RADIATES FROM, not a format: its
+    // position is on the instrument's own axis (-1..+1) and Extent is how far
+    // apart in metres those points really are. The arrangement turns that into
+    // left and right knowing how far away the thing stands; an instrument that
+    // decided "left" itself could never be turned around.
+    FOutputs: array of record
+      Port: TSedaiPatchPort;
+      Pos: Single;
+    end;
+    FExtent: Single;
     FLastError: string;
     // Tarjan working state
     FIndex: array of Integer;
@@ -230,6 +247,11 @@ type
     // mono patch, two are stereo, eight are 7.1 — the number of output channels
     // is a property of the patch, not of the ports, which stay one signal each.
     function AddOutputChannel(const APath: string): Boolean;
+    function AddOutputChannelAt(const APath: string; APos: Single): Boolean;
+    function OutputPos(AIndex: Integer): Single;
+    // Metres between the outermost radiating points. 0 = a point source, which
+    // is every electronic sound.
+    property Extent: Single read FExtent write FExtent;
     function OutputCount: Integer;
     function ModuleAt(AIndex: Integer): TSedaiPatchModule;
 
@@ -594,11 +616,16 @@ end;
 
 function TSedaiPatchGraph.FindPort(const APath: string): TSedaiPatchPort;
 var
-  P: Integer;
+  P, I: Integer;
   M: TSedaiPatchModule;
 begin
   Result := nil;
-  P := Pos('.', APath);
+  // The LAST dot, not the first: an included module is named "v.filt", so its
+  // cutoff is "v.filt.cutoff" and splitting on the first dot would look for a
+  // module called "v". A port name never contains a dot; a module name may.
+  P := 0;
+  for I := Length(APath) downto 1 do
+    if APath[I] = '.' then begin P := I; Break; end;
   if P <= 1 then
   begin
     FLastError := Format('"%s" is not a module.port path', [APath]);
@@ -662,6 +689,12 @@ begin
 end;
 
 function TSedaiPatchGraph.AddOutputChannel(const APath: string): Boolean;
+begin
+  Result := AddOutputChannelAt(APath, 0.0);
+end;
+
+function TSedaiPatchGraph.AddOutputChannelAt(const APath: string;
+  APos: Single): Boolean;
 var
   P: TSedaiPatchPort;
   N: Integer;
@@ -675,8 +708,17 @@ begin
   end;
   N := Length(FOutputs);
   SetLength(FOutputs, N + 1);
-  FOutputs[N] := P;
+  FOutputs[N].Port := P;
+  FOutputs[N].Pos := APos;
   Result := True;
+end;
+
+function TSedaiPatchGraph.OutputPos(AIndex: Integer): Single;
+begin
+  if (AIndex >= 0) and (AIndex < Length(FOutputs)) then
+    Result := FOutputs[AIndex].Pos
+  else
+    Result := 0.0;
 end;
 
 function TSedaiPatchGraph.OutputCount: Integer;
@@ -1050,8 +1092,8 @@ end;
 
 function TSedaiPatchGraph.OutputSample(AChannel, AIndex: Integer): Single;
 begin
-  if (AChannel >= 0) and (AChannel < Length(FOutputs)) and (FOutputs[AChannel] <> nil) then
-    Result := FOutputs[AChannel].Sample(AIndex)
+  if (AChannel >= 0) and (AChannel < Length(FOutputs)) and (FOutputs[AChannel].Port <> nil) then
+    Result := FOutputs[AChannel].Port.Sample(AIndex)
   else
     Result := 0.0;
 end;

@@ -68,11 +68,13 @@ Five statements, one per line. Anything after `#` is a comment, and blank lines
 are ignored. Order matters only in that a module must be declared before it is
 named.
 
+    include "<file>" as <prefix> [hash=<checksum>]
+    voices  <n>
     mode    sample                     # optional; forces every stage sample-by-sample
     module  <name> = <type> [key=value ...]
     set     <module>.<port> = <value>
     connect <module>.<port> -> <module>.<port> [amount=<value>] [normalled]
-    output  <module>.<port>            # repeat the line for more channels
+    output  <module>.<port> [pos=<-1..+1>] [extent=<metres>]
 
 **`module`** names an instance and its type. Any `key=value` after the type does
 one of two things, in this order: the module gets first refusal (that is how
@@ -92,6 +94,49 @@ anything else is patched into that input.
 
 **`output`** declares a channel. One line is mono, two are stereo, eight are 7.1
 — the channel count belongs to the patch, and the ports stay one signal each.
+
+An output is a point the instrument **radiates from**, not a format, so it may
+carry where that point sits: `pos=` on the instrument's own axis, −1 to +1, and
+`extent=` how far apart in metres the outermost points really are. A handpan is
+one object whose tone fields are spread across a shell a foot wide, and saying
+so lets an arrangement narrow that width as the instrument moves away, the way a
+real object's does. Say nothing and it is a point source, which is every
+electronic sound.
+
+Note the coordinates are the **instrument's**, never the listener's: "one end of
+the shell", not "left". Left is the arrangement's word, and an instrument that
+had already decided it could never be turned around.
+
+**`voices`** is how many notes the instrument can sound at once. **The patch
+wins**: a monophonic bass is monophonic by nature, not because of how it was
+launched, so a `voices` line overrides whatever a tool was told on its command
+line. Say nothing and the tool's own default stands.
+
+**`include`** brings in another patch file under a prefix. Its modules become
+`<prefix>.<name>`, so two included files may both call something `osc1` without
+colliding, and a name tells you which file it came from:
+
+    include "parts/moog_core.patch" as core
+    connect core.f2.out -> amp.in
+
+Paths are relative to the **including file**, not to where you ran the tool.
+Nesting is allowed to eight deep, which is also how a cycle is caught.
+
+An included file may not declare `output` or `voices`: those belong to the
+finished instrument, not to a part of it, and a file that declared them would be
+an instrument rather than a component.
+
+The optional `hash=` is a checksum of the included file as it was when you wrote
+the line. When it no longer matches you get a warning naming both values — the
+included file has moved on, and it may or may not still sound the same. Nobody
+but you can decide that, so it is said and not enforced. The tools print it; the
+`found` value is the one to paste back in once you have listened.
+
+Nothing here computes. There are no variables, no arithmetic, no conditions —
+the moment you want to give a value a name you are programming, and for that
+there is SedaiBasic. A patch stays a table of what exists and how it is wired,
+which is what keeps it diffable and what will let a GUI be a view of it rather
+than a second source of truth.
 
 ### Values
 
@@ -336,6 +381,7 @@ patched in, and the range they clamp to.
 | `sconv` | block | ir, irraw | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
 | `seq3` | block | gain, bNtype, bNfreq, bNgain, bNq, bNoff  (N = 0..7) | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
 <!-- END MODULE REFERENCE -->
+
 
 ## The instruments
 

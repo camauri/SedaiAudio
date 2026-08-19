@@ -35,12 +35,23 @@ type
     ErrorLine: Integer;
     ErrorText: string;
     ForceSampleRate: Boolean;
+    // 0 = not stated, and the caller keeps its own default. An instrument that
+    // is monophonic by nature should say so in the patch rather than depend on
+    // how it was launched.
+    Voices: Integer;
+    // Not fatal, and not silent either: an included file that has changed since
+    // this patch was written may have changed how it sounds. Nobody can decide
+    // that for you, so it is said and not enforced.
+    Warnings: string;
   end;
 
 // Parse APatch (already-loaded text) into AGraph. The graph is NOT compiled
 // here — the caller does that, so it can decide what to do with the mode flag.
 function LoadPatchFromStrings(AGraph: TSedaiPatchGraph;
                               AText: TStrings): TSedaiPatchLoadResult;
+// The checksum an `include` line may carry, so a patch can notice that the file
+// it was written against has moved on.
+function PatchChecksum(const AText: string): string;
 function LoadPatchFromFile(AGraph: TSedaiPatchGraph;
                            const AFilename: string): TSedaiPatchLoadResult;
 
@@ -137,15 +148,55 @@ begin
   end;
 end;
 
+function PatchChecksum(const AText: string): string;
+var
+  H: QWord;
+  I: Integer;
+  C: Char;
+begin
+  // FNV-1a over everything that is not whitespace or a comment: reformatting a
+  // file must not look like changing it, or the warning cries wolf and gets
+  // ignored, which is worse than not having it.
+  H := 14695981039346656037;
+  I := 1;
+  while I <= Length(AText) do
+  begin
+    C := AText[I];
+    if C = '#' then
+    begin
+      while (I <= Length(AText)) and (AText[I] <> #10) do Inc(I);
+      Continue;
+    end;
+    if not (C in [' ', #9, #13, #10]) then
+      H := (H xor QWord(Ord(C))) * 1099511628211;
+    Inc(I);
+  end;
+  Result := IntToHex(H, 16);
+end;
+
+function LoadInto(AGraph: TSedaiPatchGraph; AText: TStrings;
+  const APrefix, ABaseDir, AFromFile: string;
+  ADepth: Integer): TSedaiPatchLoadResult; forward;
+
 function LoadPatchFromStrings(AGraph: TSedaiPatchGraph;
   AText: TStrings): TSedaiPatchLoadResult;
+begin
+  Result := LoadInto(AGraph, AText, '', '', '', 0);
+end;
+
+function LoadInto(AGraph: TSedaiPatchGraph; AText: TStrings;
+  const APrefix, ABaseDir, AFromFile: string;
+  ADepth: Integer): TSedaiPatchLoadResult;
 var
   L, I, P: Integer;
   Line, Verb, Rest, Key, Val, Src, Dst: string;
   Parts: TStringArray;
   M: TSedaiPatchModule;
-  V, Amount: Single;
+  V, Amount, OutPos: Single;
   Normalled: Boolean;
+  IncName, IncPrefix, IncPath, Sum: string;
+  Inc2: TStringList;
+  Sub: TSedaiPatchLoadResult;
 
   procedure Fail(const AMsg: string);
   begin
@@ -154,11 +205,21 @@ var
     Result.ErrorText := AMsg;
   end;
 
+  // Inside an include everything is named under its prefix, so two included
+  // files may both call a module osc1 without colliding, and a name tells you
+  // which file it came from.
+  function Q(const AName: string): string;
+  begin
+    if APrefix = '' then Result := AName else Result := APrefix + '.' + AName;
+  end;
+
 begin
   Result.Success := True;
   Result.ErrorLine := 0;
   Result.ErrorText := '';
   Result.ForceSampleRate := False;
+  Result.Voices := 0;
+  Result.Warnings := '';
 
   for L := 0 to AText.Count - 1 do
   begin
@@ -209,8 +270,10 @@ begin
                      KnownBodyTypes, KnownLegacyTypes]));
         Exit;
       end;
-      if not AGraph.AddModule(M, Key) then
+      if not AGraph.AddModule(M, Q(Key)) then
       begin M.Free; Fail(AGraph.LastError); Exit; end;
+      M.SourceFile := AFromFile;
+      M.SourcePrefix := APrefix;
 
       for I := 1 to High(Parts) do
       begin
@@ -233,7 +296,7 @@ begin
       begin Fail('set needs: set <module>.<port> = <value>'); Exit; end;
       if not ParseValue(Val, V) then
       begin Fail(Format('"%s" is not a number', [Val])); Exit; end;
-      if not AGraph.SetValue(Key, V) then
+      if not AGraph.SetValue(Q(Key), V) then
       begin Fail(AGraph.LastError); Exit; end;
       Continue;
     end;
@@ -271,22 +334,109 @@ begin
         begin Fail(Format('connect does not understand "%s"', [Key])); Exit; end;
       end;
 
-      if not AGraph.Connect(Src, Dst, Amount, Normalled) then
+      if not AGraph.Connect(Q(Src), Q(Dst), Amount, Normalled) then
       begin Fail(AGraph.LastError); Exit; end;
       Continue;
     end;
 
-    // ---- output <module>.<port> ------------------------------------------
+    // ---- voices <n> ------------------------------------------------------
+    if SameText(Verb, 'voices') then
+    begin
+      if APrefix <> '' then
+      begin Fail('an included file cannot declare "voices": polyphony belongs to the instrument, not to a part of it'); Exit; end;
+      if Length(Parts) < 2 then
+      begin Fail('voices needs: voices <n>'); Exit; end;
+      Result.Voices := StrToIntDef(Parts[1], 0);
+      if Result.Voices < 1 then
+      begin Fail(Format('"%s" is not a voice count', [Parts[1]])); Exit; end;
+      Continue;
+    end;
+
+    // ---- output <module>.<port> [pos=x] [extent=m] ------------------------
     if SameText(Verb, 'output') then
     begin
+      // An output is the finished instrument speaking. A part of one has no
+      // business declaring where the whole thing radiates from.
+      if APrefix <> '' then
+      begin Fail('an included file cannot declare "output": the outputs belong to the instrument that includes it'); Exit; end;
       if Length(Parts) < 2 then
-      begin Fail('output needs: output <module>.<port>'); Exit; end;
-      if not AGraph.AddOutputChannel(Parts[1]) then
+      begin Fail('output needs: output <module>.<port> [pos=x] [extent=m]'); Exit; end;
+      OutPos := 0.0;
+      for I := 2 to High(Parts) do
+      begin
+        if not SplitKeyValue(Parts[I], Key, Val) then
+        begin Fail(Format('"%s" is not key=value', [Parts[I]])); Exit; end;
+        if SameText(Key, 'pos') then
+        begin
+          if not ParseValue(Val, OutPos) then
+          begin Fail(Format('pos "%s" is not a number', [Val])); Exit; end;
+        end
+        else if SameText(Key, 'extent') then
+        begin
+          if not ParseValue(Val, V) then
+          begin Fail(Format('extent "%s" is not a number', [Val])); Exit; end;
+          AGraph.Extent := V;
+        end
+        else
+        begin Fail(Format('output takes pos= and extent=, not "%s"', [Key])); Exit; end;
+      end;
+      if not AGraph.AddOutputChannelAt(Parts[1], OutPos) then
       begin Fail(AGraph.LastError); Exit; end;
       Continue;
     end;
 
-    Fail(Format('unknown directive "%s" (expected module, set, connect, output or mode)', [Verb]));
+    // ---- include "file" as <prefix> [hash=xxxx] ---------------------------
+    if SameText(Verb, 'include') then
+    begin
+      if ADepth >= 8 then
+      begin Fail('include nested more than 8 deep — probably a cycle'); Exit; end;
+      if (Length(Parts) < 4) or (not SameText(Parts[2], 'as')) then
+      begin Fail('include needs: include "file.patch" as <prefix> [hash=xxxx]'); Exit; end;
+      IncName := Parts[1];
+      if (Length(IncName) >= 2) and (IncName[1] = '"') then
+        IncName := Copy(IncName, 2, Length(IncName) - 2);
+      IncPrefix := Parts[3];
+      if APrefix <> '' then IncPrefix := APrefix + '.' + IncPrefix;
+
+      if ABaseDir <> '' then IncPath := IncludeTrailingPathDelimiter(ABaseDir) + IncName
+                        else IncPath := IncName;
+      if not FileExists(IncPath) then
+      begin Fail(Format('include: file not found: %s', [IncPath])); Exit; end;
+
+      Inc2 := TStringList.Create;
+      try
+        Inc2.LoadFromFile(IncPath);
+        Sum := PatchChecksum(Inc2.Text);
+        // An expected checksum is optional. When it is there and no longer
+        // matches, the file this patch was written against has moved on — that
+        // may be a fix or may be a different instrument, and only a person can
+        // tell. So it is said, not enforced.
+        for I := 4 to High(Parts) do
+          if SplitKeyValue(Parts[I], Key, Val) and SameText(Key, 'hash') then
+            if not SameText(Trim(Val), Sum) then
+              Result.Warnings := Result.Warnings +
+                Format('include "%s" has changed since this patch was written '
+                     + '(expected %s, found %s) — it may no longer sound the same'#10,
+                       [IncName, Trim(Val), Sum]);
+        Sub := LoadInto(AGraph, Inc2, IncPrefix, ExtractFilePath(IncPath),
+                        IncPath, ADepth + 1);
+        if not Sub.Success then
+        begin
+          Result.Success := False;
+          Result.ErrorLine := L + 1;
+          Result.ErrorText := Format('in %s line %d: %s',
+                                     [IncName, Sub.ErrorLine, Sub.ErrorText]);
+          Exit;
+        end;
+        Result.Warnings := Result.Warnings + Sub.Warnings;
+        if Sub.ForceSampleRate then Result.ForceSampleRate := True;
+      finally
+        Inc2.Free;
+      end;
+      Continue;
+    end;
+
+    Fail(Format('unknown directive "%s" (expected include, voices, mode, module, set, connect or output)', [Verb]));
     Exit;
   end;
 end;
@@ -307,7 +457,7 @@ begin
   SL := TStringList.Create;
   try
     SL.LoadFromFile(AFilename);
-    Result := LoadPatchFromStrings(AGraph, SL);
+    Result := LoadInto(AGraph, SL, '', ExtractFilePath(AFilename), AFilename, 0);
   finally
     SL.Free;
   end;

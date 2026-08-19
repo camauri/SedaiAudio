@@ -1,0 +1,30 @@
+# Lo stesso basso di moog_bass.patch, ma con la parte comune in un componente.
+# Serve a mostrare l'include: parts/moog_core.patch non e' uno strumento — non
+# dichiara uscite ne' voci — ed e' riusabile da piu' strumenti.
+#
+# hash= e' l'impronta del componente al momento in cui questa riga e' stata
+# scritta. Se il componente cambia, gli strumenti stampano un avviso invece di
+# lasciartelo scoprire suonando.
+voices 6
+include "parts/moog_core.patch" as core hash=3006612E2F67ED06
+
+module note = note
+module gl   = glide time=0.006
+module fenv = env a=0.001 d=0.34 s=0.10 r=0.12
+module aenv = env a=0.002 d=0.60 s=0.55 r=0.14
+module drv  = sdist drive=1.6 tone=0.45
+module amp  = amp
+
+connect note.pitch -> gl.in
+connect gl.out -> core.osc1.pitch
+connect gl.out -> core.osc2.pitch
+connect gl.out -> core.osc3.pitch
+connect note.gate -> fenv.gate
+connect note.gate -> aenv.gate
+connect fenv.out -> core.f1.cutoff amount=2.30
+connect fenv.out -> core.f2.cutoff amount=2.30
+set  drv.mix   = 0.35
+connect core.f2.out -> drv.in
+connect drv.out -> amp.in
+connect aenv.out -> amp.gain amount=0.26
+output amp.out
