@@ -51,6 +51,17 @@ var
   SDL_GetQueuedAudioSize: function(dev: TSDL_AudioDeviceID): cuint32; cdecl;
   SDL_ClearQueuedAudio: procedure(dev: TSDL_AudioDeviceID); cdecl;
 
+  { Window and events. Not audio, but bound here for the same reason the audio
+    calls are: a host must start and say something useful on a machine without
+    SDL2, rather than fail to load. Used by the live tools to read a keyboard
+    properly — a terminal reports key-down and never key-up, so a note can be
+    struck but never held. }
+  SDL_CreateWindow: function(title: PAnsiChar; x, y, w, h: cint;
+                             flags: cuint32): PSDL_Window; cdecl;
+  SDL_DestroyWindow: procedure(window: PSDL_Window); cdecl;
+  SDL_RaiseWindow: procedure(window: PSDL_Window); cdecl;
+  SDL_PollEvent: function(event: PSDL_Event): cint32; cdecl;
+
 { Load SDL2 and bind every pointer above. Idempotent and cheap after the first call.
   Returns False when the library cannot be loaded - callers treat that as "no audio". }
 function EnsureAudioSDL2Bound: Boolean;
@@ -86,6 +97,11 @@ begin
   Pointer(SDL_QueueAudio) := GetProcedureAddress(GSDL2, 'SDL_QueueAudio');
   Pointer(SDL_GetQueuedAudioSize) := GetProcedureAddress(GSDL2, 'SDL_GetQueuedAudioSize');
   Pointer(SDL_ClearQueuedAudio) := GetProcedureAddress(GSDL2, 'SDL_ClearQueuedAudio');
+
+  Pointer(SDL_CreateWindow) := GetProcedureAddress(GSDL2, 'SDL_CreateWindow');
+  Pointer(SDL_DestroyWindow) := GetProcedureAddress(GSDL2, 'SDL_DestroyWindow');
+  Pointer(SDL_RaiseWindow) := GetProcedureAddress(GSDL2, 'SDL_RaiseWindow');
+  Pointer(SDL_PollEvent) := GetProcedureAddress(GSDL2, 'SDL_PollEvent');
 
   Result := True;
 end;

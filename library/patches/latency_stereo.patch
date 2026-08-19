@@ -1,0 +1,34 @@
+# Fatta apposta per SENTIRE la latenza: attacco secco, decadimento corto.
+# Su un pad il ritardo si nasconde, su un pluck no — se il suono arriva
+# dopo il dito, con questo lo senti subito.
+module note = note
+module osc1 = osc    shape=saw freq=220
+module osc2 = osc    shape=square freq=220
+module filt = filter mode=lowpass cutoff=700
+module fenv = env    a=0.0005 d=0.09 s=0.0 r=0.06
+module aenv = env    a=0.0005 d=0.16 s=0.0 r=0.08
+module amp  = amp
+module ampR = amp
+module filtR= filter mode=lowpass cutoff=760
+
+set     filt.res = 0.55
+set     osc2.pitch = 0.004
+
+connect note.pitch -> osc1.pitch
+connect note.pitch -> osc2.pitch
+connect note.gate  -> fenv.gate
+connect note.gate  -> aenv.gate
+
+connect osc1.out -> filt.in amount=0.6
+connect osc2.out -> filt.in amount=0.4
+connect fenv.out -> filt.cutoff amount=3.0
+connect filt.out -> amp.in
+connect aenv.out -> amp.gain amount=0.55
+
+connect osc1.out -> filtR.in amount=0.4
+connect osc2.out -> filtR.in amount=0.6
+connect fenv.out -> filtR.cutoff amount=2.8
+connect filtR.out -> ampR.in
+connect aenv.out  -> ampR.gain amount=0.55
+output  amp.out
+output  ampR.out

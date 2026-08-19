@@ -24,10 +24,17 @@ unit SedaiPatchVoices;
 interface
 
 uses
-  SysUtils, Classes, SedaiPatchGraph, SedaiPatchModules, SedaiPatchFile;
+  SysUtils, Classes, Math, SedaiPatchGraph, SedaiPatchModules, SedaiPatchFile;
 
 const
   SEDAI_PATCH_SILENCE = 1.0e-4;   // -80 dB: below this a released voice is done
+
+  // The output stage. Voices sum without attenuation, so three notes of an
+  // ordinary patch already pass 1.0 and what you hear is a squared wave —
+  // measured on basic.patch: one note 0.477, two 0.771, three 1.162, four
+  // 1.571. Hard clipping is the worst possible answer to that, so the sum is
+  // shaped instead: untouched below the knee, asymptotic to 1 above it.
+  SEDAI_LIMIT_KNEE = 0.70;
 
 type
   TSedaiPatchVoice = class
@@ -59,6 +66,7 @@ type
     FLastError: string;
     FForceSampleRate: Boolean;
     FMasterGain: Single;
+    FLimit: Boolean;
     function FindFree: Integer;
     function FindOldest: Integer;
   public
@@ -88,6 +96,10 @@ type
     function VoiceCount: Integer;
     property LastError: string read FLastError;
     property MasterGain: Single read FMasterGain write FMasterGain;
+    // On by default: an instrument that crackles when you play a chord is
+    // broken, and nobody should have to know why. Switch it off to measure the
+    // raw sum, or when something downstream owns the level.
+    property Limit: Boolean read FLimit write FLimit;
   end;
 
 implementation
@@ -122,6 +134,7 @@ begin
   FBlockSize := 256;
   FClock := 0;
   FMasterGain := 1.0;
+  FLimit := True;
   FForceSampleRate := False;
 end;
 
@@ -293,7 +306,7 @@ procedure TSedaiPatchVoicePool.Render(ACount: Integer);
 var
   I, K, C, NCh: Integer;
   V: TSedaiPatchVoice;
-  S, Peak: Single;
+  S, Peak, M, G: Single;
 begin
   NCh := OutputCount;
   if Length(FMix) < NCh then SetLength(FMix, NCh);
@@ -337,6 +350,26 @@ begin
   if FMasterGain <> 1.0 then
     for C := 0 to NCh - 1 do
       for K := 0 to ACount - 1 do FMix[C][K] := FMix[C][K] * FMasterGain;
+
+  if FLimit then
+    for K := 0 to ACount - 1 do
+    begin
+      // One reduction per sample, computed on the loudest channel and applied
+      // to all of them. Limiting each channel on its own would move the image
+      // sideways whenever the level rose, which is worse than the clipping.
+      M := 0.0;
+      for C := 0 to NCh - 1 do
+        if Abs(FMix[C][K]) > M then M := Abs(FMix[C][K]);
+      if M > SEDAI_LIMIT_KNEE then
+      begin
+        // Linear below the knee, tanh above, and the two meet with the same
+        // slope — so nothing is coloured until it would have clipped, and
+        // below the knee the signal is bit-identical to the unlimited sum.
+        G := (SEDAI_LIMIT_KNEE + (1.0 - SEDAI_LIMIT_KNEE) *
+              Tanh((M - SEDAI_LIMIT_KNEE) / (1.0 - SEDAI_LIMIT_KNEE))) / M;
+        for C := 0 to NCh - 1 do FMix[C][K] := FMix[C][K] * G;
+      end;
+    end;
 end;
 
 function TSedaiPatchVoicePool.MixSample(AChannel, AIndex: Integer): Single;
