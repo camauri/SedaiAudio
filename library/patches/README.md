@@ -46,6 +46,36 @@ One thing no software can fix: a PC keyboard is a matrix without diodes and stop
 reporting past three or four simultaneous keys, whichever they are. Measured here
 on two different keyboards. Chords need MIDI.
 
+## Playing it from MIDI
+
+    bin/<plat>/patch_live library/patches/poly.patch 8 128 48000 --midi
+    bin/<plat>/patch_live library/patches/poly.patch --midi=24:0     # one port
+    bin/<plat>/patch_live --list-midi                                # what exists
+
+`--midi` connects to everything that can send; `--midi=<spec>` takes either an
+address like `24:0` or any part of a port's name. Velocity arrives as
+`note.vel`, the sustain pedal (CC 64) holds notes past the key, and the pitch
+wheel bends every sounding voice — `--bend=<semitones>` sets how far, default 2,
+because the wire says how far the wheel moved and never what that means.
+
+**With no keyboard plugged in, this is still testable**, and it was tested that
+way: `alsa-utils` is a sequencer somebody else wrote, so none of it is our code
+checking our own work.
+
+    bin/<plat>/midi_probe --list                       every port on the machine
+    bin/<plat>/midi_probe 14:0 30                      watch what arrives
+    bin/<plat>/midi_probe 14:0 45 --quiet \
+        --patch=library/patches/basic.patch --wav=out.wav    ...and play it, to a file
+
+In another terminal, `aplaymidi -p 14:0 song.mid` sends a real file through the
+kernel sequencer to that port. The `--patch` form renders in step with the wall
+clock and writes what the audio device would have played, so the live path can
+be **measured** and not only listened to: the same file through `patch_midi`
+offline and through the wire live must give the same note counts.
+
+The one thing this rig cannot reach is the USB driver layer under a physical
+keyboard. Everything from the sequencer port inward is exercised for real.
+
 Or play a MIDI file through the patch:
 
     ./build.sh --source job/tools/saf/patch_midi.lpr --dest bin/<plat>/patch_midi
@@ -64,7 +94,7 @@ oldest is stolen.
 
 ## The syntax, in full
 
-Five statements, one per line. Anything after `#` is a comment, and blank lines
+Seven statements, one per line. Anything after `#` is a comment, and blank lines
 are ignored. Order matters only in that a module must be declared before it is
 named.
 
