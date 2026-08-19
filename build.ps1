@@ -93,6 +93,7 @@ param(
     [switch]$Debug,
     [switch]$NoBanner,
     [string]$FpcPath = '',
+    [switch]$SelectFpc,
     [string]$Target = '',
     [string[]]$Define = @(),
 
@@ -147,7 +148,8 @@ if ($Help) {
     Write-Host "    -Clean          Clean build artifacts before building"
     Write-Host "    -CleanOnly      Only clean, do not build"
     Write-Host "    -Debug          Build with debug info instead of release"
-    Write-Host "    -FpcPath <path> Path to a specific FPC compiler"
+    Write-Host "    -FpcPath <path> Path to a specific FPC compiler (one-off, not stored)"
+    Write-Host "    -SelectFpc      List every FPC found and choose one (stored in setup.config.json)"
     Write-Host "    -CPU <cpu>      Target CPU: x86_64, i386, aarch64 (default: x86_64)"
     Write-Host "    -OS <os>        Target OS: win64, win32, linux, darwin (default: win64)"
     Write-Host ""
@@ -277,57 +279,199 @@ function Show-Banner {
 # ============================================================================
 # Find FPC Compiler
 # ============================================================================
+# ----------------------------------------------------------------------------
+# Reading and writing setup.config.json, so the compiler is chosen once and not
+# at every build. Same file and same keys as build.sh, so a shared checkout
+# keeps working across the two scripts and the two platforms.
+# ----------------------------------------------------------------------------
+function Get-ConfigValue {
+    param([string]$Key)
+    $file = Join-Path $ProjectRoot 'setup.config.json'
+    if (-not (Test-Path $file)) { return $null }
+    try {
+        $cfg = Get-Content $file -Raw | ConvertFrom-Json
+        if ($cfg.PSObject.Properties.Name -contains $Key) { return $cfg.$Key }
+    } catch { }
+    return $null
+}
+
+function Set-ConfigValue {
+    param([string]$Key, [string]$Value)
+    $file = Join-Path $ProjectRoot 'setup.config.json'
+    $cfg = $null
+    if (Test-Path $file) {
+        try { $cfg = Get-Content $file -Raw | ConvertFrom-Json } catch { }
+    }
+    if (-not $cfg) { $cfg = [PSCustomObject]@{} }
+    if ($cfg.PSObject.Properties.Name -contains $Key) { $cfg.$Key = $Value }
+    else { $cfg | Add-Member -NotePropertyName $Key -NotePropertyValue $Value }
+    $cfg | ConvertTo-Json -Depth 5 | Set-Content $file -Encoding UTF8
+}
+
+# Every compiler on this machine, most-likely-meant first, no duplicates. The
+# deep scan is deliberately last: it finds installs in odd places but says
+# nothing about which one is intended.
+function Get-FpcCandidates {
+    $list = New-Object System.Collections.Generic.List[string]
+
+    $list.Add((Join-Path $ProjectRoot 'fpc\bin\fpc.exe'))
+    foreach ($p in @('fpc\3.2.2\bin\x86_64-win64\fpc.exe',
+                     'fpc\3.2.2\bin\i386-win32\fpc.exe')) {
+        $list.Add((Join-Path $ProjectRoot $p))
+    }
+    foreach ($root in @('C:\lazarus', 'C:\FPC', "$env:USERPROFILE\tools\fp",
+                        "$env:USERPROFILE\fpcupdeluxe", 'C:\Program Files\Lazarus')) {
+        if (Test-Path $root) {
+            Get-ChildItem -Path $root -Filter fpc.exe -Recurse -Depth 5 -ErrorAction SilentlyContinue |
+                ForEach-Object { $list.Add($_.FullName) }
+        }
+    }
+    Get-ChildItem -Path 'C:\' -Filter 'lazarus-*' -Directory -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            Get-ChildItem -Path $_.FullName -Filter fpc.exe -Recurse -Depth 5 -ErrorAction SilentlyContinue |
+                ForEach-Object { $list.Add($_.FullName) }
+        }
+    $onPath = Get-Command fpc -ErrorAction SilentlyContinue
+    if ($onPath) { $list.Add($onPath.Source) }
+
+    $seen = @{}
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($c in $list) {
+        if (-not $c) { continue }
+        if (-not (Test-Path $c)) { continue }
+        $full = (Resolve-Path $c -ErrorAction SilentlyContinue).Path
+        if (-not $full) { $full = $c }
+        if ($seen.ContainsKey($full)) { continue }
+        $seen[$full] = $true
+        $out.Add($full)
+    }
+    return $out
+}
+
+# Does this compiler actually COMPILE? Not "does the binary run" - fpc -iV
+# answers that happily on an install whose RTL it cannot find, which is how a
+# half-finished tree ends up shadowing a working one and breaking the build
+# with "Can't find unit system". The only honest test is a build, done the way
+# build.ps1 builds: no explicit config file, because that is what the real
+# invocation does.
+function Test-FpcWorks {
+    param([string]$Fpc)
+    $d = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+    New-Item -ItemType Directory -Path $d -Force | Out-Null
+    try {
+        $src = Join-Path $d 'probe.pas'
+        Set-Content -Path $src -Value 'begin end.' -Encoding ASCII
+        $p = Start-Process -FilePath $Fpc -ArgumentList @("-o$d\probe.exe", $src) `
+                           -WorkingDirectory $d -NoNewWindow -Wait -PassThru `
+                           -RedirectStandardOutput ([System.IO.Path]::GetTempFileName()) `
+                           -RedirectStandardError  ([System.IO.Path]::GetTempFileName())
+        return ($p.ExitCode -eq 0)
+    } catch {
+        return $false
+    } finally {
+        Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ...\fpc\bin\<platform>\fpc.exe  ->  ...\fpc   (the root form build.sh reads
+# as FpcPath). Anything else has no such root and returns nothing.
+function Get-FpcRoot {
+    param([string]$Bin)
+    $binDir = Split-Path $Bin -Parent            # ...\bin\<platform>
+    $up1    = Split-Path $binDir -Parent         # ...\bin
+    if ((Split-Path $up1 -Leaf) -eq 'bin') { return (Split-Path $up1 -Parent) }
+    if ((Split-Path $binDir -Leaf) -eq 'bin') { return (Split-Path $binDir -Parent) }
+    return $null
+}
+
+# List what is installed, prove which ones work, and ask - once.
+function Select-FPC {
+    $paths = Get-FpcCandidates
+    $rows  = @()
+    foreach ($c in $paths) {
+        $ver = (& $c -iV 2>$null)
+        if (-not $ver) { continue }
+        $rows += [PSCustomObject]@{ Path = $c; Version = "$ver".Trim(); Works = (Test-FpcWorks $c) }
+    }
+    if ($rows.Count -eq 0) { return $null }
+
+    $usable = @($rows | Where-Object { $_.Works })
+    if ($usable.Count -eq 0) {
+        Write-Host "ERROR: a Free Pascal Compiler was found, but none can compile." -ForegroundColor Red
+        foreach ($r in $rows) { Write-Host ("  FPC {0,-8} {1}" -f $r.Version, $r.Path) }
+        Write-Host "An install without a usable fpc.cfg is the usual cause." -ForegroundColor Yellow
+        return $null
+    }
+    # One working compiler and nothing else to weigh: take it, rather than
+    # asking a question with a single answer.
+    if ($rows.Count -eq 1) { return $rows[0].Path }
+
+    Write-Host ""
+    Write-Host "Free Pascal compilers found on this machine:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $rows.Count; $i++) {
+        if ($rows[$i].Works) {
+            Write-Host ("  {0}) FPC {1,-8} {2}" -f ($i+1), $rows[$i].Version, $rows[$i].Path)
+        } else {
+            Write-Host ("  {0}) FPC {1,-8} {2}   [cannot compile - skipped]" -f `
+                        ($i+1), $rows[$i].Version, $rows[$i].Path) -ForegroundColor Yellow
+        }
+    }
+    Write-Host ""
+
+    # No console means no question: a script or a CI run must fail loudly
+    # rather than hang on a prompt, or pick for the user and be wrong quietly.
+    if ([Console]::IsInputRedirected) {
+        Write-Host "Not interactive, so nothing was chosen and nothing was stored." -ForegroundColor Yellow
+        Write-Host "Run .\build.ps1 -SelectFpc once interactively, or pass -FpcPath." -ForegroundColor Yellow
+        return $null
+    }
+
+    $default = [array]::IndexOf($rows, $usable[0]) + 1
+    while ($true) {
+        $sel = Read-Host "Which one should this project use? [$default]"
+        if (-not $sel) { $sel = $default }
+        $n = 0
+        if (-not [int]::TryParse($sel, [ref]$n)) { Write-Host "  a number, please"; continue }
+        if ($n -lt 1 -or $n -gt $rows.Count) { Write-Host "  out of range"; continue }
+        if (-not $rows[$n-1].Works) { Write-Host "  that one cannot compile; pick another"; continue }
+        break
+    }
+
+    $chosen = $rows[$n-1]
+    Set-ConfigValue -Key 'FpcBin' -Value $chosen.Path
+    $root = Get-FpcRoot $chosen.Path
+    if ($root) { Set-ConfigValue -Key 'FpcPath' -Value $root }
+    Write-Host ("Stored in setup.config.json: FPC {0} - {1}" -f $chosen.Version, $chosen.Path) -ForegroundColor Green
+    Write-Host "Change it later with .\build.ps1 -SelectFpc" -ForegroundColor DarkGray
+    return $chosen.Path
+}
+
 function Find-FPC {
     param([string]$CustomPath)
 
-    # 1. Use custom path if specified
-    if ($CustomPath -and (Test-Path $CustomPath)) {
-        return $CustomPath
-    }
+    # 1. Explicit override - deliberately NOT stored: it is a one-off, and
+    #    writing it would turn "just this once" into the project's setting.
+    if ($CustomPath -and (Test-Path $CustomPath)) { return $CustomPath }
     elseif ($CustomPath) {
         Write-Host "WARNING: Specified FPC path not found: $CustomPath" -ForegroundColor Yellow
     }
 
-    # 2. Project-local FPC (./fpc/)
-    $localFpc = Join-Path $ProjectRoot 'fpc\bin\fpc.exe'
-    if (Test-Path $localFpc) {
-        return $localFpc
-    }
-
-    # Also check versioned paths
-    $versionedPaths = @(
-        (Join-Path $ProjectRoot 'fpc\3.2.2\bin\x86_64-win64\fpc.exe'),
-        (Join-Path $ProjectRoot 'fpc\3.2.2\bin\i386-win32\fpc.exe')
-    )
-    foreach ($vPath in $versionedPaths) {
-        if (Test-Path $vPath) {
-            return $vPath
+    # 2. The stored choice.
+    if (-not $SelectFpc) {
+        $stored = Get-ConfigValue -Key 'FpcBin'
+        if ($stored -and (Test-Path $stored)) { return $stored }
+        # The root form, which is what build.sh writes.
+        $root = Get-ConfigValue -Key 'FpcPath'
+        if ($root) {
+            foreach ($p in @("bin\x86_64-win64\fpc.exe", "bin\i386-win32\fpc.exe", "bin\fpc.exe")) {
+                $cand = Join-Path $root $p
+                if (Test-Path $cand) { return $cand }
+            }
         }
     }
 
-    # 3. Check common Lazarus installations
-    $lazarusPaths = @(
-        'C:\lazarus-3.8\fpc\3.2.2\bin\x86_64-win64\fpc.exe',
-        'C:\lazarus-3.6\fpc\3.2.2\bin\x86_64-win64\fpc.exe',
-        'C:\lazarus-3.4\fpc\3.2.2\bin\x86_64-win64\fpc.exe',
-        'C:\lazarus-3.2\fpc\3.2.2\bin\x86_64-win64\fpc.exe',
-        'C:\lazarus\fpc\3.2.2\bin\x86_64-win64\fpc.exe',
-        'C:\FPC\3.2.2\bin\x86_64-win64\fpc.exe',
-        'C:\FPC\3.2.2\bin\i386-win32\fpc.exe'
-    )
-    foreach ($lazPath in $lazarusPaths) {
-        if (Test-Path $lazPath) {
-            return $lazPath
-        }
-    }
-
-    # 4. Fallback to system PATH
-    $fpc = Get-Command fpc -ErrorAction SilentlyContinue
-    if ($fpc) {
-        return $fpc.Source
-    }
-
-    return $null
+    # 3. Nothing stored, or -SelectFpc: look at everything and ask, once.
+    return Select-FPC
 }
 
 # ============================================================================
@@ -595,15 +739,19 @@ if (-not $NoBanner) {
 # Find FPC
 $fpc = Find-FPC -CustomPath $FpcPath
 if (-not $fpc) {
-    Write-Host "ERROR: Free Pascal Compiler (fpc) not found!" -ForegroundColor Red
+    Write-Host "ERROR: no usable Free Pascal Compiler." -ForegroundColor Red
     Write-Host ""
-    Write-Host "FPC was searched in:" -ForegroundColor Yellow
-    Write-Host "  1. Custom path (--fpc-path parameter)" -ForegroundColor Gray
-    Write-Host "  2. Project local: .\fpc\" -ForegroundColor Gray
-    Write-Host "  3. Lazarus installations: C:\lazarus-*\fpc\" -ForegroundColor Gray
+    Write-Host "Anything listed above as [cannot compile] was found but could not build a" -ForegroundColor Yellow
+    Write-Host "two-word program - usually an install whose fpc.cfg is missing, so it does" -ForegroundColor Yellow
+    Write-Host "not know where its own RTL is. Those are skipped rather than used." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Searched:" -ForegroundColor Yellow
+    Write-Host "  1. -FpcPath (one-off, never stored)" -ForegroundColor Gray
+    Write-Host "  2. FpcBin / FpcPath in setup.config.json (the stored choice)" -ForegroundColor Gray
+    Write-Host "  3. .\fpc\, C:\lazarus*, C:\FPC, %USERPROFILE%\tools\fp, fpcupdeluxe" -ForegroundColor Gray
     Write-Host "  4. System PATH" -ForegroundColor Gray
     Write-Host ""
-    Write-Host "Please install FPC or specify path with -FpcPath parameter." -ForegroundColor Yellow
+    Write-Host "Run .\build.ps1 -SelectFpc to choose one, or pass -FpcPath for a single build." -ForegroundColor Yellow
     exit 1
 }
 

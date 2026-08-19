@@ -36,6 +36,7 @@ SDL2_DIR="$DEPS_DIR/sdl2"
 
 # Defaults
 FPC_PATH=""
+SELECT_FPC=false
 TARGET=""
 SOURCE=""
 DEST=""
@@ -134,7 +135,8 @@ show_help() {
     echo "    --clean-only      Only clean, do not build"
     echo "    --debug           Build with debug info instead of release"
     echo "    --no-banner       Suppress the ASCII art banner"
-    echo "    --fpc-path <path> Path to a specific FPC compiler"
+    echo "    --fpc-path <path> Path to a specific FPC compiler (one-off, not stored)"
+    echo "    --select-fpc      List every FPC found and choose one (stored in setup.config.json)"
     echo "    --define <SYM>    Extra conditional define (repeatable)"
     echo "    --cpu <cpu>       Target CPU: x86_64, i386, aarch64 (default: $CPU)"
     echo "    --os <os>         Target OS: linux, darwin, win64, win32 (default: $OS)"
@@ -201,6 +203,7 @@ while [[ $# -gt 0 ]]; do
         --avx-op)        AVX_OP=true; shift ;;
         --avx-cf)        AVX_CF=true; shift ;;
         --fpc-path)      FPC_PATH="${2:-}"; shift 2 ;;
+        --select-fpc)    SELECT_FPC=true; shift ;;
         --target)        TARGET="${2:-}"; shift 2 ;;
         --define)        DEFINES+=("${2:-}"); shift 2 ;;
         --source)        SOURCE="${2:-}"; shift 2 ;;
@@ -232,8 +235,163 @@ EXE_EXT=""
 # ============================================================================
 # Find FPC Compiler
 # ============================================================================
+# ----------------------------------------------------------------------------
+# Reading and writing setup.config.json, so the compiler is chosen once and not
+# at every build. Same file and same keys as build.ps1 and as SedaiBasic2, so a
+# shared checkout keeps working across the two scripts and the two platforms.
+# ----------------------------------------------------------------------------
+config_value() {
+    local key="$1" file="$SCRIPT_DIR/setup.config.json"
+    [[ -f "$file" ]] || return 1
+    sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$file" | head -1
+}
+
+config_set() {
+    local key="$1" val="$2" file="$SCRIPT_DIR/setup.config.json" esc tmp
+    esc="$(printf '%s' "$val" | sed 's/[\\"]/\\&/g')"
+    if [[ ! -f "$file" ]]; then
+        printf '{\n  "%s": "%s"\n}\n' "$key" "$esc" > "$file"
+        return 0
+    fi
+    tmp="$file.tmp.$$"
+    if grep -q "\"$key\"[[:space:]]*:" "$file"; then
+        sed "s|\"$key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"|\"$key\": \"$esc\"|" "$file" > "$tmp"
+    else
+        # Insert as the first member, so a file with or without a trailing
+        # comma both stay valid.
+        sed "0,/{/s|{|{\n  \"$key\": \"$esc\",|" "$file" > "$tmp"
+    fi
+    mv "$tmp" "$file"
+}
+
+# Every compiler on this machine, most-likely-meant first, real paths, no
+# duplicates. The deep scan is deliberately last: it finds installs in odd
+# places but says nothing about which one is intended.
+fpc_candidates() {
+    local platform="$1" c d
+    {
+        printf '%s\n' "$PROJECT_ROOT/fpc/bin/$platform/fpc"
+        printf '%s\n' "$PROJECT_ROOT/fpc/bin/fpc"
+        printf '%s\n' "$PROJECT_ROOT/fpc/3.2.2/bin/$platform/fpc"
+        for d in "$HOME"/tools/fp/*/fpc "$HOME"/fpcupdeluxe/fpc "$HOME"/fpc "$HOME"/tools/fpc; do
+            printf '%s\n' "$d/bin/$platform/fpc"
+            printf '%s\n' "$d/bin/fpc"
+        done
+        printf '%s\n' "/usr/local/bin/fpc"
+        printf '%s\n' "/opt/fpc/bin/fpc"
+        command -v fpc 2>/dev/null || true
+        find "$HOME" -maxdepth 6 -type f -name fpc -perm -u+x 2>/dev/null || true
+    } | while read -r c; do
+        [[ -n "$c" && -x "$c" ]] || continue
+        readlink -f "$c" 2>/dev/null || printf '%s\n' "$c"
+    done | awk '!seen[$0]++'
+}
+
+# Does this compiler actually COMPILE? Not "does the binary run" — fpc -iV
+# answers that happily on an install whose RTL it cannot find, which is exactly
+# how a half-finished tree ends up shadowing a working one and breaking the
+# build with "Can't find unit system". The only honest test is a build, done
+# the way build.sh builds: no explicit config file, because that is what the
+# real invocation does.
+fpc_works() {
+    local fpc="$1" d rc
+    d="$(mktemp -d)" || return 1
+    printf 'begin end.\n' > "$d/probe.pas"
+    ( cd "$d" && "$fpc" -o"$d/probe" "$d/probe.pas" ) >/dev/null 2>&1
+    rc=$?
+    rm -rf "$d"
+    return $rc
+}
+
+# .../fpc/bin/<platform>/fpc  ->  .../fpc   (the root form build.ps1 stores as
+# FpcPath). A system install has no such root and prints nothing.
+fpc_root_of() {
+    local bin="$1" platform="$2"
+    case "$bin" in
+        */bin/"$platform"/fpc) printf '%s\n' "${bin%/bin/$platform/fpc}" ;;
+        *) : ;;
+    esac
+}
+
+# List what is installed, prove which ones work, and ask — once.
+choose_fpc() {
+    local platform="$1" c ver ok n=0 sel root i
+    local -a paths=() vers=() good=()
+
+    while read -r c; do
+        [[ -n "$c" ]] || continue
+        ver="$("$c" -iV 2>/dev/null)"
+        [[ -n "$ver" ]] || continue
+        if fpc_works "$c"; then ok=yes; else ok=no; fi
+        paths+=("$c"); vers+=("$ver"); good+=("$ok")
+    done < <(fpc_candidates "$platform")
+
+    n=${#paths[@]}
+    if [[ $n -eq 0 ]]; then
+        return 1
+    fi
+
+    # One working compiler and nothing else to weigh: take it and say so,
+    # rather than asking a question with a single answer.
+    local -a usable=()
+    for ((i=0; i<n; i++)); do [[ "${good[$i]}" == yes ]] && usable+=("$i"); done
+    if [[ ${#usable[@]} -eq 0 ]]; then
+        echo -e "${RED}ERROR: a Free Pascal Compiler was found, but none can compile.${NC}" >&2
+        for ((i=0; i<n; i++)); do
+            printf "  FPC %-8s %s\n" "${vers[$i]}" "${paths[$i]}" >&2
+        done
+        echo -e "${YELLOW}An install without a usable fpc.cfg is the usual cause.${NC}" >&2
+        return 1
+    fi
+    if [[ ${#usable[@]} -eq 1 && $n -eq 1 ]]; then
+        printf '%s\n' "${paths[${usable[0]}]}"
+        return 0
+    fi
+
+    echo "" >&2
+    echo -e "${CYAN}Free Pascal compilers found on this machine:${NC}" >&2
+    for ((i=0; i<n; i++)); do
+        if [[ "${good[$i]}" == yes ]]; then
+            printf "  %d) FPC %-8s %s\n" "$((i+1))" "${vers[$i]}" "${paths[$i]}" >&2
+        else
+            printf "  %d) FPC %-8s %s   ${YELLOW}[cannot compile - skipped]${NC}\n" \
+                   "$((i+1))" "${vers[$i]}" "${paths[$i]}" >&2
+        fi
+    done
+    echo "" >&2
+
+    # No terminal means no question: a script or a CI run must fail loudly
+    # rather than hang on a prompt, or pick for the user and be wrong quietly.
+    if [[ ! -t 0 ]]; then
+        echo -e "${YELLOW}Not a terminal, so nothing was chosen and nothing was stored.${NC}" >&2
+        echo -e "${YELLOW}Run ./build.sh --select-fpc once interactively, or pass --fpc-path.${NC}" >&2
+        return 1
+    fi
+
+    local default=$((usable[0]+1))
+    while :; do
+        read -r -p "Which one should this project use? [$default] " sel >&2 || return 1
+        [[ -z "$sel" ]] && sel=$default
+        [[ "$sel" =~ ^[0-9]+$ ]] || { echo "  a number, please" >&2; continue; }
+        (( sel >= 1 && sel <= n )) || { echo "  out of range" >&2; continue; }
+        [[ "${good[$((sel-1))]}" == yes ]] || { echo "  that one cannot compile; pick another" >&2; continue; }
+        break
+    done
+
+    c="${paths[$((sel-1))]}"
+    config_set FpcBin "$c"
+    root="$(fpc_root_of "$c" "$platform")"
+    [[ -n "$root" ]] && config_set FpcPath "$root"
+    echo -e "${GREEN}Stored in setup.config.json: FPC ${vers[$((sel-1))]} - $c${NC}" >&2
+    echo -e "${GRAY}Change it later with ./build.sh --select-fpc${NC}" >&2
+    printf '%s\n' "$c"
+}
+
 find_fpc() {
-    # 1. Explicit path, then the FPC environment variable
+    local platform="$PLATFORM_DIR" candidate
+
+    # 1. Explicit override — deliberately NOT stored: it is a one-off, and
+    #    writing it would turn "just this once" into the project's setting.
     if [[ -n "$FPC_PATH" ]]; then
         if [[ -x "$FPC_PATH" ]]; then
             echo "$FPC_PATH"; return 0
@@ -244,35 +402,21 @@ find_fpc() {
         echo "$FPC"; return 0
     fi
 
-    # Host arch: the compiler binary is always a host binary, even when
-    # cross-compiling (-P/-T select the target).
-    local hostarch="$(detect_cpu)-$(detect_os)"
-
-    # 2. Project-local FPC (installed by setup.sh)
-    local candidates=(
-        "$PROJECT_ROOT/fpc/bin/$hostarch/fpc"
-        "$PROJECT_ROOT/fpc/bin/fpc"
-        "$PROJECT_ROOT/fpc/3.2.2/bin/$hostarch/fpc"
-    )
-    # 3. fpcupdeluxe-style trees (~/tools/fp/<name>/fpc, ~/fpcupdeluxe/fpc, ...)
-    local d
-    for d in "$HOME"/tools/fp/*/fpc "$HOME"/fpcupdeluxe/fpc "$HOME"/fpc "$HOME"/tools/fpc; do
-        candidates+=("$d/bin/$hostarch/fpc" "$d/bin/fpc")
-    done
-    # 4. Manual / system-wide installs
-    candidates+=("/usr/local/bin/fpc" "/opt/fpc/bin/fpc")
-
-    local c
-    for c in "${candidates[@]}"; do
-        [[ -x "$c" ]] && { echo "$c"; return 0; }
-    done
-
-    # 5. System PATH
-    if command -v fpc >/dev/null 2>&1; then
-        command -v fpc; return 0
+    # 2. The stored choice.
+    if [[ "$SELECT_FPC" != "true" ]]; then
+        candidate="$(config_value FpcBin 2>/dev/null || true)"
+        if [[ -n "$candidate" && -x "$candidate" ]]; then
+            echo "$candidate"; return 0
+        fi
+        # The root form, which is what build.ps1 writes.
+        candidate="$(config_value FpcPath 2>/dev/null || true)"
+        if [[ -n "$candidate" && -x "$candidate/bin/$platform/fpc" ]]; then
+            echo "$candidate/bin/$platform/fpc"; return 0
+        fi
     fi
 
-    return 1
+    # 3. Nothing stored, or --select-fpc: look at everything and ask, once.
+    choose_fpc "$platform"
 }
 
 # ============================================================================
@@ -503,14 +647,17 @@ list_targets() {
 
 FPC="$(find_fpc)" || FPC=""
 if [[ -z "$FPC" ]]; then
-    echo -e "${RED}ERROR: Free Pascal Compiler (fpc) not found!${NC}"
+    echo -e "${RED}ERROR: no usable Free Pascal Compiler.${NC}"
     echo ""
-    echo -e "${YELLOW}FPC was searched in:${NC}"
-    echo -e "${GRAY}  1. --fpc-path parameter, then the FPC environment variable${NC}"
-    echo -e "${GRAY}  2. Project local: ./fpc/${NC}"
-    echo -e "${GRAY}  3. fpcupdeluxe trees: ~/tools/fp/*/fpc, ~/fpcupdeluxe/fpc, ~/fpc${NC}"
-    echo -e "${GRAY}  4. /usr/local/bin, /opt/fpc/bin${NC}"
-    echo -e "${GRAY}  5. System PATH${NC}"
+    echo -e "${YELLOW}Anything listed above as [cannot compile] was found but could not build a${NC}"
+    echo -e "${YELLOW}two-word program — usually an install whose fpc.cfg is missing, so it does${NC}"
+    echo -e "${YELLOW}not know where its own RTL is. Those are skipped rather than used.${NC}"
+    echo ""
+    echo -e "${YELLOW}Searched:${NC}"
+    echo -e "${GRAY}  1. --fpc-path, then the FPC environment variable (one-off, never stored)${NC}"
+    echo -e "${GRAY}  2. FpcBin / FpcPath in setup.config.json (the stored choice)${NC}"
+    echo -e "${GRAY}  3. ./fpc/, ~/tools/fp/*/fpc, ~/fpcupdeluxe/fpc, ~/fpc, /usr/local, /opt${NC}"
+    echo -e "${GRAY}  4. System PATH, then a scan of \$HOME${NC}"
     echo ""
     echo -e "${YELLOW}Install it with your package manager, e.g.:${NC}"
     echo "  Debian/Ubuntu: sudo apt install fpc"
@@ -518,7 +665,8 @@ if [[ -z "$FPC" ]]; then
     echo "  Arch:          sudo pacman -S fpc"
     echo "  macOS:         brew install fpc"
     echo ""
-    echo -e "${YELLOW}Or run ./setup.sh --install-fpc, or pass --fpc-path <path>.${NC}"
+    echo -e "${YELLOW}Or run ./build.sh --select-fpc to choose one, ./setup.sh --install-fpc,${NC}"
+    echo -e "${YELLOW}or pass --fpc-path <path> for a single build.${NC}"
     exit 1
 fi
 

@@ -95,3 +95,7 @@ desktop.ini
 *.log
 *.tmp
 nul
+
+# Machine-specific: which FPC this checkout uses, chosen once by build.sh
+# or build.ps1 and never the same on two machines.
+setup.config.json
