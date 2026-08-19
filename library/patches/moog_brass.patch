@@ -1,0 +1,30 @@
+# MINIMOOG — gli ottoni. Stessa macchina, un solo parametro diverso che
+# conta: l'attacco del filtro non e' istantaneo. Quel ritardo di poche
+# decine di millisecondi prima che il suono si apra E' l'ottone.
+module note = note
+module osc1 = osc shape=saw   freq=110
+module osc2 = osc shape=saw   freq=110
+module osc3 = osc shape=pulse freq=110
+module f1   = filter mode=lowpass cutoff=380 res=0.42
+module f2   = filter mode=lowpass cutoff=380 res=0.22
+module fenv = env a=0.075 d=0.45 s=0.55 r=0.22
+module aenv = env a=0.020 d=0.20 s=0.90 r=0.25
+module amp  = amp
+
+connect note.pitch -> osc1.pitch
+connect note.pitch -> osc2.pitch
+connect note.pitch -> osc3.pitch
+set osc2.pitch = 0.0035
+set osc3.pw    = 0.32
+
+connect osc1.out -> f1.in amount=0.38
+connect osc2.out -> f1.in amount=0.36
+connect osc3.out -> f1.in amount=0.26
+connect note.gate -> fenv.gate
+connect note.gate -> aenv.gate
+connect fenv.out -> f1.cutoff amount=2.75
+connect fenv.out -> f2.cutoff amount=2.75
+connect f1.out -> f2.in
+connect f2.out -> amp.in
+connect aenv.out -> amp.gain amount=0.24
+output amp.out

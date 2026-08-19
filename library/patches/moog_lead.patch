@@ -1,0 +1,36 @@
+# MINIMOOG — il lead. Tre saw scordate fra loro, portamento, e il filtro
+# che si apre. Il glide lungo e' meta' della firma di questo suono.
+module note = note
+module gl   = glide time=0.045
+module osc1 = osc shape=saw freq=220
+module osc2 = osc shape=saw freq=220
+module osc3 = osc shape=saw freq=110
+module f1   = filter mode=lowpass cutoff=520 res=0.55
+module f2   = filter mode=lowpass cutoff=520 res=0.28
+module fenv = env a=0.004 d=0.55 s=0.42 r=0.25
+module aenv = env a=0.008 d=0.30 s=0.85 r=0.28
+module vib  = lfo shape=sine rate=5.2
+module amp  = amp
+
+connect note.pitch -> gl.in
+connect gl.out -> osc1.pitch
+connect gl.out -> osc2.pitch
+connect gl.out -> osc3.pitch
+set osc2.pitch =  0.0042
+set osc3.pitch = -0.0030
+
+# vibrato leggero, come il terzo oscillatore usato da LFO
+connect vib.out -> osc1.pitch amount=0.0022
+connect vib.out -> osc2.pitch amount=0.0022
+
+connect osc1.out -> f1.in amount=0.36
+connect osc2.out -> f1.in amount=0.34
+connect osc3.out -> f1.in amount=0.30
+connect note.gate -> fenv.gate
+connect note.gate -> aenv.gate
+connect fenv.out -> f1.cutoff amount=2.60
+connect fenv.out -> f2.cutoff amount=2.60
+connect f1.out -> f2.in
+connect f2.out -> amp.in
+connect aenv.out -> amp.gain amount=0.24
+output amp.out
