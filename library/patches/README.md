@@ -260,6 +260,24 @@ to 18 dB below the naive shapes.
 Every one of these cost real time to find. They are here so they cost nobody
 else any.
 
+**`note.vel` is how hard the key was pressed**, and it is a signal like any
+other rather than a taller gate. That separation is the point: on almost every
+acoustic instrument playing harder makes the sound *brighter* as much as louder,
+so velocity usually wants to reach a filter cutoff at least as much as an
+amplifier — and with one connection each it can reach both.
+
+    connect note.gate -> env1.gate
+    connect env1.out  -> amp.gain    amount=0.3
+    connect note.vel  -> amp.gain    amount=0.2     # louder
+    connect note.vel  -> filt.cutoff amount=0.5     # and brighter
+
+It reads **1.0 until something says otherwise**, so a patch that ignores it and
+a player that has none to give both sound exactly as they did before this
+existed — `patch_render` and a sequencer have no velocity, and must not be
+silent for it. And it **keeps its value through the note-off**: the release is
+still part of the note that was struck, and a release stage that suddenly saw a
+different velocity would be describing a different note.
+
 **The note module must be NAMED `note`.** The voice pool looks it up by name,
 not by type, so `module kbd = note` is a perfectly good note module that nothing
 will ever find — the patch compiles, renders, and is silent. The loader does say
@@ -317,7 +335,7 @@ patched in, and the range they clamp to.
 | `lfo` | both | phase, rate, shape | rate [pitch 0] | out |
 | `delay` | both | time | in [audio 0] | out |
 | `input` | both | channel | — | out |
-| `note` | both | — | — | pitch, gate |
+| `note` | both | — | — | pitch, gate, vel |
 
 ### Electronic
 

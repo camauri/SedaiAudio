@@ -25,7 +25,8 @@ uses
   SedaiBowedGenerator, SedaiModalGenerator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
   SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
-  SedaiSpatialChain, SedaiConvolver, SedaiTubeResonator, SedaiFormantBody;
+  SedaiSpatialChain, SedaiConvolver, SedaiTubeResonator, SedaiFormantBody,
+  SedaiPatchGraph, SedaiPatchModules, SedaiPatchEvents, SedaiPatchVoices;
 
 const
   SR    = 44100;
@@ -3002,6 +3003,332 @@ begin
 end;
 
 // ---------------------------------------------------------------------------
+// Patch Workbench: the note-event layer.
+//
+// This is the path a live MIDI keyboard will take, and it is tested here rather
+// than in a job/tools harness for one reason: `build.sh --tests` does not
+// rebuild those harnesses, so a check that lives there is a check that quietly
+// stops running. A lock-free queue that silently stops being exercised is worse
+// than no queue at all.
+// ---------------------------------------------------------------------------
+
+// Write a throwaway patch and give back its path. Self-contained on purpose:
+// pointing the test at library/patches would make an unrelated edit to a shipped
+// instrument able to fail the suite.
+function WritePatch(const AName, ABody: string): string;
+var
+  sl: TStringList;
+begin
+  Result := GetTempDir(False) + AName;
+  sl := TStringList.Create;
+  try
+    sl.Text := ABody;
+    sl.SaveToFile(Result);
+  finally
+    sl.Free;
+  end;
+end;
+
+// Loudest absolute sample of channel 0 between two frame indices.
+function MixPeak(APool: TSedaiPatchVoicePool; AFrom, ATo: Integer): Single;
+var
+  i: Integer;
+begin
+  Result := 0.0;
+  for i := AFrom to ATo do
+    if Abs(APool.MixSample(0, i)) > Result then Result := Abs(APool.MixSample(0, i));
+end;
+
+procedure TestPatchEventQueue;
+var
+  q: TSedaiPatchEventQueue;
+  e: TSedaiPatchEvent;
+  i, got: Integer;
+  at: QWord;
+  ordered, roundtrip, peeked, popped: Boolean;
+begin
+  WriteLn;
+  WriteLn('== patch event queue (lock-free, single producer) ==');
+  q := TSedaiPatchEventQueue.Create;
+  try
+    q.Allocate(16);
+    Ok('capacity is a power of two', q.Capacity = 16, Format('%d', [q.Capacity]));
+    Ok('starts empty', (q.Count = 0) and (not q.PeekAt(at)));
+
+    // Fill it exactly. Every slot must be usable: a ring that wastes one to
+    // tell full from empty would hold 15 here, and the free-running counters
+    // exist precisely so that it holds 16.
+    got := 0;
+    for i := 0 to 15 do
+      if q.PostNoteOn(i, 1.0, QWord(i + 1)) then Inc(got);
+    Ok('holds its full capacity', (got = 16) and (q.Count = 16), Format('%d posted', [got]));
+
+    // One more must be refused AND counted.
+    Ok('overflow is refused', not q.PostNoteOn(99, 1.0, 99));
+    Ok('overflow is counted, not silent', q.Dropped = 1, Format('dropped=%d', [q.Dropped]));
+
+    // Hoisted, and it has to be: FPC evaluates the Format argument before the
+    // call in the condition, so a side effect written inline is reported with
+    // the value the variable had BEFORE it — a passing test printing a lie.
+    peeked := q.PeekAt(at);
+    Ok('peek sees the head', peeked and (at = 1), Format('at=%d', [at]));
+
+    ordered := True;
+    for i := 0 to 15 do
+      if (not q.Pop(e)) or (e.Note <> i) or (e.Kind <> ekNoteOn) then ordered := False;
+    Ok('pops in the order posted', ordered);
+    Ok('empty again', (q.Count = 0) and (not q.Pop(e)));
+
+    // Drive the counters well past the ring length: masking is what makes the
+    // wrap legal, and this is the only place it gets exercised.
+    roundtrip := True;
+    for i := 0 to 999 do
+    begin
+      if not q.PostNoteOff(i and 127, QWord(i)) then roundtrip := False;
+      if (not q.Pop(e)) or (e.Note <> Byte(i and 127)) or (e.At <> QWord(i)) then
+        roundtrip := False;
+    end;
+    Ok('survives index wraparound', roundtrip, '1000 posts through a 16-slot ring');
+
+    // Velocity is clamped rather than rejected: a badly scaled producer should
+    // stay audible.
+    q.Clear;
+    q.PostNoteOn(60, 4.0);
+    popped := q.Pop(e);
+    Ok('velocity is clamped to 1', popped and (Abs(e.Value - 1.0) < 1e-6),
+       Format('%.3f', [e.Value]));
+    Ok('note range is enforced', not q.PostNoteOn(128, 1.0));
+  finally
+    q.Free;
+  end;
+end;
+
+procedure TestPatchNoteVelocity;
+var
+  m: TSedaiModNote;
+  vel: TSedaiPatchPort;
+begin
+  WriteLn;
+  WriteLn('== patch note module: the vel output ==');
+  m := TSedaiModNote.Create;
+  try
+    m.Prepare(SR, 8);
+    vel := m.PortByName('vel');
+    Ok('the note module has a vel port', vel <> nil);
+    if vel = nil then Exit;
+
+    // Untouched, it must read full: a renderer with no velocity to give has to
+    // produce sound, not silence.
+    m.RenderSample(0);
+    Ok('defaults to full velocity', Abs(vel.Sample(0) - 1.0) < 1e-6,
+       Format('%.4f', [vel.Sample(0)]));
+
+    m.SetNote(0.0, 1.0, 0.25);
+    m.RenderSample(1);
+    Ok('carries what was set', Abs(vel.Sample(1) - 0.25) < 1e-6,
+       Format('%.4f', [vel.Sample(1)]));
+
+    // The two-argument form is what note-off and retuning use, and it must
+    // leave velocity where it was — the release belongs to the note struck.
+    m.SetNote(0.0, 0.0);
+    m.RenderSample(2);
+    Ok('note-off keeps the velocity', Abs(vel.Sample(2) - 0.25) < 1e-6,
+       Format('%.4f', [vel.Sample(2)]));
+
+    m.SetNote(0.0, 1.0, 9.0);
+    m.RenderSample(3);
+    Ok('clamped to 0..1', Abs(vel.Sample(3) - 1.0) < 1e-6, Format('%.4f', [vel.Sample(3)]));
+  finally
+    m.Free;
+  end;
+end;
+
+procedure TestPatchVoicePoolEvents;
+const
+  // Gate straight onto the VCA and a square wave: no envelope, so the onset is
+  // a step and "when did the note start" has an exact answer to assert on.
+  GATE_PATCH =
+    'module note = note'#10 +
+    'module osc1 = osc shape=square freq=440'#10 +
+    'module amp  = amp'#10 +
+    'connect osc1.out  -> amp.in'#10 +
+    'connect note.gate -> amp.gain'#10 +
+    'output amp.out'#10;
+  // The same, driven by velocity instead, so the peak IS the velocity.
+  VEL_PATCH =
+    'module note = note'#10 +
+    'module osc1 = osc shape=square freq=440'#10 +
+    'module amp  = amp'#10 +
+    'connect osc1.out -> amp.in'#10 +
+    'connect note.vel -> amp.gain'#10 +
+    'output amp.out'#10;
+var
+  pool: TSedaiPatchVoicePool;
+  gatePath, velPath: string;
+  before, after, full, half: Single;
+  blk1, blk2: Single;
+begin
+  WriteLn;
+  WriteLn('== patch voice pool: sample-accurate events ==');
+  gatePath := WritePatch('saf_regr_gate.patch', GATE_PATCH);
+  velPath  := WritePatch('saf_regr_vel.patch', VEL_PATCH);
+
+  pool := TSedaiPatchVoicePool.Create;
+  try
+    if not pool.LoadFromFile(gatePath, 4) then
+    begin
+      Ok('gate patch loads', False, pool.LastError);
+      Exit;
+    end;
+    Ok('gate patch loads', True);
+    pool.Prepare(SR, 512);
+    // Measure the raw sum: the limiter would bend the very ratios being tested.
+    pool.Limit := False;
+    pool.Reset;
+
+    // THE test. A note posted for frame 256 must not exist at frame 255.
+    pool.PostNoteOn(60, 1.0, 256);
+    pool.Render(512);
+    before := MixPeak(pool, 0, 255);
+    after  := MixPeak(pool, 256, 511);
+    Ok('silent before its sample', before < 1e-9, Format('peak=%.3e', [before]));
+    Ok('sounding from its sample', after > 0.1, Format('peak=%.3f', [after]));
+
+    // And the control: posted for "now", it is there from the start. Without
+    // this the test above would also pass on a pool that never made a sound.
+    pool.Reset;
+    pool.PostNoteOn(60, 1.0, 0);
+    pool.Render(512);
+    Ok('At=0 starts at once', MixPeak(pool, 0, 255) > 0.1,
+       Format('peak=%.3f', [MixPeak(pool, 0, 255)]));
+
+    // A future event survives across blocks: posted at 600 while only 512 are
+    // being rendered, it must wait for the next one rather than fire early.
+    pool.Reset;
+    pool.PostNoteOn(60, 1.0, 600);
+    pool.Render(512);
+    blk1 := MixPeak(pool, 0, 511);
+    pool.Render(512);                       // frames 512..1023, the note is at 600
+    blk2 := MixPeak(pool, 0, 87);           // 512..599, still before it
+    Ok('a future event waits for its block', (blk1 < 1e-9) and (blk2 < 1e-9),
+       Format('blk1=%.3e blk2=%.3e', [blk1, blk2]));
+    Ok('and then fires', MixPeak(pool, 88, 511) > 0.1,
+       Format('peak=%.3f', [MixPeak(pool, 88, 511)]));
+
+    Ok('nothing was dropped', pool.EventsDropped = 0,
+       Format('dropped=%d', [pool.EventsDropped]));
+  finally
+    pool.Free;
+    DeleteFile(gatePath);
+  end;
+
+  // Velocity has to reach the sound, not just the module.
+  pool := TSedaiPatchVoicePool.Create;
+  try
+    if not pool.LoadFromFile(velPath, 4) then
+    begin
+      Ok('velocity patch loads', False, pool.LastError);
+      Exit;
+    end;
+    pool.Prepare(SR, 512);
+    pool.Limit := False;
+
+    pool.Reset;
+    pool.PostNoteOn(60, 1.0);
+    pool.Render(512);
+    full := MixPeak(pool, 0, 511);
+
+    pool.Reset;
+    pool.PostNoteOn(60, 0.5);
+    pool.Render(512);
+    half := MixPeak(pool, 0, 511);
+
+    Ok('velocity reaches the output', full > 0.1, Format('%.4f', [full]));
+    Ok('half velocity is half the level', Abs(half / full - 0.5) < 1e-4,
+       Format('%.4f / %.4f = %.5f', [half, full, half / full]));
+  finally
+    pool.Free;
+  end;
+
+  DeleteFile(velPath);
+end;
+
+procedure TestPatchSustainPedal;
+const
+  GATE_PATCH =
+    'module note = note'#10 +
+    'module osc1 = osc shape=square freq=440'#10 +
+    'module amp  = amp'#10 +
+    'connect osc1.out  -> amp.in'#10 +
+    'connect note.gate -> amp.gain'#10 +
+    'output amp.out'#10;
+var
+  pool: TSedaiPatchVoicePool;
+  path: string;
+  held, released, bent: Single;
+begin
+  WriteLn;
+  WriteLn('== patch voice pool: sustain pedal and bend ==');
+  path := WritePatch('saf_regr_sust.patch', GATE_PATCH);
+  pool := TSedaiPatchVoicePool.Create;
+  try
+    if not pool.LoadFromFile(path, 4) then
+    begin
+      Ok('patch loads', False, pool.LastError);
+      Exit;
+    end;
+    pool.Prepare(SR, 512);
+    pool.Limit := False;
+    pool.Reset;
+
+    // Pedal down, key struck, key let go: the gate must not move.
+    pool.PostSustain(True);
+    pool.PostNoteOn(60, 1.0);
+    pool.Render(512);
+    pool.PostNoteOff(60);
+    pool.Render(512);
+    held := MixPeak(pool, 0, 511);
+    Ok('the pedal holds the note', held > 0.1, Format('peak=%.3f', [held]));
+    Ok('pedal state is visible', pool.Sustain);
+
+    // Foot up: everything that was waiting releases. With no envelope the gate
+    // closing IS silence, and the voice retires two blocks later.
+    pool.PostSustain(False);
+    pool.Render(512);
+    released := MixPeak(pool, 0, 511);
+    Ok('the foot coming up releases it', released < 1e-9,
+       Format('peak=%.3e', [released]));
+    // Retirement deliberately waits for TWO silent blocks before reclaiming a
+    // voice, so this needs a second one — a patch whose tail is a delay line
+    // can be silent for a block and come back.
+    pool.Render(512);
+    Ok('and the voice is reclaimed', pool.ActiveVoices = 0,
+       Format('%d active', [pool.ActiveVoices]));
+
+    // Bend moves a sounding note. A square at 440 bent up an octave has twice
+    // the zero crossings, which is the cheapest thing to count.
+    pool.Reset;
+    pool.PostNoteOn(60, 1.0);
+    pool.PostPitchBend(12.0);
+    pool.Render(512);
+    bent := MixPeak(pool, 0, 511);
+    Ok('bend does not silence the note', bent > 0.1, Format('peak=%.3f', [bent]));
+    Ok('bend is reported', Abs(pool.Bend - 12.0) < 1e-6, Format('%.2f', [pool.Bend]));
+
+    // A panic must leave nothing sounding.
+    pool.PostAllNotesOff;
+    pool.Render(512);
+    pool.Render(512);
+    pool.Render(512);
+    Ok('all-notes-off empties the pool', pool.ActiveVoices = 0,
+       Format('%d active', [pool.ActiveVoices]));
+  finally
+    pool.Free;
+  end;
+  DeleteFile(path);
+end;
+
+// ---------------------------------------------------------------------------
 
 begin
   WriteLn('========================================');
@@ -3048,6 +3375,10 @@ begin
   TestSpatialChain;
   TestConvolver;
   TestCommutation;
+  TestPatchEventQueue;
+  TestPatchNoteVelocity;
+  TestPatchVoicePoolEvents;
+  TestPatchSustainPedal;
 
   WriteLn;
   if Failures = 0 then

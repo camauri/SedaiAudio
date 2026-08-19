@@ -154,16 +154,32 @@ type
   end;
 
   { TSedaiModNote — the "keyboard": what the player or the renderer drives }
+  // Three outputs, and `vel` is a SEPARATE SIGNAL rather than a gate with a
+  // height. That is how a real instrument is wired and it is also the only
+  // arrangement that lets one patch send velocity somewhere other than the
+  // amplifier: harder means brighter on almost every acoustic instrument, so
+  // vel wants to reach a filter cutoff at least as often as a VCA.
+  //
+  // Velocity SURVIVES THE NOTE-OFF on purpose. The release is still part of the
+  // note that was struck, and a release stage that suddenly sees a different
+  // velocity than the attack did would be describing a different note.
   TSedaiModNote = class(TSedaiPatchModule)
   private
-    FPitchOut, FGateOut: TSedaiPatchPort;
-    FPitch, FGate: Single;
+    FPitchOut, FGateOut, FVelOut: TSedaiPatchPort;
+    FPitch, FGate, FVelocity: Single;
   public
     constructor Create; override;
     procedure RenderSample(AIndex: Integer); override;
-    procedure SetNote(APitchVolts, AGate: Single);
+    // Two forms: the short one leaves velocity alone, which is what a note-off
+    // and a pitch change both want, and is why every existing caller still says
+    // exactly what it meant.
+    procedure SetNote(APitchVolts, AGate: Single); overload;
+    procedure SetNote(APitchVolts, AGate, AVelocity: Single); overload;
     property Pitch: Single read FPitch write FPitch;
     property Gate: Single read FGate write FGate;
+    // 0..1. Defaults to 1.0, so a patch that ignores velocity and a player that
+    // does not send it both behave exactly as they did before this existed.
+    property Velocity: Single read FVelocity write FVelocity;
   end;
 
 // Factory: maps the type name in a patch file to a class.
@@ -744,20 +760,35 @@ begin
   Rate := mrBoth;
   FPitch := 0.0;
   FGate := 0.0;
+  // Full velocity until somebody says otherwise: a patch driven by something
+  // that has no velocity to give — a sequencer, a drone, patch_render — must
+  // sound at full strength, not silent.
+  FVelocity := 1.0;
   FPitchOut := AddOutput('pitch', prPitch);
   FGateOut  := AddOutput('gate', prGate);
+  FVelOut   := AddOutput('vel', prUnipolar);
 end;
 
 procedure TSedaiModNote.RenderSample(AIndex: Integer);
 begin
   FPitchOut.Write(AIndex, FPitch);
   FGateOut.Write(AIndex, FGate);
+  FVelOut.Write(AIndex, FVelocity);
 end;
 
 procedure TSedaiModNote.SetNote(APitchVolts, AGate: Single);
 begin
   FPitch := APitchVolts;
   FGate := AGate;
+end;
+
+procedure TSedaiModNote.SetNote(APitchVolts, AGate, AVelocity: Single);
+begin
+  FPitch := APitchVolts;
+  FGate := AGate;
+  if AVelocity < 0.0 then AVelocity := 0.0;
+  if AVelocity > 1.0 then AVelocity := 1.0;
+  FVelocity := AVelocity;
 end;
 
 { factory }
