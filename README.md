@@ -5,731 +5,311 @@
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Maurizio%20Cammalleri-0077B5?logo=linkedin)](https://www.linkedin.com/in/maurizio-cammalleri-80a89a11/)
 [![Substack](https://img.shields.io/badge/Substack-Maurizio%20Cammalleri-FF6719?logo=substack)](https://cammalleri.substack.com/)
 
-A professional-grade, modular audio synthesis and DAW foundation library written in Free Pascal.
+A modular audio synthesis and DAW foundation library in Free Pascal — and, on
+top of it, a **patch workbench**: instruments described as text, built out of
+connectable modules, and playable from a MIDI keyboard.
 
-> **DISCLAIMER**: This library is in advanced development stage but **not yet ready for production use**. The API is stabilizing, most features are complete and functional, but there may be bugs. We encourage you to try it out and report any issues or suggestions!
+> **DISCLAIMER**: advanced development, **not production-ready**. The API is
+> stabilising and most of it works, but there will be bugs. Try it and report
+> what breaks.
 
-## Branch Information
-
-| Branch | Status | Description |
-|--------|--------|-------------|
-| **main** | [![Stable](https://img.shields.io/badge/status-stable-green.svg)]() | Preliminary release stable enough for testing |
-| **develop** | [![Development](https://img.shields.io/badge/status-development-orange.svg)]() | Active development branch - compiles successfully but may contain bugs |
-
-> **Recommended:** Use the `main` branch for testing and benchmarking. The `develop` branch contains the latest features but may have stability issues.
-
----
-
-## Overview
-
-Sedai Audio Foundation provides a comprehensive audio synthesis framework following a **modular building-block architecture**: small, well-defined classes that can be combined to build any type of synthesizer, effect processor, or DAW component.
-
-### Key Features
-
-- **Synthesis Engines**: a single *universal voice* (`TSedaiVoice`) can be any of nine source types — Classic/Subtractive, FM (DX7-style), Wavetable, Additive, Sample (sampler), Karplus-Strong (plucked-string physical model), **Free-Partial** (McAulay-Quatieri sinusoidal model, note-transposable, WAV→preset analysis), **Waveguide-Reed** (self-oscillating clarinet/sax physical model) and **Bowed-String** (self-oscillating violin/cello physical model). The Part/Instrument engine adds SID-flavoured oscillators, for **10 techniques** in the `.safinst` preset system; the high-level facade (`Play*` API) covers five of them. SID Evo (`SedaiSIDEvo`, the reSID-accurate chip) is a standalone unit
-- **Physical Modelling**: plucked string (Karplus-Strong), self-oscillating single-reed waveguide (nonlinear reed + bore, MSW/Smith-STK re-derivation), bowed string (nonlinear bow friction + string waveguide), and a commuted tube/body resonator
-- **Professional Mixer**: Channels, aux buses, group buses, master bus with metering
-- **Audio Effects**: Delay, Reverb, Chorus, Flanger, Phaser, Distortion, Compressor, Limiter, EQ; plus auto-space (mono-safe stereo widener), body resonator, short-FIR convolver, tube resonator
-- **Advanced Filters**: 6 filter types, multi-pole cascading (12/24/48 dB/oct)
-- **DAW Foundation**: Transport-driven render, audio + MIDI tracks (MIDI tracks play through a per-track instrument), clips, automation, audio recording, working undo/redo, and project save/load (native `.safproj` text format, with a format-dispatch seam for SMF / Dawproject / etc.)
-- **Real-time MIDI Playback**: Standard MIDI file support with 16-channel polyphony
-- **GoatTracker Player**: Native playback of GoatTracker v2 .sng files with full command support
-- **Audio File I/O**: WAV read/write (8/16/24/32-bit PCM, 32/64-bit float) with professional dithering; AIFF/AIFC read + write (big-endian PCM); FLAC read **and write** (pure-Pascal, lossless); OGG Vorbis and MP3 read (pure-Pascal decoders)
-- **Instrument content**: 40+ built-in synth presets, plus a **shipped instrument library** (`library/*.safinst` — built-in synths, physically-modelled winds, and additive instruments resynthesised from CC0 samples)
-- **Cross-Platform**: Works on Linux and Windows via SDL2 (offline rendering needs no audio device)
+| Branch | Status | |
+|---|---|---|
+| **main** | [![Stable](https://img.shields.io/badge/status-stable-green.svg)]() | Preliminary release, stable enough for testing |
+| **develop** | [![Development](https://img.shields.io/badge/status-development-orange.svg)]() | Active development |
 
 ---
 
-## Design Principles
+## What it is
 
-1. **Single Responsibility**: Each class does ONE thing well
-2. **Composition over Inheritance**: Build complex systems by combining simple blocks
-3. **Separation of Concerns**: Audio generation, processing, control, and routing are separate layers
-4. **DAW-Ready**: Timeline, automation, undo/redo, and project management built-in
-5. **Real-time Safe**: No allocations in audio thread, lock-free where possible
-6. **Testable**: Every component can be tested in isolation
+Three layers, and you can stop at any of them.
 
----
+**A library.** Eighty-one units of DSP — oscillators, filters, envelopes,
+effects, a mixer, a transport, file I/O — each a small class that does one
+thing, meant to be combined rather than configured.
 
-## Technologies
+**A patch workbench.** A text file lists modules and the connections between
+them, and that *is* the instrument. There is one kind of connection: any output
+can feed any input. There is no modulation system and no mod matrix, because
+audio, pitch, gate and knobs are the same thing — which is what lets one LFO be
+vibrato or FM depending on nothing but its rate.
 
-### Core Technologies
+**A language on top.** A table cannot say *"and nine of these, each a little
+quieter than the last"*. So an instrument can instead be a program in SedaiBasic
+MODERN, which when run **prints** the patch. Loops, inheritance, real
+arithmetic — and the result is still a text file the engine already knows how to
+read.
 
-| Technology | Version | Purpose |
-|------------|---------|---------|
-| **Free Pascal** | 3.0.4+ | Primary programming language |
-| **SDL2** | 2.0+ | Cross-platform audio device access (audio output only) |
-| **Lazarus** | Optional | IDE support |
-
-### Platform Abstraction
-
-| Module | Purpose |
-|--------|---------|
-| **SedaiTiming** | Cross-platform high-precision timing (µs accuracy) |
-| **SedaiThread** | Cross-platform thread management with priority control |
-
-SDL2 is now used **only for audio hardware output**. All timing and threading is handled by platform-native APIs for maximum precision.
-
-### Audio Technologies
-
-| Component | Technology |
-|-----------|------------|
-| **Sample Rate** | 44100 Hz (CD quality) |
-| **Bit Depth** | 32-bit floating point internal processing |
-| **Buffer Size** | 1024 samples (~23ms latency) |
-| **Voice Polyphony** | 32 default (unlimited, hardware-dependent) |
-
-### Synthesis Technologies
-
-| Engine | Description |
-|--------|-------------|
-| **Classic/Subtractive** | Analog-style synthesis with oscillators, filters, LFO |
-| **FM (Frequency Modulation)** | DX7-style 6-operator FM synthesis |
-| **Wavetable** | Modern wavetable synthesis with morphing |
-| **Additive** | Harmonic spectrum synthesis (up to 64 partials) |
-| **Sample** | Sampler playback (one-shot/looped, repitch, interpolation) |
-| **Karplus-Strong** | Physical-modelling plucked-string / percussion |
-| **SID Evo** | C64 SID-inspired with 12 waveforms (4 classic + 8 extended) |
-
-### Tracker Formats
-
-| Format | Description |
-|--------|-------------|
-| **GoatTracker v2** | Native .sng file playback with wavetable commands |
-
-### Signal Processing
-
-| Technology | Description |
-|------------|-------------|
-| **ADSR Envelopes** | 4-stage envelopes with 4 curve types (Linear, Exponential, Logarithmic, S-Curve) |
-| **Biquad Filters** | Low-pass, High-pass, Band-pass, Notch, Allpass, Peaking |
-| **Multi-pole Filters** | 12dB, 24dB, 48dB per octave cascaded filters |
-| **Audio Effects** | Delay, Reverb, Chorus, Flanger, Phaser, Distortion, Compressor, Limiter, EQ |
-| **Stereo Processing** | Panning, stereo width control |
-
-### MIDI Technologies
-
-| Component | Description |
-|-----------|-------------|
-| **MIDI Parser** | Standard MIDI File (SMF) Format 0 and 1 |
-| **MIDI Sequencer** | Real-time event scheduling with tempo control |
-| **Channel Support** | 16 MIDI channels with per-channel configuration |
-| **Controllers** | Pitch bend, modulation wheel, velocity |
-
-### Wavetable Formats
-
-| Format | Extension | Description |
-|--------|-----------|-------------|
-| **Serum** | .wav | 2048 samples per frame, industry standard |
-| **Vital** | .wav | Serum-compatible format |
-| **Surge/SurgeXT** | .wt | Native Surge wavetable format |
-| **Generic WAV** | .wav | Standard audio files |
-
-### Platforms
-
-| Platform | Compiler Target | Status |
-|----------|-----------------|--------|
-| **Windows 10/11** | x86_64-win64, i386-win32 | Supported |
-| **Linux** | x86_64-linux, i386-linux | Supported |
-| **macOS** | x86_64-darwin, aarch64-darwin | Planned |
+Plus two things that stand on their own: a **cycle-exact MOS 6581/8580 SID**
+emulation, and a **GoatTracker v2** player that plays `.sng` files.
 
 ---
 
-## Architecture
-
-### Layer Structure
-
-The library follows a modular, layered architecture designed for maximum flexibility and code reuse:
+## Quick start
 
 ```
-+-----------------------------------------------------------------------------+
-|  Layer 5: Application                                                        |
-|  DAW UI, Plugin Hosts, Demo Applications                                     |
-+-----------------------------------------------------------------------------+
-|  Layer 4: Project & Session                                                  |
-|  TSedaiProject, TSedaiTrack, TSedaiClip, TSedaiAutomationLane               |
-|  TSedaiUndoStack, TSedaiCommand                                              |
-+-----------------------------------------------------------------------------+
-|  Layer 3: Transport & Timing                                                 |
-|  TSedaiTransport, TSedaiTempoMap, TSedaiTimePosition, TSedaiMetronome       |
-+-----------------------------------------------------------------------------+
-|  Layer 2: Synthesis & Processing                                             |
-|  +------------------+------------------+------------------+                  |
-|  | Generators       | Processors       | Effects          |                  |
-|  | TSedaiOscillator | TSedaiFilter     | TSedaiChorus     |                  |
-|  | TSedaiNoise      | TSedaiAmplifier  | TSedaiDelay      |                  |
-|  | TSedaiWavetable  | TSedaiDistortion | TSedaiReverb     |                  |
-|  | TSedaiSample     | TSedaiCompressor | TSedaiFlanger    |                  |
-|  | TSedaiFMOperator | TSedaiLimiter    | TSedaiPhaser     |                  |
-|  |                  | TSedaiEQ         |                  |                  |
-|  +------------------+------------------+------------------+                  |
-|  +------------------+------------------+------------------+                  |
-|  | Modulators       | Voice Management | Routing          |                  |
-|  | TSedaiEnvelope   | TSedaiVoice      | TSedaiMixer      |                  |
-|  | TSedaiLFO        | TSedaiVoiceMgr   | TSedaiModMatrix  |                  |
-|  | TSedaiStepMod    |                  | TSedaiParamPort  |                  |
-|  +------------------+------------------+------------------+                  |
-+-----------------------------------------------------------------------------+
-|  Layer 1: Foundation                                                         |
-|  TSedaiAudioObject, TSedaiSignalNode, TSedaiAudioBuffer                     |
-+-----------------------------------------------------------------------------+
-|  Layer 0: Platform                                                           |
-|  TSedaiAudioBackend (SDL2), TSedaiTiming, TSedaiThread                      |
-+-----------------------------------------------------------------------------+
+./setup.sh          # fetches SDL2
+./build.sh          # library + tools
 ```
 
-### Key Architectural Components
-
-#### DAG-Based Effect Routing
-
-The library provides a set of composable effect processors, all derived from
-the `TSedaiEffect` base class in `src/Effects/`: `TSedaiReverb`, `TSedaiDelay`,
-`TSedaiChorus`, `TSedaiFlanger`, `TSedaiPhaser`, plus the spatial/timbral set
-`TSedaiAutoSpace` (mono-safe stereo widener), `TSedaiBodyResonator` (modal body /
-radiation) and `TSedaiConvolver` (short stereo FIR). You chain them by passing the
-audio buffer through each processor in turn. `TSedaiTubeResonator` (the commuted
-tube/body filter) is a per-voice component — note-tuned, so it lives in the voice
-rather than as an insert.
-
-> **Note:** an earlier design (see `ARCHITECTURE_PROPOSAL.md`, kept as a
-> historical document) proposed a DAG-based `TSedaiEffectGraph` and a
-> `TSedaiSynthEngine` / `TSedaiVoicePool` / `TSedaiMultiPoleFilter` base
-> hierarchy. These classes are **not** part of the current public API; voice
-> management lives inside each synth/player (e.g. `TSedaiSIDEvo`,
-> `TSedaiVoiceManager`).
-
-#### Modular Synth Engine (Part / Instrument)
-
-The high-level facade (`SedaiAudioFoundation`, the `Play*`/`MIDI*` API) is **not** a
-self-contained voice loop — it delegates to a modular **Part/Instrument engine** built
-from the framework's own units:
+**Render an instrument to a WAV — no audio device needed.**
 
 ```
-TSAFEngine
- ├─ Part = Instrument(preset) → TSedaiVoiceManager (universal voices) → Mixer channel
- ├─ Part ...                                                                  ↓
- └─ ...                                                              MasterBus → output
+bin/x86_64-linux/saf_play library/winds.safinst "Tenor Sax"
+bin/x86_64-linux/saf_play                       # a tour of every shipped library
 ```
 
-- **`TSedaiVoice`** is a *universal* voice: a single voice can be an oscillator stack,
-  an FM synth, a wavetable generator, an additive generator, a sampler, a
-  Karplus-Strong string, a free-partial engine, a waveguide reed, a bowed
-  string, or a modal-percussion bank
-  (`TVoiceSourceType` — ten source types), with a shared
-  envelope / filter / amp / pan chain and a per-voice **modulation matrix**
-  (`TSedaiModulationMatrix`) routing envelopes / LFOs (unlimited) / velocity / key-track
-  to pitch, cutoff and amplitude. Oscillators can be combined (mix / ring-mod / sync)
-  plus a sub-oscillator.
-- **`TSAFPart`** (`src/Engine/SedaiPart.pas`) is a monotimbral instrument: a
-  `TSedaiVoiceManager` pool configured from a preset (classic / FM / wavetable / additive /
-  karplus, a loaded wavetable table, or a loaded sample), rendered to a stereo buffer.
-- **`TSAFEngine`** (`src/Engine/SedaiEngine.pas`) hosts many Parts, one per mixer channel,
-  summed through the `TSedaiMixer` master bus. The facade drives a global `TSAFEngine`;
-  the audio backend runs in callback mode and pulls the engine render.
-
-#### Professional Mixer Architecture
+**Play a GoatTracker tune.**
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Mixer Architecture                                              │
-│                                                                  │
-│  Channels (N) ──┬── Aux Sends (8) ──── Aux Buses (8) ──┐        │
-│                 │                                       │        │
-│                 └── Groups (8) ─────────────────────────┼──┐     │
-│                                                         │  │     │
-│                                                         ▼  ▼     │
-│                                              ┌────────────────┐  │
-│                                              │  Master Bus    │  │
-│                                              │  (limiter,     │  │
-│                                              │   metering)    │  │
-│                                              └───────┬────────┘  │
-│                                                      │           │
-│                                                      ▼           │
-│                                               Audio Output       │
-└─────────────────────────────────────────────────────────────────┘
+bin/x86_64-linux/sng_player song.sng
 ```
 
-### Module Overview
+**Turn an instrument written as a program into a patch.**
 
-#### Foundation Layer
+```
+sb library/instruments/hammond.bas > library/patches/hammond.patch
+```
 
-| Module | Description |
-|--------|-------------|
-| **SedaiAudioTypes** | Core types: TWaveType, TADSR, TStereoSample, TFilterType |
-| **SedaiAudioObject** | Root base class for all audio objects |
-| **SedaiSignalNode** | Abstract DSP node for graph-based processing |
-| **SedaiAudioBuffer** | Managed audio buffer with utility methods |
-| **SedaiParameterPort** | Modulatable parameter with range and curve |
+**Check that everything still works.**
 
-#### Platform Layer
+```
+bin/x86_64-linux/saf_regression      # 193 checks, headless
+bin/x86_64-linux/sedaisid_test       # SID Evo against reSID
+```
 
-| Module | Description |
-|--------|-------------|
-| **SedaiAudioBackend** | SDL2 audio device with dual-mode support (Push or Callback) |
-| **SedaiTiming** | Cross-platform high-precision timing abstraction |
-| **SedaiThread** | Cross-platform thread abstraction with priority control |
-
-**SedaiAudioBackend Modes**:
-- **Push Mode** (default): Application pushes samples via `QueueSamples()` - you control timing
-- **Callback Mode**: SDL2 pulls audio via callback - SDL2 controls timing
-
-#### Generators
-
-| Module | Description |
-|--------|-------------|
-| **SedaiOscillator** | Multi-waveform oscillator (PolyBLEP/PolyBLAMP band-limiting, SID mode) |
-| **SedaiNoiseGenerator** | Noise generators (White, Pink, Brown, Blue, Violet) |
-| **SedaiWavetableGenerator** | Wavetable synthesis with morphing & mipmaps |
-| **SedaiSamplePlayer** | Sample playback (loop modes, pitch, interpolation) |
-| **SedaiFMOperator** | FM synthesis (6-operator DX7-style, algorithms) |
-| **SedaiAdditiveGenerator** | Additive synthesis (up to 64 harmonics, 10 presets) |
-| **SedaiPartialGenerator** | Free-partial (McAulay-Quatieri) synthesis — N partials with time-varying freq/amp tracks |
-| **SedaiKarplusGenerator** | Karplus-Strong physical modelling (plucked string / percussion) |
-| **SedaiReedGenerator** | Waveguide single-reed physical model (self-oscillating clarinet / sax) |
-| **SedaiBowedGenerator** | Bowed-string physical model (self-oscillating violin / cello) |
-
-#### Modulators
-
-| Module | Description |
-|--------|-------------|
-| **SedaiEnvelope** | ADSR envelope (4 curves, SID mode) |
-| **SedaiLFO** | LFO with tempo sync |
-| **SedaiStepModulator** | Step sequencer modulator |
-
-#### Processors
-
-| Module | Description |
-|--------|-------------|
-| **SedaiFilter** | Multi-mode filter (6 types, 3 slopes, SID mode) |
-| **SedaiAmplifier** | Gain stage with saturation modes |
-| **SedaiDistortion** | Multi-type distortion |
-| **SedaiCompressor** | Dynamics compressor |
-| **SedaiLimiter** | Brickwall limiter with lookahead |
-| **SedaiEQ** | 8-band parametric EQ |
-
-#### Effects
-
-| Module | Description |
-|--------|-------------|
-| **SedaiEffect** | Effect base class (tempo sync, helpers) |
-| **SedaiChorus** | Multi-voice chorus |
-| **SedaiDelay** | Multi-mode delay (Simple, PingPong, MultiTap, Tape, BBD) |
-| **SedaiReverb** | Freeverb algorithm |
-| **SedaiFlanger** | Flanger effect |
-| **SedaiPhaser** | Multi-stage phaser |
-
-#### Voice Management
-
-| Module | Description |
-|--------|-------------|
-| **SedaiVoice** | Complete synthesizer voice |
-| **SedaiVoiceManager** | Polyphonic voice allocation |
-| **SedaiModulationMatrix** | Modulation routing |
-
-#### Mixer
-
-| Module | Description |
-|--------|-------------|
-| **SedaiMixerChannel** | Mixer channel with inserts and sends |
-| **SedaiBus** | Aux, Group, and Master bus classes |
-| **SedaiMixer** | Full mixing console |
-
-#### Transport & DAW
-
-| Module | Description |
-|--------|-------------|
-| **SedaiTransport** | Transport control (play, stop, record, loop, tempo, SMPTE) |
-| **SedaiClip** | Audio and MIDI clip classes |
-| **SedaiTrack** | Track with clips, automation, routing |
-| **SedaiProject** | Complete DAW project with undo/redo |
-
-#### SID Synthesis
-
-| Module | Description |
-|--------|-------------|
-| **SedaiSIDEvo** | MOS 6581/8580 SID emulator — a bit-exact reSID port (classic path) plus EVO extensions (up to 64 voices, stereo, LFO, extended waveforms) |
-
-#### Players
-
-| Module | Description |
-|--------|-------------|
-| **SedaiGoatTracker** | GoatTracker v2 .sng parser and player; byte-exact SID register output vs. the original player |
-| **SedaiMIDIPlayer** | Standard MIDI file player |
-
-#### File I/O
-
-| Module | Description |
-|--------|-------------|
-| **SedaiAudioFileReader** | Audio file loading (WAV PCM/Float, AIFF/AIFC, FLAC) |
-| **SedaiAudioFileWriter** | Audio file export with dithering |
-| **SedaiFLACDecoder** | Pure-Pascal FLAC decoder (lossless, streaming) |
-| **SedaiFLACEncoder** | Pure-Pascal FLAC encoder (lossless; FIXED predictors + Rice) |
-| **SedaiVorbisDecoder** | Pure-Pascal OGG Vorbis decoder (FFT IMDCT, bisection seek) |
-| **SedaiMP3Decoder** | Pure-Pascal MP3 Layer III decoder (minimp3 port) |
+> **Not yet shipped.** Several tools used daily still live in the gitignored
+> working area `job/tools/saf/` and are **not in the repository**:
+> `patch_live` (the live ear loop with hot reload and MIDI in), `patch_midi`,
+> `patch_fixture` (the sound guard), `patch_doc` (generates the module
+> reference) and `midi_probe`. They are referenced below because they are how
+> the work is actually done; a fresh clone will not have them yet. Moving them
+> into `tools/` is the next housekeeping job.
 
 ---
 
-## Synthesis Engines
+## The Patch Workbench
 
-### Classic (Subtractive) Synthesis
-
-- Up to 3 oscillators per voice (combinable: mix / ring-mod / sync, plus sub-oscillator)
-- 6 waveform types: Sine, Square, Sawtooth, Triangle, Pulse, Noise
-- Subtractive filter with resonance (12/24/48 dB, double-precision biquad, Butterworth cascade)
-- LFO modulation (pitch, filter, amplitude) via the per-voice modulation matrix
-- Shared ADSR envelope (4 real curve types)
-
-**Presets**: sine, square, saw, triangle, pulse, noise, lead, bass, pad
-
-### FM Synthesis
-
-- 6 operators (DX7-style)
-- 5 algorithms: Simple, Stack, Parallel, Feedback, Complex
-- Per-operator ADSR envelopes
-- Operator feedback control
-- Modulation depth scaling
-
-**Presets**: epiano, brass, bell, organ, lead, bass, choir, fmstrings, fmpad, marimba, flute, churchbell
-
-### Wavetable Synthesis
-
-- Up to 4 oscillators per voice
-- Real-time wavetable morphing with interpolation
-- Multiple mix modes: Add, Multiply, Ring Modulation
-- Support for external wavetable formats
-
-**Presets**: serum, wasp, ppg, vocal, metallic, glass, organ, evolving, digitalchaos
-
-**Supported Wavetable Formats**: Serum (.wav, 2048 samples/frame), Vital (.wav), Surge/SurgeXT (.wt), Generic WAV
-
-### Additive Synthesis
-
-Additive synthesis builds complex timbres by combining multiple sine wave oscillators (harmonics/partials). Each harmonic can be individually controlled for amplitude, phase, and detuning.
-
-#### Features
-
-| Feature | Description |
-|---------|-------------|
-| **Max Harmonics** | Up to 64 harmonics per voice |
-| **Per-harmonic Level** | Individual amplitude control (0.0-1.0) |
-| **Per-harmonic Detune** | Cents-based detuning for inharmonicity |
-| **Per-harmonic Phase** | Initial phase offset (0-2pi) |
-| **Per-harmonic Envelopes** | Optional ADSR envelope per harmonic |
-| **Automatic Nyquist Limiting** | Prevents aliasing by limiting harmonics |
-
-#### Preset Waveforms (10)
-
-| Preset | Description |
-|--------|-------------|
-| **Sine** | Pure sine wave (fundamental only) |
-| **Saw** | Sawtooth wave (all harmonics at 1/n amplitude) |
-| **Square** | Square wave (odd harmonics at 1/n amplitude) |
-| **Triangle** | Triangle wave (odd harmonics at 1/n^2 amplitude) |
-| **Organ** | Hammond-style drawbar simulation |
-| **Bell** | Inharmonic partials for metallic sounds |
-| **Strings** | Rich harmonics with gradual rolloff |
-| **Choir** | Formant-like harmonic structure |
-| **Brass** | Strong mid-harmonics for brass tones |
-| **Flute** | Mostly fundamental with weak harmonics |
-
-#### Classic Waveform Formulas
+An instrument is a text file. It diffs and versions like source, which is most
+of why it exists.
 
 ```
-Sine:     Only fundamental (no harmonics)
-Square:   Odd harmonics (1,3,5,7...) at 1/n amplitude
-Sawtooth: All harmonics (1,2,3,4...) at 1/n amplitude
-Triangle: Odd harmonics at 1/n^2 amplitude with alternating phase
+module note = note
+module osc1 = osc    shape=saw freq=110
+module filt = filter mode=lowpass cutoff=800
+module env1 = env    a=0.005 d=0.15 s=0.6 r=0.3
+module amp  = amp
+
+connect note.pitch -> osc1.pitch
+connect note.gate  -> env1.gate
+connect osc1.out   -> filt.in
+connect filt.out   -> amp.in
+connect env1.out   -> amp.gain  amount=0.3
+
+output  amp.out
 ```
 
-#### Usage Example
+Keep `patch_live` running while you edit the file and the sound changes without
+a restart — a save that does not compile prints the error and leaves the previous
+version playing. (That tool is one of the five not yet in the repository; see
+the note above.)
 
-```pascal
-uses
-  SedaiAdditiveGenerator;
+Seven statements, **40 module types**, and 27 patches shipped in
+[`library/patches/`](library/patches/). The full grammar, the traps with their
+real error messages, and a **module reference generated from the registry** —
+not transcribed, so it cannot drift — are in
+[`library/patches/README.md`](library/patches/README.md).
 
-var
-  Additive: TSedaiAdditiveGenerator;
-begin
-  Additive := TSedaiAdditiveGenerator.Create;
-  Additive.SetSampleRate(44100);
+Some things worth knowing without reading all of it:
 
-  // Load a preset
-  Additive.LoadOrganWave;
+- **Connections sum.** Several sources into one input add up, which is why there
+  is no mixer module. `amount=` scales one source and may be negative, which is
+  the attenuverter of a modular system.
+- **Sample rate is scoped, never global.** The graph is decomposed into strongly
+  connected components; only modules actually inside a feedback loop advance one
+  sample at a time. Measured on a 20-node chain: 436× realtime mixed, against
+  365× if the whole graph is driven per-sample.
+- **Feedback is a technique, not an error.** A cycle is detected, its back edges
+  read the previous sample, and that unit delay is what makes the loop
+  computable.
+- **A patch is a voice template.** The pool builds N independent copies, so a
+  chord is not one note three times as loud: nothing is shared, so nothing
+  phase-locks.
 
-  // Or create custom spectrum
-  Additive.ClearAllHarmonics;
-  Additive.SetHarmonicLevel(0, 1.0);   // Fundamental
-  Additive.SetHarmonicLevel(2, 0.5);   // 3rd harmonic
-  Additive.SetHarmonicDetune(2, 5);    // +5 cents detune
-  Additive.SetHarmonicLevel(4, 0.3);   // 5th harmonic
+### Velocity
 
-  // Play a note
-  Additive.NoteOn(440.0, 0.8);  // A4 at 80% velocity
+`note.vel` is how hard the key was pressed, and it is a signal like any other
+rather than a taller gate. On almost every acoustic instrument playing harder
+makes the sound *brighter* as much as louder, so velocity usually wants to reach
+a filter cutoff at least as much as an amplifier.
 
-  // Generate samples
-  while Playing do
-    Sample := Additive.GenerateSample;
+Eight of the shipped instruments respond to it, under a rule worth copying: **at
+full velocity each one is bit-identical to what it was before velocity existed.**
+Full strength is the instrument's voice; velocity can only darken and soften from
+there. That is arranged, not hoped for — and the sound fixtures prove it.
 
-  Additive.NoteOff;
-  Additive.Free;
-end.
+---
+
+## Instruments in SedaiBasic MODERN
+
+    sb library/instruments/hammond.bas > library/patches/hammond.patch
+
+**This is not a translation. It is an execution.** The `.bas` is a real program
+that really runs: the loops loop, the arithmetic is done, a child class overrides
+a method and the override is really dispatched. The `.patch` is the program's
+*side effect* — the objects in the library do not make sound, they take notes,
+and at the end they print what they were told.
+
+So you are not writing a description in disguise. You have the whole language.
+The `.patch` that comes out is flat and dull, exactly as it should be; the
+intelligence lives in the `.bas`.
+
+```basic
+For i = 0 To This.Count - 1
+  cents = This.Detune * (i / (This.Count - 1) - 0.5)
+  This.Src(i) = New Osc
+  This.Src(i)->Init("osc" + Str(i))
+  This.Src(i)->KeyN("freq", This.BaseFreq)
+  This.Src(i)->Pitch.Value = cents / 1200.0
+  This.Src(i)->Pitch.Add(This.Kbd->Pitch)
+  This.Filt->In.Add(This.Src(i)->Out, 1.0 / This.Count)
+Next
 ```
 
-### Sample Playback
+Changing `Count` from 3 to 12 takes that instrument from 8 modules to 17, with
+the detune spread and the mix share computing themselves — and the level stays
+put, because the share is `1/Count` and nobody has to know what the parent
+decided.
 
-A data-driven sampler source (`SedaiSamplePlayer`, `vstSample`): load a buffer with a
-root note and loop mode, then play it repitched across the keyboard.
+**Neither project knows about the other.** `sb` has never heard of SAF: it prints
+text. SAF has never heard of `sb`: it reads a `.patch`, which is what it read
+before. Nothing links, so there is no dependency that could become circular — and
+an instrument, once generated, keeps working where SedaiBasic is not installed.
 
-- One-shot and looped playback, interpolated repitch
-- Loaded from memory (`RegisterSample`) or a WAV file (`LoadSampleFile`)
-- Facade: `RegisterSample` / `LoadSampleFile` / `PlaySample` / `PlaySampleAdv`
+`tools/patch_bas` does the other direction and generates the MODERN library from
+the module registry. Details, and the traps, in
+[`library/instruments/README.md`](library/instruments/README.md).
 
-### Karplus-Strong (Physical Modelling)
+---
 
-A plucked-string / percussion physical model (`SedaiKarplusGenerator`, `vstKarplus`):
-an excitation burst fed through a tuned delay line with an averaging low-pass feedback,
-with damping and blend controls and an energy follower for natural note endings.
+## Playing it: MIDI in
 
-**Presets**: guitar, bass, harp, mute, drum
+```
+bin/x86_64-linux/patch_live library/patches/poly.patch 8 128 48000 --midi
+bin/x86_64-linux/patch_live --list-midi
+```
 
-- Facade: `PlayKarplus` / `PlayKarplusAdv` / `PlayPluck` (guitar) / `PlayKarplusBass`
+(`patch_live` and `patch_midi` are two of the five tools not yet in the
+repository — see the note under Quick start.)
 
-### Free-Partial Synthesis (second-generation additive)
+ALSA sequencer on Linux, Windows MME on Windows, and the system library is
+loaded at runtime rather than linked — so a machine without it says "no MIDI"
+instead of failing to start. Velocity arrives as `note.vel`, the sustain pedal
+holds notes past the key, and the pitch wheel bends every sounding voice.
 
-A **McAulay-Quatieri sinusoidal model** (`SedaiPartialGenerator`, `vstPartial`):
-instead of harmonics locked to `k·f0`, it renders N **free partials**, each with its
-own breakpoint track of `(time, frequency, amplitude)` and a continuous-phase
-oscillator. Frequencies are arbitrary and time-varying, so it reproduces the
-**inharmonic "flesh"** (reed noise, air, drifting HF) that a pure harmonic additive
-discards. Partials are born/die at their first/last breakpoint; a clean exponential
-release avoids the "metallic tail" of a hard cut; `SetAnalysisF0` transposes the whole
-cluster so a preset plays across the keyboard while preserving its inharmonicity.
+Note events cross into the audio thread through a **lock-free queue**, and the
+block is split at each event's sample position. At a 256-sample buffer, rounding
+events to block boundaries would throw away 5.8 ms of timing — more than the
+MIDI cable itself loses transmitting the note.
 
-Partials come from analysis: SAF has an in-house **native partial tracker** (STFT →
-spectral peak picking with parabolic interpolation → McAulay-Quatieri peak matching)
-that turns any WAV into a `psPartial` `.safinst` preset — no external tool needed. On
-a tenor-sax sample it matches/beats SPEAR (the additive gold standard) objectively.
+Two things no software can fix, both measured here: a PC keyboard is a matrix
+without diodes and stops reporting past three or four simultaneous keys, and the
+audio buffer is the other half of the latency — 1024 samples is about 59 ms and
+feels like rubber, 128 is about 8 ms and is inside what an acoustic player
+already lives with.
 
-### Waveguide-Reed Synthesis (single-reed physical model)
+Standard MIDI files play through `TSedaiMIDIPlayer`, or straight into a patch:
 
-A **self-oscillating** wind instrument (`SedaiReedGenerator`, `vstReed`): a nonlinear
-reed driving a digital-waveguide bore in the McIntyre-Schumacher-Woodhouse feedback
-loop (re-derived from the Smith / STK clarinet and Saxofony algorithms by Cook &
-Scavone — re-implemented in Free Pascal, no STK code or dependency). Unlike the summing
-engines, the reed's pressure-controlled nonlinearity shapes the waveform sample by
-sample, producing genuine reed articulation.
-
-- **Cylindrical bore** (clarinet): odd harmonics; **conical / faux-cone** (sax): full
-  harmonic series via a blow-position between two delay lines.
-- Expressive: velocity → loudness + brightness, configurable breath attack, vibrato,
-  breath noise. Validated objectively (pitch within ~cent across the range, stable).
-- A companion **commuted tube/body resonator** (`SedaiTubeResonator`) can lend the
-  resonant "body" of a bore to an otherwise body-less partial/additive source.
-
-Shipped as ready instruments in `library/winds.safinst` (Clarinet, Soprano/Alto/Tenor Sax).
-
-### Bowed-String Synthesis (physical model)
-
-A **self-oscillating** bowed string (`SedaiBowedGenerator`, `vstBowed`): a
-digital-waveguide string driven by a nonlinear **bow-friction** junction in the same
-MSW loop (re-derived from the Smith / STK `Bowed` model). Two delay lines (neck /
-bridge) split by bow position, both ends inverting (a fixed string) → a **full
-harmonic series**; a stick-slip bow table pumps energy into the string, producing the
-**Helmholtz sawtooth** (~1/n harmonics) of a real bowed string; a small loop loss
-damps it when unbowed. Controls: bow velocity (loudness/brightness), bow position, bow
-force/grip, vibrato, attack. Shipped in `library/strings.safinst` (Violin, Viola,
-Cello). A body/formant colour is added downstream (`SedaiBodyResonator` / `SedaiTubeResonator`).
-
-### SID Evo Synthesis
-
-A Commodore 64 SID emulator with extended capabilities. The classic emulation path is a
-**bit-exact port of reSID** (cycle-accurate MOS 6581/8580), verified sample-for-sample
-against the reference engine; on top of it the "Evo" layer adds modern waveforms and
-features (up to 64 voices, stereo, per-voice LFO, 3D positioning) for creative
-flexibility. It therefore serves both as a faithful chiptune engine for `.sng`/`.sid`
-playback and as a standalone synthesizer.
-
-#### Classic SID Waveforms (4)
-
-| Flag | Waveform | Description |
-|------|----------|-------------|
-| `$01` | **Triangle** | Classic mellow tone |
-| `$02` | **Sawtooth** | Rich harmonics, brassy sound |
-| `$04` | **Pulse** | Square/PWM, classic chiptune |
-| `$08` | **Noise** | White noise for percussion |
-
-#### Extended "Evo" Waveforms (8)
-
-| Flag | Waveform | Description |
-|------|----------|-------------|
-| `$10` | **Sine** | Pure sine wave |
-| `$20` | **Supersaw** | Multiple detuned saws (trance/EDM) |
-| `$40` | **PWM** | Auto-modulating pulse width |
-| `$80` | **Half-Sine** | Half-rectified sine (bass) |
-| `$0100` | **Full-Sine** | Full-rectified sine (warm distortion) |
-| `$0200` | **Formant** | Vocal-like formant synthesis |
-| `$0400` | **Metallic** | Metallic/bell-like tones |
-| `$8000` | **Custom** | User-defined wavetable |
-
-#### ReSID-Accurate Features
-
-The classic emulation path is a faithful port of **reSID** (Dag Lem's cycle-accurate
-MOS 6581/8580 engine). Every core building block reproduces reSID's integer model
-exactly:
-
-| Feature | Description |
-|---------|-------------|
-| **24-bit Accumulator** | Authentic phase accumulator; FREQ added to the low 16 bits each cycle |
-| **Hard Sync** | Oscillator reset on the source MSB rising edge (reSID `synchronize`) |
-| **Ring Modulation** | Triangle MSB EOR'd with the sync source MSB |
-| **Combined Waveforms** | OSC3 sample lookup tables for SAW+TRI / PUL+TRI / PUL+SAW / PUL+SAW+TRI |
-| **23-bit LFSR Noise** | Authentic noise generator (taps 22 EOR 17), clocked by accumulator bit 19 |
-| **15-bit Rate Counter** | With double-increment wraparound at $8000 (the ADSR delay bug) |
-| **Exponential Counter** | Period breakpoints at envelope levels 255, 93, 54, 26, 14, 6, 0 |
-| **Hold-Zero** | Envelope frozen when it reaches zero |
-| **Two-Integrator-Loop Filter** | Authentic 6581/8580 topology; cutoff from the reSID cubic-spline `f0` tables (both chip models), resonance `1024/(0.707 + res/15)`, `mixer_DC` and DAC offsets |
-| **External Filter** | C64 output RC stage (low-pass 1/RC = 100000, high-pass 1/RC = 100) |
-
-##### Verified Bit-Exact
-
-The classic path has been verified **bit-for-bit against reSID** by driving both
-engines from the same per-cycle register stream and comparing the raw output:
-
-- **Full mixed output**: 0 sample differences over **15.76 million cycles** of a real
-  tune (oscillators + envelopes + filter + external filter + mixer), including frames
-  that use hard sync and ring modulation.
-- **Cycle-exact sub-systems**: all 4 classic + the combined waveforms, the noise LFSR,
-  hard sync, ring modulation and the full ADSR envelope (every Attack/Decay/Sustain/
-  Release setting) reproduce reSID's `readOSC`/`readENV`/`output()` with zero deviation.
-
-> `SedaiSIDEvo` is a Pascal **port of reSID** (and reSID-fp for the optional distortion
-> model), partially built on the SAF framework. As a derivative work of reSID it carries
-> its upstream's terms, **GPL-2.0-or-later**, which is what allows it to sit inside this
-> GPL-3.0 project. Credit and thanks to Dag Lem (reSID) and Antti S. Lankila (reSID-fp).
-> See the [License](#license) section for details.
-
-#### Sampling Methods
-
-The output stage offers the same three decimation strategies as reSID, selectable at
-runtime via `SetSamplingMethod`:
-
-| Method | Constant | Description |
-|--------|----------|-------------|
-| **Fast** | `ssmFast` | Point sampling (aliases high harmonics, exactly like reSID `SAMPLE_FAST`). **Default** — this is what GoatTracker uses, so it is the closest match for tracker playback. |
-| **Interpolate** | `ssmInterpolate` | Linear interpolation between the two bracketing cycles (reSID `SAMPLE_INTERPOLATE`); cheap, no FIR latency. |
-| **Resample** | `ssmResample` | Band-limited Kaiser-windowed sinc FIR resampling (reSID `SAMPLE_RESAMPLE_INTERPOLATE`); cleanest output, heaviest CPU. Use for hi-fi offline rendering. |
-
-#### Filter Models
-
-| Model | Constant | Description |
-|-------|----------|-------------|
-| **Classic** | `sfmClassic` | reSID two-integrator-loop (linear). **Default**, bit-exact to reSID. |
-| **Distortion** | `sfmDistortion` | reSID-fp non-linear 6581 filter (signal-dependent cutoff via a kinked DAC + Schraudolph fast-exp + output waveshaper). Reproduces the real 6581's "warm" filter distortion that the linear model lacks. Single-precision, GoatTracker filter parameters. |
-
-#### SID Models
-
-| Model | Characteristics |
-|-------|-----------------|
-| **6581** | Original SID, darker filter, more distortion |
-| **8580** | Revised SID, cleaner filter, less "gritty" |
-
-#### Authenticity Levels
-
-| Level | Constant | Description |
-|-------|----------|-------------|
-| **Evolved** | `salEvolved` | Clean hi-fi sound, modern synthesis |
-| **Hybrid** | `salHybrid` | Mix of evolved and SID characteristics |
-| **SID-Like** | `salSIDLike` | More authentic for casual playback |
-| **SID Full** | `salSIDFull` | Maximum authenticity (for .sng playback) |
-
-#### EVO Extended Features
-
-The "Evo" layer turns the bit-exact SID into a polyphonic stereo synth. These
-features are active under the `salEvolved` / `salHybrid` authenticity levels
-(the extended voices 3+ and the stereo mix). Under `salSIDFull` you get the pure
-3-voice reSID core (what the GoatTracker player uses, bit-exact).
-
-| Feature | Status | Description |
-|---------|--------|-------------|
-| **8–64 voices** | ✅ | Configurable in groups of 8 (`Initialize(groups)`) |
-| **11 octaves** | ✅ | C0–B10 (≈16 Hz–20 kHz) |
-| **Extended waveforms** | ✅ | Sine, Supersaw, PWM, Half-Sine (Full-Sine / Formant / Metallic flags reserved) |
-| **Stereo output** | ✅ | Per-voice and per-group pan + stereo width |
-| **Per-voice LFO** | ✅ | Vibrato (pitch), PWM, tremolo (amplitude), auto-pan — on the extended voices |
-| **Global LFO** | ✅ | Tremolo + auto-pan over the whole mix |
-| **Mixer headroom** | ✅ | Soft-clip on the summed EVO mix (smooth knee, no harsh clipping) |
-
-> Notes: the per-voice LFO targets the *extended* voices (the 3 classic reSID
-> core voices stay cycle-accurate and are not modulated). A cutoff LFO does not
-> apply to extended voices, which bypass the SID filter. Per-voice continuous
-> level/pan are EVO additions; the chip's authentic volume is the 4-bit `$D418`
-> register (`SetMasterVolume` writes it).
-
-**Common to both modes**:
-- 4 classic SID waveforms combinable via OR bitmask (like the original SID)
-- ADSR envelopes, pulse-width modulation, hard restart
-- 6581 / 8580 chip models
-
-#### Usage Example
-
-```pascal
-uses
-  SedaiSIDEvo;
-
-var
-  SIDEvo: TSedaiSIDEvo;
-begin
-  SIDEvo := TSedaiSIDEvo.Create;
-  SIDEvo.Initialize(1);  // 1 group = 8 voices
-
-  // Set maximum SID authenticity for .sng playback
-  SIDEvo.SetAuthenticityLevel(salSIDFull);
-  SIDEvo.SetClockMode(scmPAL);
-  SIDEvo.SetChipModel(smMOS6581);
-
-  // Use SID register API
-  SIDEvo.SetFrequencyReg(0, $1CD6);  // Voice 0 frequency
-  SIDEvo.SetWaveform(0, SIDEVO_WAVE_TRIANGLE);
-  SIDEvo.SetADSR(0, 0.0, 0.1, 0.8, 0.3);
-  SIDEvo.GateOn(0);
-
-  // Or use evolved API
-  SIDEvo.PlayNote(1, 69, 0.8);  // Voice 1, A4, velocity 0.8
-
-  SIDEvo.Free;
-end.
+```
+bin/x86_64-linux/patch_midi song.mid library/patches/poly.patch out.wav 16
 ```
 
 ---
 
-## Instrument Library
+## Synthesis engines
 
-SAF ships ready-to-play instruments as **`.safinst`** text libraries under
-[`library/`](library/). Each library holds one or more presets; load it with
-`TSedaiInstrumentRegistry` and apply a preset to a `TSAFPart`.
+The `.safinst` preset system has **eleven techniques** — the eleven values of
+`TSAFPartSource` — and a single universal voice (`TSedaiVoice`) can be any of
+them.
 
-| Library | Contents | Technique | Licence |
-|---------|----------|-----------|---------|
-| `builtin.safinst` | 32 synth presets (classic, FM, wavetable, additive, Karplus, SID) | all | GPL-3.0 (SAF) |
-| `winds.safinst` | Clarinet, Soprano/Alto/Tenor Sax | waveguide-reed physical model + formant body | GPL-3.0 (SAF) |
-| `strings.safinst` | Violin, Viola, Cello | bowed-string physical model + formant body | GPL-3.0 (SAF) |
-| `percussion.safinst` | Bell, Marimba, Tubular Bell, Woodblock, Tom | modal synthesis | GPL-3.0 (SAF) |
-| `vcsl.safinst` | Alto Recorder, Saxello, Tenor Sax | additive resynthesis | preset data CC0 (VCSL) |
-| `orchestra.safinst` | Strings, woodwinds & brass, incl. muted trumpets (15 instruments) | additive resynthesis | preset data CC0 (VSCO-2-CE) |
-| `pipes_reeds.safinst` | Organs, recorders, ocarina, harmonica, accordion (8) | additive resynthesis | preset data CC0 (VCSL + FreePats) |
-| `mallets.safinst` | Glockenspiel, vibraphone, tubular bells, marimba, xylophone, balafon, wine glass (7) | free-partial resynthesis | preset data CC0 (VCSL) |
-| `plucked_keys.safinst` | Nylon/electric guitar, electric bass, concert/folk harp, grand/upright piano, harpsichord (8) | free-partial resynthesis | preset data CC0 (FreePats + VCSL) |
+| Engine | Unit | |
+|---|---|---|
+| Classic / subtractive | `SedaiOscillator` | PolyBLEP/PolyBLAMP band-limited saw, square, pulse, triangle; SID mode |
+| FM | `SedaiFMOperator` | 6-operator DX7-style, selectable algorithms, feedback |
+| Wavetable | `SedaiWavetableGenerator` | morphing between frames, mipmaps against aliasing |
+| Additive | `SedaiAdditiveGenerator` | up to 64 harmonics, per-voice drift, unison |
+| Sample | `SedaiSamplePlayer` | loop modes, pitch, interpolation |
+| Free-partial | `SedaiPartialGenerator` | McAulay-Quatieri sinusoidal model: N partials with time-varying frequency and amplitude, note-transposable, analysed from a WAV |
+| Karplus-Strong | `SedaiKarplusGenerator` | plucked string and percussion |
+| Waveguide reed | `SedaiReedGenerator` | self-oscillating single reed: nonlinear reed plus bore (clarinet, sax) |
+| Bowed string | `SedaiBowedGenerator` | nonlinear bow friction plus string waveguide |
+| Modal | `SedaiModalGenerator` | a struck body as a bank of ringing modes |
+| SID | `SedaiOscillator` (SID mode) | the chip's oscillators as an ordinary voice source; the cycle-exact chip is separate, below |
 
-The `saf_play` demo is the runnable entry point — it loads these libraries, prints
-the catalogue, plays a short phrase and renders a WAV, all offline (no audio device):
+Noise (`SedaiNoiseGenerator`: white, pink, brown, blue, violet) is a generator
+rather than a preset technique, and is used from inside the others.
+
+The physical models are joined by a shared **formant body**
+(`SedaiFormantBody`), a **tube resonator** (`SedaiTubeResonator`) and a
+**convolver** (`SedaiConvolver`) for measured impulse responses — the "body" that
+keeps a self-oscillating model from sounding like a tube instead of an
+instrument.
+
+### SID Evo
+
+`src/SID/SedaiSIDEvo.pas` is a MOS 6581/8580 emulation on the reSID
+two-integrator-loop model, plus EVO extensions: up to 64 voices, stereo, LFOs,
+extended waveforms.
+
+It is **bit-exact against reSID** on both code paths — 0 mismatches over
+15,764,000 cycles — including the nonlinear 6581 filter distortion, and including
+`expf`, whose glibc implementation was carried into Pascal to close the last
+gap. The filter sweep is 35/35 exact and a full tune is 0 mismatches over
+45,321,500 cycles. Getting there meant finding one wrong constant
+(`W0_MAX_1` = 105414, not 105413) and one rounding difference (`Trunc`, not
+`Round`); the harnesses that found them live in `job/tools/resid/`.
+
+---
+
+## GoatTracker player
+
+Native playback of GoatTracker v2 `.sng` files: a clean reimplementation of the
+player routine (`gplay.c` / `gsid.cpp` / `gsound.c`) in
+`src/Players/SedaiGoatTracker.pas`, driving SID Evo.
 
 ```
-./build.ps1 -Target saf_play
-bin/x86_64-win64/saf_play.exe                                     # tour of the shipped libraries -> saf_play.wav
-bin/x86_64-win64/saf_play.exe library/winds.safinst "Tenor Sax"  # one instrument
+bin/x86_64-linux/sng_player song.sng [subtune]
+bin/x86_64-linux/sng_dump   song.sng          # structure and SID registers
 ```
 
-The whole flow, in code:
+Instrument tables, wavetables, pulse and filter tables, all pattern commands,
+per-voice muting, subtune selection. Controls during playback: SPACE pause,
+`R` restart, `L` loop, `V`/`W` verbose, `S` tables, `1`/`2`/`3` mute voices,
+`+`/`-` subtune, `Q` quit.
+
+---
+
+## The shipped instrument library
+
+Ready-to-play instruments as `.safinst` text libraries under
+[`library/`](library/). Load one with `TSedaiInstrumentRegistry` and apply a
+preset to a `TSAFPart`.
+
+| Library | Contents | Technique | Preset data |
+|---|---|---|---|
+| `builtin.safinst` | 32 synth presets | all | GPL-3.0 (SAF) |
+| `winds.safinst` | clarinet, soprano/alto/tenor sax | waveguide reed + formant body | GPL-3.0 (SAF) |
+| `strings.safinst` | violin, viola, cello | bowed string + formant body | GPL-3.0 (SAF) |
+| `percussion.safinst` | bell, marimba, tubular bell, woodblock, tom | modal | GPL-3.0 (SAF) |
+| `orchestra.safinst` | strings, woodwinds, brass, muted trumpets (15) | additive resynthesis | CC0 (VSCO-2-CE) |
+| `pipes_reeds.safinst` | organs, recorders, ocarina, harmonica, accordion (8) | additive resynthesis | CC0 (VCSL + FreePats) |
+| `mallets.safinst` | glockenspiel, vibraphone, tubular bells, marimba, xylophone, balafon, wine glass (7) | free-partial | CC0 (VCSL) |
+| `plucked_keys.safinst` | nylon/electric guitar, electric bass, harps, grand/upright piano, harpsichord (8) | free-partial | CC0 (FreePats + VCSL) |
+| `vcsl.safinst` | alto recorder, saxello, tenor sax | additive resynthesis | CC0 (VCSL) |
+
+The presets were derived from CC0 recordings by analysis, not sampling: a
+partial tracker and an additive analyser turn a WAV into a playable, transposable
+instrument. Attribution detail in [`library/README.md`](library/README.md).
 
 ```pascal
 reg := TSedaiInstrumentRegistry.CreateEmpty;
@@ -738,947 +318,250 @@ try reg.LoadFromStream(fs); finally fs.Free; end;
 
 part := TSAFPart.Create;
 part.SetSampleRate(48000);
-reg.ApplyToPartByName('Tenor Sax', part);   // configures the voice pool
-part.NoteOn(60, 1.0);                         // then part.RenderBlock(@buf, frames)
-```
-
-See [`library/README.md`](library/README.md) for the licensing / attribution detail.
-
----
-
-## GoatTracker Player
-
-Native playback support for GoatTracker v2 .sng files, the popular Commodore 64 music tracker.
-`SedaiGoatTracker` is a clean Pascal reimplementation of the GoatTracker v2 player routine
-(`gplay.c` / `gsid.cpp` / `gsound.c`).
-
-### Fidelity
-
-The player's SID register output has been verified **byte-for-byte against the real
-GoatTracker player** (relocated to `.sid` and dumped with a 6502 + reSID reference): the
-control/gate, ADSR, frequency and filter register streams match with **zero divergences**
-on all three voices. The reimplementation faithfully reproduces:
-
-- the exact SID register write order (`sidorder`) and inter-write delay (`SIDWRITEDELAY = 14` cycles);
-- the hard-restart behaviour (`adparam = $0F00`, gate-timer bits `$40`/`$80`);
-- real-time effect skipping (`optimizerealtime` — per-frame commands run only on non-tick-0 frames);
-- **pulse skipping** (`optimizepulse` — the pulse table is not advanced on the new-note frame), so the pulse-width register tracks the original player to within 1 LSB;
-- 8-bit `vibtime` wraparound and the fine-vibrato speed-table semantics;
-- wavetable / pulsetable / filtertable / speedtable processing and the note frequency table.
-
-Combined with the bit-exact SID core, `sng_player` is **audibly indistinguishable from
-GoatTracker** for the classic (default) configuration.
-
-### Supported Features
-
-- Full song structure (orderlist, patterns, instruments, wavetables)
-- 3-channel playback with per-channel mute control
-- Loop detection and seamless looping
-- Real-time tempo control
-- Multiple subtunes
-
-### Pattern Commands
-
-| Command | Name | Description |
-|---------|------|-------------|
-| `$01` | Portamento Up | Slide pitch up |
-| `$02` | Portamento Down | Slide pitch down |
-| `$03` | Tone Portamento | Slide to target note |
-| `$04` | Vibrato | Pitch vibrato effect |
-| `$05` | Attack/Decay | Set ADSR attack/decay |
-| `$06` | Sustain/Release | Set ADSR sustain/release |
-| `$07` | Waveform | Set voice waveform |
-| `$08` | Wavetable Pointer | Set wavetable start position |
-| `$09` | Pulse Width | Set pulse width |
-| `$0A` | Pulse Width Modulation | Modulate pulse width |
-| `$0B` | Filter Control | Filter on/off and settings |
-| `$0C` | Filter Cutoff | Set filter cutoff frequency |
-| `$0D` | Master Volume | Set global volume |
-| `$0E` | Funk Tempo | Set funk-style tempo |
-| `$0F` | Tempo | Set playback speed |
-
-### Wavetable Commands
-
-| Command | Name | Description |
-|---------|------|-------------|
-| `$F0` | Portamento Up | Continuous pitch slide up |
-| `$F1` | Portamento Down | Continuous pitch slide down |
-| `$F2` | Tone Portamento | Slide to target note |
-| `$F3` | Vibrato | Apply vibrato effect |
-| `$F4` | Set Attack/Decay | Set ADSR AD values |
-| `$F5` | Set Sustain/Release | Set ADSR SR values |
-| `$F6` | Set Waveform | Change voice waveform |
-| `$F7` | Delay | Wait N frames |
-| `$F8` | (Reserved) | - |
-| `$F9` | (Reserved) | - |
-| `$FA` | Set Vibrato Params | Configure vibrato depth/speed |
-| `$FB` | Goto | Jump to wavetable position |
-| `$FC` | End | Stop wavetable processing |
-| `$FD` | Set Master Volume | Change global volume |
-| `$FE` | (Reserved) | - |
-
-### Running
-
-```
-sng_player [--sdl2] <file.sng> [subtune]
-```
-
-By default audio is rendered through the Sedai Audio Foundation (SAF) backend; pass
-`--sdl2` to use direct SDL2 output (compatibility/debugging). The optional trailing
-number selects the initial subtune.
-
-### Demo Player Controls
-
-```
-SPACE    - Pause/Resume playback
-R        - Restart song from beginning
-I        - Show song info
-L        - Toggle loop mode
-A        - Cycle SID sampling: Fast -> Interpolate -> Resample
-B        - Cycle audio buffer size: 2048 -> 4096 -> 8192 (latency vs. dropouts)
-D        - Toggle filter model: Classic (clean) <-> Distortion (reSID-fp)
-V        - Toggle pattern command verbose output
-W        - Toggle wavetable command verbose output
-S        - Print SpeedTable contents
-1/2/3    - Mute/unmute voice 1/2/3
-+/-      - Next/Previous subtune
-ESC / Q  - Quit player
-```
-
-### Usage Example
-
-```pascal
-program GoatTrackerDemo;
-
-uses
-  SedaiGoatTracker;
-
-var
-  Player: TSedaiGoatTracker;
-  Buffer: array[0..2047] of SmallInt;  // mono 16-bit
-begin
-  // The player creates and owns its own SID core internally.
-  Player := TSedaiGoatTracker.Create;
-  try
-    Player.SetSampleRate(44100);
-
-    if Player.LoadFromFile('mysong.sng') then
-    begin
-      WriteLn('Title: ', Player.SongName, ' / ', Player.Author);
-      Player.Play(0);  // start subtune 0
-
-      // FillBuffer generates audio AND drives the player routine at the
-      // correct rate internally (no separate per-frame call needed).
-      // In a real app you call this from your audio callback.
-      while not Player.SongFinished do
-        Player.FillBuffer(@Buffer[0], Length(Buffer));
-
-      Player.Stop;
-    end;
-  finally
-    Player.Free;
-  end;
-end.
+reg.ApplyToPartByName('Tenor Sax', part);
+part.NoteOn(60, 1.0);                        // then part.RenderBlock(@buf, frames)
 ```
 
 ---
 
-## MIDI Support
+## Audio file I/O
 
-- Standard MIDI file format 0/1 parsing
-- 16-channel support with per-channel configuration
-- Real-time tempo control
-- Pitch bend and modulation wheel support
-- Velocity-sensitive playback
-- General MIDI program mapping to wavetable types
+| Format | Read | Write | |
+|---|---|---|---|
+| WAV | ✅ | ✅ | 8/16/24/32-bit PCM, 32/64-bit float |
+| AIFF / AIFC | ✅ | ✅ | big-endian PCM |
+| FLAC | ✅ | ✅ | pure Pascal, lossless, verified against `ffmpeg` |
+| OGG Vorbis | ✅ | — | pure Pascal; bisection seek |
+| MP3 | ✅ | — | pure Pascal; gapless |
 
----
-
-## Audio File I/O
-
-The library includes professional audio file reading and writing capabilities.
-
-### Supported Formats
-
-| Format | Read | Write | Notes |
-|--------|------|-------|-------|
-| **WAV PCM 8-bit** | ✓ | ✓ | Unsigned, 128 = silence |
-| **WAV PCM 16-bit** | ✓ | ✓ | Standard CD quality |
-| **WAV PCM 24-bit** | ✓ | ✓ | Professional audio |
-| **WAV PCM 32-bit** | ✓ | ✓ | Maximum PCM resolution |
-| **WAV Float 32-bit** | ✓ | ✓ | IEEE 754 floating point |
-| **WAV Float 64-bit** | ✓ | - | High-precision source files |
-| **AIFF / AIFC** | ✓ | ✓ | Read: big-endian PCM 8/16/24/32 + AIFC `sowt` (LE) / `fl32` / `fl64`. Write: big-endian PCM 16/24/32 |
-| **FLAC** | ✓ | ✓ | Read: STREAMINFO, FIXED/LPC subframes, partitioned Rice, all channel modes (8/16/24-bit). Write: lossless encoder (FIXED predictors, Rice; 16/24-bit; bit-exact round-trip, decodes in ffmpeg) |
-| **OGG Vorbis** | ✓ | Planned | Pure-Pascal decoder: Ogg container (CRC32/paging), codebooks (Huffman + VQ), floor 0/1, residue 0/1/2, channel coupling, FFT-based IMDCT + overlap-add; granulepos bisection seek |
-| **MP3** | ✓ | - | Pure-Pascal MPEG-1/2/2.5 Layer III decoder (minimp3 port): Huffman, requant, stereo (M/S + intensity), IMDCT, polyphase synthesis filterbank; Xing/LAME gapless trim |
-
-### Dithering Options
-
-When exporting to lower bit depths, professional dithering is available:
-
-| Dither Type | Description |
-|-------------|-------------|
-| **None** | No dithering (truncation) |
-| **RPDF** | Rectangular probability density function |
-| **TPDF** | Triangular probability density function (recommended) |
-| **Noise Shaped** | First-order noise shaping for minimum audible artifacts |
-
-### Usage Example
-
-```pascal
-uses
-  SedaiAudioFileReader, SedaiAudioFileWriter, SedaiAudioBuffer;
-
-var
-  Reader: TSedaiAudioFileReader;
-  Writer: TSedaiAudioFileWriter;
-  Buffer: TSedaiAudioBuffer;
-  Settings: TAudioExportSettings;
-begin
-  // Read a WAV file
-  Reader := TSedaiAudioFileReader.Create;
-  if Reader.OpenFile('input.wav') then
-  begin
-    WriteLn('Sample Rate: ', Reader.Info.SampleRate);
-    WriteLn('Channels: ', Reader.Info.Channels);
-    WriteLn('Duration: ', Reader.Info.Duration:0:2, ' seconds');
-
-    // Read entire file into buffer
-    if Reader.ReadAll(Buffer) then
-    begin
-      // Process buffer...
-      Buffer.Normalize(0.99);
-
-      // Export to 16-bit WAV with TPDF dithering
-      Settings := TSedaiAudioFileWriter.GetDefaultSettings(aefWAV16);
-      Settings.DitherType := dtTPDF;
-
-      Writer := TSedaiAudioFileWriter.Create;
-      if Writer.CreateFile('output.wav', Settings) then
-        Writer.WriteBuffer(Buffer);
-      Writer.Free;
-
-      Buffer.Free;
-    end;
-    Reader.Close;
-  end;
-  Reader.Free;
-end.
-```
+Writing offers RPDF, TPDF and noise-shaped dither. Everything is pure Pascal:
+the only external dependency in the whole project is SDL2, and only for opening
+an audio device — offline rendering needs none.
 
 ---
 
-## System Requirements
+## Architecture
 
-### Compiler
+Layers, bottom up. Nothing in a lower layer knows about a higher one.
 
-- **Free Pascal** 3.0.4 or higher
-- **Lazarus** (optional, for IDE support)
-
-### Dependencies
-
-- **SDL2** (Simple DirectMedia Layer 2)
-
-### Operating Systems
-
-- Linux (Ubuntu, Debian, Fedora, Arch)
-- Windows 10/11
-
----
-
-## Installation
-
-### Windows (Recommended)
-
-The project includes an automated setup script that handles all dependencies:
-
-```powershell
-# Run the setup script (requires Administrator privileges for some operations)
-.\setup.ps1
+```
+Patch / Language     .patch graph · SedaiBasic MODERN instruments
+Engine / Transport   parts, presets, tracks, clips, automation, project
+Voice / Mixer        voice pool, modulation matrix, channels, buses, master
+Generators · Processors · Effects · Modulators
+Core                 types, buffers, ports, signal nodes, randomness
+Platform             audio backend, MIDI input, threads, timing
 ```
 
-The setup script will:
-- Detect or install Free Pascal Compiler (FPC)
-- Download and configure SDL2 libraries
-- Set up the project directory structure
-- Verify the installation
+### Every unit
 
-For manual installation or troubleshooting, run:
+**`src/`** — `SedaiAudioFoundation`: the high-level facade
+(`TSAFSynthType = (safClassic, safFM, safWavetable)`). Note that the additive
+generator, SID Evo and the patch workbench are standalone: the facade does not
+wrap them.
 
-```powershell
-.\setup.ps1 -Help
-```
+| Folder | Units |
+|---|---|
+| **Core** (7) | `SedaiAudioTypes` core types · `SedaiAudioObject` root class · `SedaiSignalNode` DSP node · `SedaiAudioBuffer` managed buffer · `SedaiParameterPort` modulatable parameter · `SedaiSpatialAudio` positional maths · `SedaiRandom` per-object generator |
+| **Platform** (5) | `SedaiAudioBackend` device, push or callback · `SedaiAudioSDL2Dyn` runtime-loaded SDL2 · `SedaiMIDIInput` ALSA / winmm · `SedaiThread` · `SedaiTiming` |
+| **Generators** (11) | `SedaiOscillator` · `SedaiNoiseGenerator` · `SedaiWavetableGenerator` · `SedaiSamplePlayer` · `SedaiFMOperator` · `SedaiAdditiveGenerator` · `SedaiPartialGenerator` · `SedaiKarplusGenerator` · `SedaiReedGenerator` · `SedaiBowedGenerator` · `SedaiModalGenerator` |
+| **Modulators** (3) | `SedaiEnvelope` ADSR, 4 curves, SID mode · `SedaiLFO` tempo-syncable · `SedaiStepModulator` |
+| **Processors** (6) | `SedaiFilter` 6 types, 12/24/48 dB/oct · `SedaiAmplifier` · `SedaiCompressor` · `SedaiLimiter` · `SedaiDistortion` · `SedaiEQ` |
+| **Effects** (11) | `SedaiEffect` base · `SedaiDelay` · `SedaiReverb` · `SedaiChorus` · `SedaiFlanger` · `SedaiPhaser` · `SedaiAutoSpace` mono-safe widener · `SedaiBodyResonator` · `SedaiTubeResonator` · `SedaiFormantBody` · `SedaiConvolver` short-FIR |
+| **Voice** (3) | `SedaiVoice` universal voice · `SedaiVoiceManager` allocation and stealing · `SedaiModulationMatrix` |
+| **Mixer** (3) | `SedaiMixerChannel` · `SedaiBus` aux, group, master · `SedaiMixer` |
+| **Engine** (5) | `SedaiEngine` · `SedaiAudioEngine` · `SedaiPart` instrument part · `SedaiInstrumentPreset` `.safinst` · `SedaiSpatialChain` body → space → room |
+| **Transport** (4) | `SedaiTransport` · `SedaiTrack` audio and MIDI · `SedaiClip` · `SedaiProject` `.safproj` |
+| **Patch** (11) | `SedaiPatchGraph` ports, modules, Tarjan, two schedulers · `SedaiPatchFile` parser · `SedaiPatchVoices` polyphonic pool · `SedaiPatchEvents` lock-free note queue · `SedaiPatchModules` core types · `SedaiPatchElectronic` · `SedaiPatchInstruments` · `SedaiPatchPart` library instruments · `SedaiPatchSpace` · `SedaiPatchBody` · `SedaiPatchLegacy` bridge to the block-oriented units |
+| **FileIO** (7) | `SedaiAudioFileReader` · `SedaiAudioFileWriter` · `SedaiAudioDecoder` · `SedaiFLACDecoder` · `SedaiFLACEncoder` · `SedaiVorbisDecoder` · `SedaiMP3Decoder` |
+| **Players** (2) | `SedaiGoatTracker` · `SedaiMIDIPlayer` |
+| **SID** (1) | `SedaiSIDEvo` |
+| **Wavetable** (1) | `SedaiWavetableLoader` Serum, Vital, Surge, generic WAV |
 
-### Linux / macOS
+### Design principles
 
-`setup.sh` is the counterpart of `setup.ps1`: it creates the directory
-structure, checks (or installs) FPC, downloads the SDL2 Pascal bindings into
-`deps/sdl2/` and then builds through `build.sh`.
-
-```bash
-chmod +x setup.sh build.sh
-./setup.sh                  # full setup (FPC must already be installed)
-./setup.sh --install-fpc    # also install FPC via the system package manager
-./setup.sh --no-build       # dependencies only
-./setup.sh --help
-```
-
-Dependencies by distribution:
-
-```bash
-# Debian/Ubuntu
-sudo apt install fpc libsdl2-dev
-# Fedora/RHEL
-sudo dnf install fpc SDL2-devel
-# Arch
-sudo pacman -S fpc sdl2
-# macOS
-brew install fpc sdl2
-```
-
-> **The `-dev` package is required, not just the runtime.** SDL2 is loaded at
-> runtime (`SedaiAudioSDL2Dyn`), and the Pascal bindings ask for `libSDL2.so` —
-> the development symlink. With only the runtime package installed the `dlopen`
-> fails silently and the programs simply produce no audio.
-
-### Manual Windows Installation
-
-If you prefer manual installation:
-
-1. **Free Pascal Compiler**: Download and install from [freepascal.org](https://www.freepascal.org/download.html)
-2. **SDL2 Runtime**: Download `SDL2.dll` from [GitHub SDL Releases](https://github.com/libsdl-org/SDL/releases)
-3. **SDL2 Headers**: The Pascal SDL2 bindings are included in the project
-4. Place `SDL2.dll` in the project `bin\` directory or system PATH
+1. **Single responsibility.** Each class does one thing.
+2. **Composition over inheritance.** Build by combining.
+3. **Real-time safe.** No allocations in the audio thread; lock-free where it
+   matters. The note queue is a fixed ring sized once, because one `malloc` in
+   the callback is a click.
+4. **Every generator owns its randomness.** A shared generator means every sound
+   shares one stream: draw a number anywhere and every plucked string changes.
+   Found by measurement, not by reasoning — adding one file to a directory used
+   to change the sound of an instrument.
+5. **Testable in isolation**, and tested — see below.
 
 ---
 
 ## Building
 
-### Using Build Scripts
+FPC 3.2.2 or newer. The only dependency is SDL2, and only for audio output.
 
-The project includes cross-platform build scripts that support custom compiler paths.
-
-#### Windows (PowerShell) — primary
-
-A plain build produces the user-facing **tools**, and *asks* whether to also build
-the **demos**; the **QA test suite** is built only on request. Targets are grouped by
-kind so a normal build isn't a pile of test executables.
-
-```powershell
-.\build.ps1                 # tools + ask whether to build the demos
-.\build.ps1 -Demos          # tools + demos (no prompt)
-.\build.ps1 -SkipDemos      # tools only (no prompt)
-.\build.ps1 -Tests          # tools + the QA test suite
-.\build.ps1 -TestOnly       # only the QA test suite
-.\build.ps1 -Target sng_player   # just one target (any parameter suppresses the prompt)
-.\build.ps1 -LibOnly        # compile the library units only
-.\build.ps1 -Clean          # clean artifacts before building
-.\build.ps1 -Debug          # debug symbols instead of release
-.\build.ps1 -FpcPath "C:\FPC\3.2.2\bin\x86_64-win64\fpc.exe"
-.\build.ps1 -Help
+```
+./setup.sh            # or setup.ps1 on Windows: fetches SDL2
+./build.sh            # everything; --tests adds the QA suite
+./build.sh --target saf_regression
+./build.sh --target patch_bas --os win64 --cpu x86_64
 ```
 
-#### Linux / macOS
+`build.ps1` and `build.sh` are functional ports of each other; the switch
+mapping (`-Target x` ⇄ `--target x`) is in each script's header. Output goes to
+`bin/<cpu>-<os>/`, compiled units to `lib/<cpu>-<os>/`.
 
-`build.sh` is a functional port of `build.ps1` — same targets, same kinds, same
-flags, same output layout and the same exit code (number of failures).
-
-```bash
-./build.sh                  # tools + ask whether to build the demos
-./build.sh --demos          # tools + demos (no prompt)
-./build.sh --skip-demos     # tools only (no prompt)
-./build.sh --tests          # tools + the QA test suite
-./build.sh --test-only      # only the QA test suite
-./build.sh --target sng_player   # just one target (any parameter suppresses the prompt)
-./build.sh --lib-only       # compile the library units only
-./build.sh --clean          # clean artifacts before building
-./build.sh --debug          # debug symbols instead of release
-./build.sh --fpc-path /usr/lib/fpc/3.2.2/ppcx64
-./build.sh --help
-```
-
-`--cpu` / `--os` default to the host (e.g. `x86_64-linux`), so executables land in
-`bin/x86_64-linux/` and units in `lib/x86_64-linux/`, side by side with the
-Windows ones. Every `-Xxx` PowerShell switch has a `--xxx` counterpart; the
-mapping is listed in the script header.
-
-### Build Targets
-
-| Target | Kind | Description |
-|--------|------|-------------|
+| Target | Kind | |
+|---|---|---|
 | `sng_player` | tool | GoatTracker `.sng` player |
-| `sng_dump` | tool | `.sng` structure / SID register dump (diagnostics) |
-| `saf_play` | demo | Entry-point demo: load a library, play a phrase, render a WAV |
-| `demo_synth` | demo | Interactive SDL2 synth demo (older global `Play*` API) |
-| `test_saf_main` | test | Main SAF API test (Classic/FM/Wavetable) |
-| `audiotest` | test | Audio backend / render path test |
-| `sedaisid_test` | test | SedaiSIDEvo verification / regression |
-| `saf_regression` | test | Headless render-path regression suite (engine→mixer→master, every source type, cycle detection) |
+| `sng_dump` | tool | `.sng` structure and SID register dump |
+| `patch_bas` | tool | `.patch` ⇄ SedaiBasic MODERN bridge; `--lib` generates the MODERN library |
+| `saf_play` | demo | loads a library, plays a phrase, renders a WAV — offline |
+| `demo_synth` | demo | interactive SDL2 synth demo |
+| `test_saf_main` | test | facade test (classic / FM / wavetable) |
+| `audiotest` | test | backend and render path |
+| `sedaisid_test` | test | SID Evo verification against reSID |
+| `saf_regression` | test | headless regression suite, 193 checks |
 
-### Building a single target
+Sources for tools live in `tools/`, everything else in `test/`.
 
-```powershell
-.\build.ps1 -Target saf_play           # build just one target
-.\build.ps1 -Target saf_play -Clean    # clean then build
-```
+**On Linux SDL2 needs its `-dev` package** (`libsdl2-dev` / `SDL2-devel` /
+`sdl2`): the bindings `dlopen("libSDL2.so")`, which only the dev symlink
+provides. Missing it gives silent no-audio, not a crash.
 
-Sources live under `test/` (`*.lpr`); the build script resolves each target to
-its source file and emits the executable into `bin/<cpu>-<os>/`.
-
----
-
-## Demo Programs
-
-### saf_play
-
-The entry-point demo: loads the shipped `.safinst` libraries, prints the instrument
-catalogue, plays a short phrase and renders it to a WAV — all offline (no audio
-device). With no arguments it renders a *tour* of all three libraries; given a
-library and instrument name it plays that one. The code doubles as a compact,
-readable example of the `TSedaiInstrumentRegistry` + `TSAFPart` API. See
-[Instrument Library](#instrument-library).
-
-### audiotest
-
-The main test program with a comprehensive menu system.
-
-```bash
-./audiotest
-```
-
-**Features**:
-- Classic, FM, and Wavetable synthesis tests
-- MIDI file loading and playback
-- Channel mapping configuration
-- Tempo control
-- System status display
-
-### demo_synth
-
-Synthesis demonstration driving the SAF facade (Classic / FM / Wavetable).
-
-```bash
-./demo_synth
-```
-
-### test_saf_main
-
-Exercises the main SAF API (Classic, FM and Wavetable synthesis paths).
-
-```bash
-./test_saf_main
-```
-
-### sedaisid_test
-
-Verification/regression test for the `SedaiSIDEvo` SID emulation. Compares the
-emulator state (accumulators, envelopes, output) against a reference dump.
-
-```bash
-./sedaisid_test
-```
-
-### saf_regression
-
-Headless integrated regression suite for the synth/DAW engine — runs offline (no audio
-device, no prompts), rendering through the Part/Instrument engine and asserting invariants
-(engine→mixer→master path, every voice source type, master-bus bounding, polyphony cap,
-signal-graph cycle detection). Exit code = number of failures (0 = all green), so it can be
-wired into CI alongside `sedaisid_test`.
-
-```bash
-./saf_regression
-```
-
-### sng_player
-
-Interactive GoatTracker v2 .sng file player with SID Evo synthesis.
-
-```bash
-./sng_player mysong.sng           # Uses SAF audio backend (default)
-./sng_player --sdl2 mysong.sng    # Uses direct SDL2 audio (fallback)
-```
-
-**Dual Audio Backend**:
-
-The player supports two audio modes:
-
-| Mode | Description |
-|------|-------------|
-| **SAF** (default) | Uses Sedai Audio Foundation backend - stereo 32-bit float output |
-| **SDL2** (`--sdl2`) | Direct SDL2 audio - mono 16-bit output, useful for debugging/compatibility |
-
-**Features**:
-- Full GoatTracker song playback
-- Dual audio backend (SAF or direct SDL2)
-- Real-time channel muting (keys 1/2/3)
-- Pause/resume and restart controls
-- Loop mode toggle
-- Verbose mode for debugging pattern and wavetable commands
-- SpeedTable inspection
-
-**Controls**:
-- `SPACE` - Pause/Resume
-- `R` - Restart song
-- `L` - Toggle loop mode
-- `V` - Toggle pattern verbose output
-- `W` - Toggle wavetable verbose output
-- `S` - Print SpeedTable
-- `A` - Cycle SID sampling: Fast (GoatTracker) / Interpolate / Resample (VICE)
-- `B` - Cycle audio buffer size: 2048 / 4096 / 8192 (latency vs dropout robustness)
-- `D` - Toggle filter model: Classic (clean reSID) / Distortion (reSID-fp nonlinear 6581, VICE-like)
-- `1`/`2`/`3` - Mute/unmute channels
-- `+`/`-` - Next/Previous subtune
-- `Q` or `ESC` - Quit
-
-### sng_dump
-
-SNG register dump tool for debugging and comparison with VICE/VSID.
-
-```bash
-./sng_dump mysong.sng [subtune] [output.dump]
-```
-
-**Features**:
-- Dumps SID register state per frame
-- Analyzes pattern and wavetable commands in song file
-- Tracks volume/filter changes
-- Output compatible with VICE dump format for comparison
+**`cthreads` must be the first unit** of any program that opens audio on Unix,
+because SDL2 calls back from its own thread.
 
 ---
 
-## Quick Start
+## API reference
 
-The examples below use the high-level real-time facade (`SedaiAudioFoundation`,
-SDL2 audio, the `Play*` API covering classic/FM/wavetable/additive/Karplus). For
-loading **shipped instruments** and rendering **offline** (all nine techniques,
-no audio device), use the registry + Part API shown under
-[Instrument Library](#instrument-library) — that is the modern entry point.
+The high-level facade in `SedaiAudioFoundation.pas` exports **128 global
+functions** — a `Play*` API for getting a sound out in one line. It covers
+classic, FM, wavetable, additive, Karplus and sample playback; SID Evo, the
+physical models and the patch workbench are used through their own units.
 
-### Basic Usage
+Names below are as declared. Pascal is case-insensitive, so `MIDINoteToFreq` and
+`MidiNoteToFreq` are the same identifier.
 
-```pascal
-program MyAudioApp;
+| Group | |
+|---|---|
+| **Audio** | `InitAudio(VoiceCount)` `ShutdownAudio` `SetMasterVolume(V)` `GetMasterVolume` `GetActiveVoices` `GetMaxVoices` `GetSampleRate` `PrintStatus` |
+| **Classic** | `PlaySine` `PlaySquare` `PlaySaw` `PlayTriangle` `PlayPulse` `PlayPWM` `PlaySuperSaw` `PlayNoise` `PlayLead` `PlayBass` `PlayPad` `PlayClassic(Freq, Preset)` `PlayClassicAdv` |
+| **FM** | `PlayEPiano` `PlayFMBrass` `PlayFMBell` `PlayFMOrgan` `PlayFMLead` `PlayFMBass` `PlayFM(Freq, Preset)` `PlayFMAdv` |
+| **Wavetable** | `PlaySerum` `PlayWasp` `PlayPPG` `PlayWavetable(Freq, Type)` `PlayWavetableAdv` `PlayCustomWavetable` `PlayLoadedWavetable` and the `*Adv` forms |
+| **Additive** | `PlayAdditive` `PlayAdditiveAdv` `PlayAdditiveBell` `PlayAdditiveOrgan` `PlayAdditiveStrings` |
+| **Karplus / sample** | `PlayKarplus` `PlayKarplusAdv` `PlayKarplusBass` `PlayPluck` `PlaySample` `PlaySampleAdv` |
+| **Voice control** | `NoteOff(I)` `NoteRelease(I)` `ReleaseVoice(I)` `RetriggerVoice(I)` `RetriggerVoiceHard(I)` `StopAll` `SmoothStopAll(FadeMs)` `SetVoiceFrequency` `SetVoiceAmplitude` `SetVoicePan` `SetVoiceADSR` `SetVoicePulseWidth` `SetVoiceFilter` `SetVoiceFilterEnabled` `SetVoiceFilterParams` |
+| **Instrument shaping** | `SetInstrumentOscillator` `SetInstrumentOscMode` `SetInstrumentSubOsc` `SetInstrumentSync` `SetInstrumentRingMod` `SetInstrumentVibrato` `SetInstrumentTremolo` `SetInstrumentLFO` `SetInstrumentFilterLFO` `SetInstrumentModulation` `SetInstrumentModulationLFO` `ClearInstrumentModulation` |
+| **MIDI voices** | `MIDIAllocateVoice` `MIDIIsVoiceActive(I)` `MIDIGetFreeVoiceCount` `MIDIVoiceOn(I)` `MIDIVoiceOff(I)` `MIDIReleaseVoice(I)` `MIDIReleaseAllVoices` |
+| **MIDI voice config** | `MIDISetVoiceFrequency` `MIDISetVoiceAmplitude` `MIDISetVoiceWavetable` `MIDISetVoicePan` and the matching `MIDIGetVoiceFrequency` `MIDIGetVoiceAmplitude` `MIDIGetVoiceWavetable` `MIDIGetVoicePan` |
+| **MIDI conversions** | `MIDINoteToFreq(Note)` `FreqToMIDINote(Hz)` `MIDIVelocityToAmplitude(V)` `MIDIAmplitudeToVelocity(A)` `MIDIPanToSedai(P)` `SedaiPanToMIDI(P)` `MIDINoteToName(Note)` `MIDINoteToOctave(Note)` |
+| **MIDI playback** | `MIDIPlayNote` `MIDIPlayNoteWithFreq` `PlayWavetableMIDI` `RegisterMidiUpdateCallback` `UnregisterMidiUpdateCallback` |
+| **Wavetable files** | `LoadWavetableFile` `LoadWavetableDirectory` `ScanWavetableDirectory` `IsWavetableLoaded` `GetLoadedWavetables` `GetWavetableFormats` `ClearWavetableCache` `PrintWavetableInfo` |
+| **Samples** | `LoadSampleFile` `RegisterSample` `IsSampleRegistered` |
+| **Musical** | `PlayChordClassic` `PlayChordFM` `PlayChordWavetable` `PlayScaleClassic` `PlayScaleFM` `PlayScaleWavetable` `PlayNote` `PlayOnVoice` `Beep` |
 
-uses
-  SedaiAudioFoundation;
+MIDI **files** use the object API in `SedaiMIDIPlayer` (`TSedaiMIDIPlayer`), not
+globals: `LoadFromFile`, `Play` / `Pause` / `Stop` / `Rewind`,
+`AdvanceSamples(N)` from the audio callback, `Playing` / `Paused` / `Loaded`,
+`GetDurationSeconds`, `SongName` / `Copyright` / `TrackCount`.
 
-begin
-  // Initialize audio system
-  if InitAudio(32) then  // 32 voices
-  begin
-    SetMasterVolume(0.7);
-
-    // Play a simple sine wave
-    PlaySine(440.0);  // A4 note
-    Sleep(1000);
-
-    // Play a wavetable preset
-    PlaySerum(261.63);  // C4 note
-    Sleep(1000);
-
-    // Play FM piano
-    PlayEPiano(329.63);  // E4 note
-    Sleep(1000);
-
-    StopAll;
-    ShutdownAudio;
-  end;
-end.
-```
-
-### MIDI Playback
-
-```pascal
-program MyMIDIPlayer;
-
-uses
-  SedaiMIDIPlayer;
-
-var
-  Player: TSedaiMIDIPlayer;  // object API (there is no global MIDI API)
-begin
-  Player := TSedaiMIDIPlayer.Create;
-  try
-    Player.SetSampleRate(44100);
-
-    if Player.LoadFromFile('song.mid') then
-    begin
-      WriteLn('Title: ', Player.SongName,
-              '  Duration: ', Player.GetDurationSeconds:0:1, 's');
-      Player.Play;
-
-      // Drive the sequencer from your audio callback by advancing it the
-      // same number of samples you render each block:
-      //   Player.AdvanceSamples(FrameCount);
-      while Player.Playing do
-        Player.AdvanceSamples(441);  // e.g. 10 ms blocks at 44.1 kHz
-
-      Player.Stop;
-    end;
-  finally
-    Player.Free;
-  end;
-end.
-```
-
-### Advanced Voice Control
-
-```pascal
-var
-  VoiceIndex: Integer;
-begin
-  // Get voice index for advanced control
-  VoiceIndex := PlayWavetableAdv(440.0, 'serum');
-
-  if VoiceIndex >= 0 then
-  begin
-    SetVoicePan(VoiceIndex, -0.5);  // Pan left
-    Sleep(2000);
-    NoteOff(VoiceIndex);  // Release with ADSR
-  end;
-end;
-```
+Live MIDI **input** uses `SedaiMIDIInput` (`TSedaiMIDIInput`): `Enumerate`,
+`Open`, `ConnectByName`, `Poll`, and `OnNote` / `OnController` / `OnPitchBend`.
 
 ---
 
-## API Reference
+## How we know it works
 
-### Audio Initialization
+Four independent guards, all runnable.
 
-| Function | Description |
-|----------|-------------|
-| `InitAudio(VoiceCount)` | Initialize audio system with specified voice count |
-| `ShutdownAudio` | Shutdown audio system |
-| `SetMasterVolume(Volume)` | Set master volume (0.0-1.0) |
-| `GetMasterVolume` | Get current master volume |
-| `GetActiveVoices` | Get number of currently active voices |
-| `GetMaxVoices` | Get maximum voice count |
-| `GetSampleRate` | Get audio sample rate |
-| `PrintStatus` | Print voice status information |
+**`saf_regression` — 193 checks, headless.** The whole render path with no audio
+device: engine to mixer to master, every source type, cycle detection, file
+formats round-tripping, the note queue, sample-accurate events, the sustain
+pedal. It also runs as a Windows binary under Wine, same 193.
 
-### Classic Synthesis
+**Sound fixtures — 25 patches.** Every shipped patch has a signature (hash, peak,
+RMS, spectral centroid). `patch_fixture` says which sounds changed and by how
+much, so a change to the engine cannot alter an instrument quietly. It writes
+the reference **only** with `--update`.
 
-| Function | Description |
-|----------|-------------|
-| `PlaySine(Freq)` | Play sine wave |
-| `PlaySquare(Freq)` | Play square wave |
-| `PlaySaw(Freq)` | Play sawtooth wave |
-| `PlayTriangle(Freq)` | Play triangle wave |
-| `PlayLead(Freq)` | Play lead preset |
-| `PlayBass(Freq)` | Play bass preset |
-| `PlayPad(Freq)` | Play pad preset |
-| `PlayClassic(Freq, Preset)` | Play classic preset |
-| `PlayClassicAdv(Freq, Preset)` | Play and return voice index |
+**`sedaisid_test` — bit-exact against reSID.** Not "close": zero mismatches over
+tens of millions of cycles, on both the classic and the distortion filter paths.
 
-### FM Synthesis
+**The MODERN round trip — 24 of 24.** A shipped `.patch` is lifted back into
+SedaiBasic, run, and the regenerated patch must render **byte-identically** to
+the original. Two effect patches are skipped (they need an audio input) and one
+is refused rather than half-translated.
 
-| Function | Description |
-|----------|-------------|
-| `PlayEPiano(Freq)` | Play electric piano |
-| `PlayFMBrass(Freq)` | Play FM brass |
-| `PlayFMBell(Freq)` | Play FM bell |
-| `PlayFMOrgan(Freq)` | Play FM organ |
-| `PlayFMLead(Freq)` | Play FM lead |
-| `PlayFMBass(Freq)` | Play FM bass |
-| `PlayFM(Freq, Preset)` | Play FM preset |
-| `PlayFMAdv(Freq, Preset)` | Play and return voice index |
-
-### Wavetable Synthesis
-
-| Function | Description |
-|----------|-------------|
-| `PlaySerum(Freq)` | Play Serum-style wavetable |
-| `PlayWasp(Freq)` | Play WASP-style wavetable |
-| `PlayPPG(Freq)` | Play PPG-style wavetable |
-| `PlayWavetable(Freq, Type)` | Play wavetable preset |
-| `PlayWavetableAdv(Freq, Type)` | Play and return voice index |
-
-### Voice Control
-
-| Function | Description |
-|----------|-------------|
-| `NoteOff(VoiceIndex)` | Release note (starts ADSR release) |
-| `NoteRelease(VoiceIndex)` | Alternative release function |
-| `SetVoicePan(VoiceIndex, Pan)` | Set voice pan (-1.0 to 1.0) |
-| `StopAll` | Stop all voices immediately |
-| `SmoothStopAll(FadeMs)` | Fade out all voices |
-
-### MIDI Voice Management
-
-| Function | Description |
-|----------|-------------|
-| `MidiAllocateVoice` | Allocate a MIDI voice, returns index or -1 |
-| `MidiIsVoiceActive(Index)` | Check if voice is active |
-| `MidiGetFreeVoiceCount` | Get number of available voices |
-| `MidiVoiceOn(Index)` | Start playing allocated voice |
-| `MidiVoiceOff(Index)` | Stop voice (ADSR release) |
-| `MidiReleaseVoice(Index)` | Stop and deallocate voice |
-| `MidiReleaseAllVoices` | Release all MIDI voices |
-
-### MIDI Voice Configuration
-
-| Function | Description |
-|----------|-------------|
-| `MidiSetVoiceFrequency(Index, Freq)` | Set voice frequency in Hz |
-| `MidiSetVoiceAmplitude(Index, Amp)` | Set amplitude (0.0-1.0) |
-| `MidiSetVoiceWavetable(Index, Type)` | Set wavetable preset |
-| `MidiSetVoicePan(Index, Pan)` | Set pan (-1.0 to 1.0) |
-| `MidiGetVoiceFrequency(Index)` | Get current frequency |
-| `MidiGetVoiceAmplitude(Index)` | Get current amplitude |
-| `MidiGetVoiceWavetable(Index)` | Get current wavetable |
-| `MidiGetVoicePan(Index)` | Get current pan |
-
-### MIDI Utility Functions
-
-| Function | Description |
-|----------|-------------|
-| `MidiNoteToFreq(Note)` | Convert MIDI note (0-127) to frequency Hz |
-| `MidiFreqToNote(Freq)` | Convert frequency to MIDI note |
-| `MidiVelocityToAmp(Velocity)` | Convert velocity (0-127) to amplitude |
-| `MidiAmpToVelocity(Amp)` | Convert amplitude to velocity |
-| `MidiPanToSedai(Pan)` | Convert MIDI pan (0-127) to Sedai (-1 to 1) |
-| `SedaiPanToMidi(Pan)` | Convert Sedai pan to MIDI pan |
-| `MidiNoteToName(Note)` | Get note name (e.g., "C4", "A#3") |
-| `MidiNoteToOctave(Note)` | Get octave number |
-
-### MIDI-Optimized Playback
-
-| Function | Description |
-|----------|-------------|
-| `PlayWavetableMidi(Freq, Type, Amp)` | Play with MIDI voice allocation |
-| `PlayMidiNote(Note, Velocity, Type)` | Play by MIDI note number |
-
-### MIDI File Playback
-
-MIDI playback uses the object API in `SedaiMIDIPlayer` (class `TSedaiMIDIPlayer`),
-not global functions:
-
-| Member | Description |
-|--------|-------------|
-| `Create` / `SetSampleRate(Hz)` | Construct the player and set its sample rate |
-| `LoadFromFile(Filename)` | Load a standard MIDI file |
-| `Play` / `Pause` / `Stop` / `Rewind` | Transport control |
-| `AdvanceSamples(Count)` | Advance the sequencer by N samples (call from the audio callback) |
-| `Playing` / `Paused` / `Loaded` | State properties |
-| `GetDurationSeconds` / `GetPositionSeconds` | Timing info |
-| `SongName` / `Copyright` / `TrackCount` | Metadata |
-
-### Musical Helpers
-
-| Function | Description |
-|----------|-------------|
-| `PlayChordClassic(Note1, Note2, Note3, Preset)` | Play a classic chord |
-| `PlayChordFM(Note1, Note2, Note3, Preset)` | Play an FM chord |
-| `PlayChordWavetable(Note1, Note2, Note3, Preset)` | Play a wavetable chord |
-| `PlayScaleClassic(BaseFreq, Preset)` | Play a classic scale |
-| `PlayScaleFM(BaseFreq, Preset)` | Play an FM scale |
-| `PlayScaleWavetable(BaseFreq, Preset)` | Play a wavetable scale |
+The live MIDI path was verified without owning a MIDI keyboard, by feeding the
+same file to it from `aplaymidi` — somebody else's sequencer, through the kernel
+— and comparing against the offline render: 125/125 notes both ways, peak 0.9803
+against 0.9816, RMS 0.1843 against 0.1847. What that rig cannot reach is the USB
+driver under a physical keyboard; everything from the sequencer port inward is
+exercised for real.
 
 ---
 
-## Code Metrics
+## Status
 
-| Metric | Value |
-|--------|-------|
-| **Total Lines** | ~30,000+ lines of Pascal code |
-| **Source Units** | 50+ units (.pas files) |
-| **Demo Programs** | 10+ programs (.lpr files) |
-| **Synthesis Engines** | 10 (Classic, FM, Wavetable, Additive, Free-Partial, Sample, Karplus-Strong, Waveguide-Reed, Bowed-String, SID) + SID Evo (reSID) |
-| **Audio Effects** | Delay, Reverb, Chorus, Flanger, Phaser, Distortion, Compressor, Limiter, EQ + auto-space, body resonator, convolver, tube resonator |
-| **Filter Types** | 6 (LP, HP, BP, Notch, Allpass, Peaking) |
-| **Filter Slopes** | 3 (12dB, 24dB, 48dB per octave) |
-| **Dependencies** | SDL2 only |
-| **Voice Polyphony** | 32 default (configurable, hardware-dependent) |
-| **Sample Rate** | 44100 Hz |
-| **Bit Depth** | 32-bit floating point |
-| **Audio Buffer** | 1024 samples (~23ms latency) |
-| **SID Evo Waveforms** | 12 (4 classic + 8 extended) |
-| **SID Evo Voices** | 8-64 (configurable in groups of 8) |
-| **Mixer Channels** | Unlimited (performance-dependent) |
-| **Aux Buses** | 8 |
-| **Group Buses** | 8 |
-| **Pan Laws** | 5 (Linear, ConstantPower, -3dB, -4.5dB, -6dB) |
-| **MIDI Channels** | 16 |
-| **Wavetable Formats** | 4 (Serum, Vital, Surge, Generic WAV) |
+| | |
+|---|---|
+| Units | 81 (~55,000 lines of Pascal) |
+| Synthesis techniques | 11 |
+| Module types in the workbench | 40 |
+| Shipped patches | 27 |
+| Instrument libraries | 9 `.safinst` |
+| Dependencies | SDL2, for audio output only |
+| Platforms | Linux and Windows, both first-class; developed on both |
 
----
+**Done and working**: the core library, the mixer, the transport and project
+layer, all eleven synthesis techniques, the effect chain, file I/O, SID Evo,
+the GoatTracker player, the patch workbench, live MIDI input, the SedaiBasic
+MODERN bridge.
 
-## Roadmap
+**Planned**: granular synthesis; vector synthesis; IFFT / spectral resynthesis;
+an arrangement layer (buses, position in the room, output format); brass
+physical modelling, which currently does not lock to pitch.
 
-### Implementation Status
+### Known limitations
 
-All 8 implementation phases are **complete**:
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| Phase 1 | Foundation (Core) | **Complete** |
-| Phase 2 | Generators & Modulators | **Complete** |
-| Phase 3 | Processors & Effects | **Complete** |
-| Phase 4 | Voice Management | **Complete** |
-| Phase 5 | Mixing | **Complete** |
-| Phase 6 | DAW Core | **Complete** |
-| Phase 7 | Advanced Synthesis | **Complete** |
-| Phase 8 | Professional Features | **Complete** |
-
-### Future Synthesis Techniques
-
-The following synthesis techniques are planned for future versions:
-
-| Technique | Description | Complexity | Status |
-|-----------|-------------|------------|--------|
-| **Free-Partial / sinusoidal model** | McAulay-Quatieri partials with arbitrary time-varying freq/amp; native STFT partial tracker (WAV→preset) | High | **Done** (`SedaiPartialGenerator`, `psPartial`) |
-| **Physical Modeling — winds, strings & percussion** | Self-oscillating single-reed waveguide (reed + bore), bowed string (bow friction + string) and struck modal percussion, MSW + commuted body/tube resonance + shared formant body | High | **Done** (`SedaiReedGenerator`/`psReed`, `SedaiBowedGenerator`/`psBowed`, `SedaiModalGenerator`/`psModal`, `SedaiFormantBody`, `SedaiTubeResonator`); brass (lip reed) planned |
-| **IFFT Synthesis** | Inverse Fast Fourier Transform for spectral manipulation and resynthesis | Medium-High | Planned |
-| **Granular Synthesis** | Time-stretching and pitch-shifting through micro-sound grains | Medium | Planned |
-
-#### IFFT Synthesis - Implementation Details
-
-Spectral synthesis using Inverse FFT for powerful frequency-domain manipulation.
-
-**Requirements:**
-- FFT/IFFT engine (Cooley-Tukey radix-2 or similar algorithm)
-- Spectral frame buffer management (amplitude + phase per frequency bin)
-- Overlap-add or overlap-save for real-time streaming
-- Spectral interpolation for smooth morphing between frames
-
-**Implementation Steps:**
-1. FFT engine with configurable frame size (512, 1024, 2048, 4096 samples)
-2. Spectral frame buffer with magnitude/phase representation
-3. Real-time resynthesis with 50-75% overlap
-4. API for spectral manipulation (filtering, pitch shifting, time stretching)
-
-**Use Cases:** Vocoder effects, spectral freeze, cross-synthesis, noise reduction
-
-#### Granular Synthesis - Implementation Details
-
-Micro-sound based synthesis for extreme time-stretching and textural effects.
-
-**Requirements:**
-- Grain scheduler (density, spray/randomization control)
-- Grain pool management (hundreds of simultaneous grains)
-- Per-grain parameters: position, duration, pitch, envelope, pan
-- Audio source (sample buffer or real-time input)
-
-**Implementation Steps:**
-1. Grain class with envelope shapes (Hanning, Gaussian, Trapezoid, Rectangle)
-2. Grain scheduler with density (grains/second) and position spray
-3. Sample source with random access and interpolation
-4. Efficient mixing of active grains with voice limiting
-
-**Use Cases:** Time-stretching without pitch change, ambient textures, glitch effects, soundscapes
-
-#### Physical Modeling - Implementation Details
-
-Mathematical simulation of physical instrument behavior for realistic sounds.
-
-**Requirements:**
-- Mathematical models for specific instruments (strings, winds, percussion)
-- Waveguide synthesis or mass-spring models
-- Physical parameters (tension, material density, resonances)
-- Numerical stability at all parameter ranges
-
-**Implementation Steps:**
-1. Karplus-Strong base algorithm (plucked string) — **done** (`SedaiKarplusGenerator`)
-2. Digital waveguide for tubes (bidirectional delay lines) — **done** for winds (`SedaiReedGenerator` bore)
-3. Excitation models — **done** for breath/reed (nonlinear reed table), bow (stick-slip friction) and struck/modal (decaying resonator bank, `SedaiModalGenerator`); lip-reed (brass) planned
-4. Body resonance filters (formant / impulse response) — **done** (`SedaiBodyResonator`, `SedaiFormantBody`, `SedaiConvolver`, `SedaiTubeResonator`)
-
-Remaining: brass (lip reed) — the STK-style lip-oscillator did not track pitch reliably and is deferred to a future pass.
-
-**Use Cases:** Realistic guitar, wind instruments, custom impossible instruments
-
-### Short-Term Improvements
-
-*No short-term items pending — the audio file I/O is feature-complete (WAV/AIFF read+write,
-FLAC/OGG/MP3 read).*
-
-*Done since this list was written:* sample playback engine (`vstSample`, one-shot/looped with
-pitch), Karplus-Strong physical-modelling source (`vstKarplus`), voice stealing (oldest/quietest/
-priority, drops a note when none is stealable), extended anti-aliasing (PolyBLEP on saw/square/pulse/
-supersaw/PWM, PolyBLAMP on triangle), an ADSR envelope redesign (real per-stage curves), a
-double-precision biquad filter with Butterworth-cascade 24/48 dB slopes, unlimited LFOs + oscillator
-combine (mix/ring/sync) in the universal voice, per-preset gain staging, a headless integrated
-regression suite (`saf_regression`), a pure-Pascal AIFF/AIFC **reader** (big-endian PCM 8/16/24/32
-+ `sowt`/`fl32`/`fl64`), a pure-Pascal **FLAC decoder** (lossless, bit-exact vs WAV; FIXED/LPC
-subframes, partitioned Rice, all channel modes), a pure-Pascal **AIFF writer** (big-endian PCM
-16/24/32, 80-bit extended sample rate; bit-exact vs the WAV path), a pure-Pascal **OGG Vorbis
-decoder** (codebooks/floor/residue/coupling, FFT-based IMDCT, granulepos bisection seek), and a
-pure-Pascal **MP3 decoder** (MPEG-1/2/2.5 Layer III, minimp3 port, Xing/LAME gapless trim).
-
-### Medium-Term Features
-
-| Feature | Description | Priority |
-|---------|-------------|----------|
-| **Multitimbral Mode** | Multiple synth engines running simultaneously | Medium |
-| **Arpeggiator** | Pattern-based note arpeggiation | Medium |
-| **Step Sequencer** | Internal step sequencer for patterns | Medium |
-| **macOS Support** | Darwin x86_64 and aarch64 targets | Medium |
-
-### Known Issues & Limitations
-
-| Issue | Description | Workaround |
-|-------|-------------|------------|
-| **Audio File Support** | WAV (read/write), AIFF/AIFC (read/write), FLAC (read/write), OGG Vorbis / MP3 (read) | OGG/MP3 are decode-only |
-| **Windows Focus** | Linux support may have minor issues | Report bugs |
-| **API Stability** | API may change in minor versions | Pin version for production |
-| **Documentation** | API documentation is embedded in source | Read unit interfaces |
+| | |
+|---|---|
+| API stability | Still moving. Pin a commit for anything serious. |
+| OGG / MP3 | Decode only |
+| Directivity | The cone is gain-only, so a source turned away gets quieter rather than duller |
+| `include` in patches | The MODERN lifter refuses patches that use it, rather than translating half of one |
+| Documentation | Unit interfaces are the reference; this file is the map |
 
 ---
 
 ## License
 
-This project is released under the **GNU General Public License v3.0 (GPL-3.0)**.
-See [`LICENSING.md`](LICENSING.md) for the full picture, [`LICENSE`](LICENSE) for the
-GPL-3.0 text, and [`LICENSE.GPL-2.0`](LICENSE.GPL-2.0) for the GPL-2.0 text.
+**GNU General Public License v3.0 only** (GPL-3.0-only). The commercial option
+was withdrawn; see [`LICENSING.md`](LICENSING.md).
 
-You are free to use, modify, and distribute this software under the terms of the GPL-3.0
-license. There is no commercial or proprietary option.
+### Third-party derived components
 
-### Third-party derived components (GPL-2.0-or-later upstream)
+Two parts are derived from GPL-2.0-or-later projects and keep that lineage:
 
-These files are **ports of GPL'd third-party engines**, so they are derivative works and
-carry their upstream's terms — **GNU GPL version 2 or any later version
-(GPL-2.0-or-later)**, full text in [`LICENSE.GPL-2.0`](LICENSE.GPL-2.0):
+- **`SedaiSIDEvo`** — the SID emulation follows the model and the tables of
+  **reSID** by Dag Lem, and the nonlinear filter of **reSID-fp**.
+- **`SedaiGoatTracker`** — a reimplementation of the **GoatTracker v2** player
+  routine by Lasse Öörni (Cadaver) and contributors.
 
-- `src/SID/SedaiSIDEvo.pas` + `src/SID/SedaiSIDEvo_WaveTables.inc` — a Pascal port of
-  **reSID / reSID-fp** (partially built on the SAF framework);
-- `src/Players/SedaiGoatTracker.pas` — a reimplementation of the **GoatTracker 2** player
-  routine (and it uses GoatTracker's frequency tables).
-
-The "**or later**" in their upstream licence is what lets them sit inside a GPL-3.0
-project: as distributed here they are covered by GPL-3.0 like everything else, and the v2
-text is kept so that option remains available. Their upstream terms cannot be narrowed.
-See [`LICENSING.md`](LICENSING.md) for the full breakdown.
-
-> **reSID** is the cycle-accurate MOS 6581/8580 emulator by **Dag Lem** (Copyright © 2004
-> Dag Lem); the optional non-linear "distortion" filter is from **reSID-fp** by
-> **Antti S. Lankila**. **GoatTracker 2** is by **Lasse Öörni** (Cadaver / Covert Bitops).
-> Band-limited resampling follows **Julius O. Smith III**. All credit for the original SID
-> emulation and player routine goes to them — our heartfelt thanks for releasing this work
-> under the GPL. The bit-exact accuracy of `SedaiSIDEvo` and `SedaiGoatTracker` is a
-> tribute to reSID and GoatTracker.
+Credit is given on principle, and only for what was actually used.
 
 ### Contact
 
-**Maurizio Cammalleri**
-Email: maurizio.cammalleri@gmail.com
+Maurizio Cammalleri — maurizio.cammalleri@gmail.com
 
 ---
 
 ## Contributing
 
-We welcome contributions in the following areas:
+Issues and pull requests are welcome. Two things make a change easy to accept:
 
-- **Bug Reports**: Open issues for any bugs found
-- **New Effects**: Implement additional audio effects
-- **Platform Support**: Test and fix issues on Linux/macOS
-- **Documentation**: Improve code comments and examples
-- **Presets**: Create and share synthesis presets
-
-For bug reports or suggestions, please open an issue on the project repository.
-
----
-
-**Sedai Audio Foundation** - Professional Audio Synthesis for Free Pascal
+1. **Say how you know.** A number, a comparison, a test that fails before and
+   passes after. "Sounds better" is a real argument, but say what you listened
+   to and against what.
+2. **Run the guards.** `saf_regression` and `patch_fixture` before and after. If
+   a fixture moved, that is not a failure — it is a question, and the answer
+   belongs in the pull request.

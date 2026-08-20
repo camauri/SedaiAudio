@@ -79,12 +79,15 @@ Fixture sonore in `library/patches/fixtures.txt`: `bin/<plat>/patch_fixture` dic
 quali patch sono cambiate e di quanto (picco, RMS, centroide). `--update` per
 riscrivere i riferimenti, deliberatamente.
 
-Le sezioni **Installation/Building** e **License** del README di progetto sono
-state riscritte il 2026-08-14 (GPL-3.0 only, vedi `LICENSING.md`). **SID Evo** e
-**GoatTracker Player** verificate il 2026-06-22.
+**README di progetto: RISCRITTO DA CAPO il 2026-08-20**, da 1684 a ~565 righe.
+Ogni affermazione e' stata verificata sui sorgenti: l'elenco delle unit e'
+completo (81, prima ne mancavano 29), l'API viene dai nomi veri della facade
+(128 funzioni globali, estratte dall'interface), i numeri sono misurati. Le
+quattro "funzioni inesistenti" dell'audit di giugno **esistevano tutte con altro
+nome** (`FreqToMIDINote`, `MIDIVelocityToAmplitude`, `MIDIAmplitudeToVelocity`,
+`MIDIPlayNote`): erano nomi sbagliati, non funzionalita' inventate.
+⚠️ Attenzione a grep case-sensitive sui nomi Pascal: `MIDINoteToFreq` non si
+trova cercando `MidiNoteToFreq`.
 
-Il resto del README di progetto, più ARCHITECTURE_PROPOSAL.md e TODO.md (entrambi
-gitignored), può essere ancora alla deriva (audit 2026-06-21): alcune API
-documentate non esistono più e alcune unit implementate non sono documentate.
-Verificare sui sorgenti prima di fidarsi. Note di lavoro fuori da git in
-`job/docs/` e `NEXT_SESSION_PROMPT.md`.
+ARCHITECTURE_PROPOSAL.md e TODO.md (entrambi gitignored) restano alla deriva.
+Note di lavoro fuori da git in `job/docs/` e `NEXT_SESSION_PROMPT.md`.
