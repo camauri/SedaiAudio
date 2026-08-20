@@ -745,7 +745,12 @@ begin
     FLastError := WINMM_LIB + ' is not available';
     Exit;
   end;
-  N := Integer(midiInGetNumDevs);
+  // The () matters, and its absence does NOT fail to compile: without it this
+  // names the procedure VARIABLE and the cast converts its address, which is a
+  // range error with checks on and a nonsense device count with them off. Same
+  // trap as snd_seq_client_info_sizeof above; found by running under Wine,
+  // because compiling cannot see it.
+  N := Integer(midiInGetNumDevs());
   SetLength(APorts, N);
   for I := 0 to N - 1 do
   begin
