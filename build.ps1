@@ -878,6 +878,54 @@ $allTargets = @{
         Output = 'patch_bas.exe'
         Kind = 'tool'
     }
+    'patch_render' = @{
+        Source = 'patch_render.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'tools')
+        Output = 'patch_render.exe'
+        Kind = 'tool'
+    }
+    'patch_play' = @{
+        Source = 'patch_play.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'tools')
+        Output = 'patch_play.exe'
+        Kind = 'tool'
+    }
+    'patch_fx' = @{
+        Source = 'patch_fx.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'tools')
+        Output = 'patch_fx.exe'
+        Kind = 'tool'
+    }
+    'patch_live' = @{
+        Source = 'patch_live.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'tools')
+        Output = 'patch_live.exe'
+        Kind = 'tool'
+    }
+    'patch_midi' = @{
+        Source = 'patch_midi.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'tools')
+        Output = 'patch_midi.exe'
+        Kind = 'tool'
+    }
+    'patch_fixture' = @{
+        Source = 'patch_fixture.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'tools')
+        Output = 'patch_fixture.exe'
+        Kind = 'tool'
+    }
+    'patch_doc' = @{
+        Source = 'patch_doc.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'tools')
+        Output = 'patch_doc.exe'
+        Kind = 'tool'
+    }
+    'midi_probe' = @{
+        Source = 'midi_probe.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'tools')
+        Output = 'midi_probe.exe'
+        Kind = 'tool'
+    }
 }
 
 # Adjust extension based on OS

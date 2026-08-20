@@ -6,20 +6,20 @@ which is why it diffs and versions like source.
 
 Render one to a WAV, monophonically:
 
-    ./build.sh --source job/tools/saf/patch_render.lpr --dest bin/<plat>/patch_render
+    ./build.sh --target patch_render
     bin/<plat>/patch_render library/patches/basic.patch out.wav 2 0 1.2
                             ^patch                     ^wav   ^s ^semitones ^gate
 
 Or play notes through it polyphonically:
 
-    ./build.sh --source job/tools/saf/patch_play.lpr --dest bin/<plat>/patch_play
+    ./build.sh --target patch_play
     bin/<plat>/patch_play library/patches/poly.patch out.wav 3 8 60,64,67 1.5
                           ^patch                     ^wav   ^s ^voices ^notes ^gate
 
 Or keep the patch playing while you edit it — this is the ear loop the workbench
 exists for:
 
-    ./build.sh --source job/tools/saf/patch_live.lpr --dest bin/<plat>/patch_live
+    ./build.sh --target patch_live
     bin/<plat>/patch_live library/patches/poly.patch 8 128 48000
                           ^patch                     ^voices ^buffer ^rate
 
@@ -78,7 +78,7 @@ keyboard. Everything from the sequencer port inward is exercised for real.
 
 Or play a MIDI file through the patch:
 
-    ./build.sh --source job/tools/saf/patch_midi.lpr --dest bin/<plat>/patch_midi
+    ./build.sh --target patch_midi
     bin/<plat>/patch_midi song.mid library/patches/poly.patch out.wav 16 0 0 0.35
                           ^mid     ^patch                    ^wav  ^voices ^s ^transpose ^gain
 
@@ -226,7 +226,7 @@ transposition and any modulator is automatically musical.
 
 Or run an existing audio file through a patch:
 
-    ./build.sh --source job/tools/saf/patch_fx.lpr --dest bin/<plat>/patch_fx
+    ./build.sh --target patch_fx
     bin/<plat>/patch_fx in.wav library/patches/fx_chain.patch out.wav 3 0.9
                         ^in    ^patch                         ^out  ^tail ^gain
 

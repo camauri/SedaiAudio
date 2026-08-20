@@ -78,13 +78,15 @@ bin/x86_64-linux/saf_regression      # 193 checks, headless
 bin/x86_64-linux/sedaisid_test       # SID Evo against reSID
 ```
 
-> **Not yet shipped.** Several tools used daily still live in the gitignored
-> working area `job/tools/saf/` and are **not in the repository**:
-> `patch_live` (the live ear loop with hot reload and MIDI in), `patch_midi`,
-> `patch_fixture` (the sound guard), `patch_doc` (generates the module
-> reference) and `midi_probe`. They are referenced below because they are how
-> the work is actually done; a fresh clone will not have them yet. Moving them
-> into `tools/` is the next housekeeping job.
+**Hear a patch, and edit it while it plays.**
+
+```
+bin/x86_64-linux/patch_live library/patches/moog_lead.patch 8 128 48000
+```
+
+Edit the `.patch` in any editor, save, and the sound changes without a restart.
+A save that does not compile prints the error and leaves the previous version
+playing. Add `--midi` to play it from a keyboard.
 
 ---
 
@@ -108,11 +110,6 @@ connect env1.out   -> amp.gain  amount=0.3
 
 output  amp.out
 ```
-
-Keep `patch_live` running while you edit the file and the sound changes without
-a restart — a save that does not compile prints the error and leaves the previous
-version playing. (That tool is one of the five not yet in the repository; see
-the note above.)
 
 Seven statements, **40 module types**, and 27 patches shipped in
 [`library/patches/`](library/patches/). The full grammar, the traps with their
@@ -198,9 +195,6 @@ the module registry. Details, and the traps, in
 bin/x86_64-linux/patch_live library/patches/poly.patch 8 128 48000 --midi
 bin/x86_64-linux/patch_live --list-midi
 ```
-
-(`patch_live` and `patch_midi` are two of the five tools not yet in the
-repository — see the note under Quick start.)
 
 ALSA sequencer on Linux, Windows MME on Windows, and the system library is
 loaded at runtime rather than linked — so a machine without it says "no MIDI"
@@ -413,6 +407,14 @@ mapping (`-Target x` ⇄ `--target x`) is in each script's header. Output goes t
 | `sng_player` | tool | GoatTracker `.sng` player |
 | `sng_dump` | tool | `.sng` structure and SID register dump |
 | `patch_bas` | tool | `.patch` ⇄ SedaiBasic MODERN bridge; `--lib` generates the MODERN library |
+| `patch_live` | tool | play a patch live, reloading it whenever the file changes; `--midi` |
+| `patch_play` | tool | play notes through a patch, render a WAV |
+| `patch_render` | tool | render a patch with the gate closed — the graph, not a note |
+| `patch_midi` | tool | render a MIDI file through a patch |
+| `patch_fx` | tool | run a WAV through an effect patch |
+| `patch_fixture` | tool | the sound guard: which patches changed, and by how much |
+| `patch_doc` | tool | the module reference, generated from the registry |
+| `midi_probe` | tool | watch a MIDI port; `--patch` renders what arrives, live |
 | `saf_play` | demo | loads a library, plays a phrase, renders a WAV — offline |
 | `demo_synth` | demo | interactive SDL2 synth demo |
 | `test_saf_main` | test | facade test (classic / FM / wavetable) |
@@ -420,7 +422,9 @@ mapping (`-Target x` ⇄ `--target x`) is in each script's header. Output goes t
 | `sedaisid_test` | test | SID Evo verification against reSID |
 | `saf_regression` | test | headless regression suite, 193 checks |
 
-Sources for tools live in `tools/`, everything else in `test/`.
+Sources for tools live in `tools/`, QA and the historic frontends in `test/`.
+Local diagnostic probes that are *not* shipped stay in the gitignored
+`job/tools/`.
 
 **On Linux SDL2 needs its `-dev` package** (`libsdl2-dev` / `SDL2-devel` /
 `sdl2`): the bindings `dlopen("libSDL2.so")`, which only the dev symlink

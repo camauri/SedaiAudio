@@ -11,7 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **NEVER delete or move user files** without explicit authorization.
 - **Communicate in Italian**; keep code comments and documentation in English.
 - **Keep the repo root clean**: build scripts + `README.md`/`LICENSE`/`*.md` docs only.
-- **`tools/` vs `test/` vs `job/tools/`**: `tools/` = utility programs che SPEDISCI (generatori di codice, ispettori) — versionati, target `[tool]`; `test/` = programmi di QA e i frontend storici; `job/tools/` = banchi di prova locali, **gitignored**.
+- **`tools/` vs `test/` vs `job/tools/`**: `tools/` = utility programs che SPEDISCI — versionati, target `[tool]`, e ci sono **tutti** quelli citati dalla documentazione spedita; `test/` = QA e frontend storici; `job/tools/` = sonde diagnostiche locali (`gateprobe`, `space_probe`, `keyprobe`) e harness usa-e-getta, **gitignored**.
+- **Regola**: se un README spedito dice di eseguire uno strumento, quello strumento deve stare in `tools/` ed essere un target. Altrimenti il README mente a chi clona.
 - **`job/` vs `tmp/`** (both gitignored, same convention as SedaiBasic2): `job/` is the local working area — `docs/` (design documents), `tools/` (harnesses and scripts: `saf/`, `evo/`, `resid/`), `samples/` (CC0 source recordings), `midi/`, `ir/`, `ref/` (reSID reference data). `tmp/` holds **output only, never input**, and must stay disposable: `rm -rf tmp/*` has to be safe to run at any moment. Anything that would hurt to lose belongs in `job/`.
 
 ## Build System
@@ -25,7 +26,7 @@ The user handles compilation. For reference only:
 - **Language**: Free Pascal (FPC), `{$mode objfpc}{$H+}`
 - **Build scripts**: `build.ps1` (Windows) / `build.sh` (Linux/macOS) — functionally equivalent ports; `setup.ps1` / `setup.sh` fetch deps
   - PowerShell `-Switch` ⇄ bash `--switch` (`-Target x` ⇄ `--target x`, `-SkipDemos` ⇄ `--skip-demos`, ...); the mapping is in each script's header
-- **Targets**: `sng_player`, `sng_dump`, `patch_bas` (tool) · `saf_play`, `demo_synth` (demo) · `test_saf_main`, `audiotest`, `sedaisid_test`, `saf_regression` (test)
+- **Targets**: `sng_player`, `sng_dump`, `patch_bas`, `patch_live`, `patch_play`, `patch_render`, `patch_midi`, `patch_fx`, `patch_fixture`, `patch_doc`, `midi_probe` (tool, in `tools/`) · `saf_play`, `demo_synth` (demo) · `test_saf_main`, `audiotest`, `sedaisid_test`, `saf_regression` (test)
   - Build one: `./build.ps1 -Target sng_player` / `./build.sh --target sng_player`  (add `-Clean` / `--clean` to rebuild)
 - **Output**: `bin/<cpu>-<os>/` (executables), `lib/<cpu>-<os>/` (compiled units) — Linux artefacts live in `bin/x86_64-linux/`, Windows ones in `bin/x86_64-win64/`
 - **Platform flags**: `-CPU`/`--cpu` `x86_64|i386|aarch64`, `-OS`/`--os` `win64|win32|linux|darwin` (the .sh defaults to the host)
