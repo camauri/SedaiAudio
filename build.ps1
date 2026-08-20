@@ -201,6 +201,8 @@ $ErrorActionPreference = 'Stop'
 $Script:ProjectRoot = $PSScriptRoot
 $Script:SrcDir = Join-Path $ProjectRoot 'src'
 $Script:TestDir = Join-Path $ProjectRoot 'test'
+# Utility programs that SHIP: code generators and inspectors, not QA.
+$Script:ToolsDir = Join-Path $ProjectRoot 'tools'
 $Script:LibDir = Join-Path $ProjectRoot 'lib'
 $Script:BinDir = Join-Path $ProjectRoot 'bin'
 $Script:DepsDir = Join-Path $ProjectRoot 'deps'
@@ -586,6 +588,7 @@ function Build-Target {
     $opts += "-Fu`"$SrcDir\Wavetable`""
     $opts += "-Fu`"$SrcDir\Patch`""
     $opts += "-Fu`"$TestDir`""
+    $opts += "-Fu`"$ToolsDir`""
     $opts += "-Fu`"$SDL2Dir`""  # SDL2 Pascal bindings
     $opts += "-FU`"$libPath`""
 
@@ -871,7 +874,7 @@ $allTargets = @{
     }
     'patch_bas' = @{
         Source = 'patch_bas.lpr'
-        SourceDir = (Join-Path $ProjectRoot 'test')
+        SourceDir = (Join-Path $ProjectRoot 'tools')
         Output = 'patch_bas.exe'
         Kind = 'tool'
     }

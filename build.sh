@@ -29,6 +29,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 SRC_DIR="$PROJECT_ROOT/src"
 TEST_DIR="$PROJECT_ROOT/test"
+# Utility programs that SHIP: code generators and inspectors, not QA.
+TOOLS_DIR="$PROJECT_ROOT/tools"
 LIB_DIR="$PROJECT_ROOT/lib"
 BIN_DIR="$PROJECT_ROOT/bin"
 DEPS_DIR="$PROJECT_ROOT/deps"
@@ -511,6 +513,7 @@ build_target() {
         [[ -d "$SRC_DIR/$sub" ]] && opts+=("-Fu$SRC_DIR/$sub")
     done
     opts+=("-Fu$TEST_DIR")
+    opts+=("-Fu$TOOLS_DIR")
     opts+=("-Fu$SDL2_DIR")       # SDL2 Pascal bindings
     opts+=("-FU$lib_path")
 
@@ -621,7 +624,7 @@ ALL_TARGETS=(
     "audiotest|audiotest.lpr|$TEST_DIR|audiotest|test"
     "sedaisid_test|sedaisid_test.lpr|$TEST_DIR|sedaisid_test|test"
     "saf_regression|saf_regression.lpr|$TEST_DIR|saf_regression|test"
-    "patch_bas|patch_bas.lpr|$TEST_DIR|patch_bas|tool"
+    "patch_bas|patch_bas.lpr|$TOOLS_DIR|patch_bas|tool"
 )
 
 target_field() {   # target_field <name> <index 2..5>
