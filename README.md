@@ -490,10 +490,11 @@ the reference **only** with `--update`.
 **`sedaisid_test` — bit-exact against reSID.** Not "close": zero mismatches over
 tens of millions of cycles, on both the classic and the distortion filter paths.
 
-**The MODERN round trip — 24 of 24.** A shipped `.patch` is lifted back into
+**The MODERN round trip — 25 of 25.** A shipped `.patch` is lifted back into
 SedaiBasic, run, and the regenerated patch must render **byte-identically** to
-the original. Two effect patches are skipped (they need an audio input) and one
-is refused rather than half-translated.
+the original. Two effect patches are skipped, because they need an audio input
+and rendering one with nothing connected measures silence, which proves
+nothing.
 
 The live MIDI path was verified without owning a MIDI keyboard, by feeding the
 same file to it from `aplaymidi` — somebody else's sequencer, through the kernel
@@ -532,7 +533,6 @@ physical modelling, which currently does not lock to pitch.
 | API stability | Still moving. Pin a commit for anything serious. |
 | OGG / MP3 | Decode only |
 | Directivity | The cone is gain-only, so a source turned away gets quieter rather than duller |
-| `include` in patches | The MODERN lifter refuses patches that use it, rather than translating half of one |
 | Documentation | Unit interfaces are the reference; this file is the map |
 
 ---

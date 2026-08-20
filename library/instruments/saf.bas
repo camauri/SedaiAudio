@@ -34,6 +34,11 @@ Dim Shared As Double  safLinkAmt(0 To 1023)
 Dim Shared As Integer safLinkNorm(0 To 1023)
 Dim Shared As Integer safLinkN
 
+Dim Shared As String  safIncFile(0 To 31)
+Dim Shared As String  safIncPrefix(0 To 31)
+Dim Shared As String  safIncHash(0 To 31)
+Dim Shared As Integer safIncN
+
 Dim Shared As String  safOutPath(0 To 15)
 Dim Shared As Double  safOutPos(0 To 15)
 Dim Shared As Integer safOutHasPos(0 To 15)
@@ -62,6 +67,16 @@ Sub SafLink(src As String, dst As String, amount As Double, normalled As Integer
   safLinkAmt(safLinkN) = amount
   safLinkNorm(safLinkN) = normalled
   safLinkN = safLinkN + 1
+End Sub
+
+'' An included file brings in modules under a prefix. They are NOT declared
+'' here — the engine reads the other file — so the objects that stand for
+'' them are Bind-ed rather than Init-ed.
+Sub SafInclude(file As String, prefix As String, hash As String)
+  safIncFile(safIncN) = file
+  safIncPrefix(safIncN) = prefix
+  safIncHash(safIncN) = hash
+  safIncN = safIncN + 1
 End Sub
 
 Sub SafOutput(path As String)
@@ -116,12 +131,19 @@ Type Module Extends Object
     Declare Sub KeyN(k As String, v As Double)
 End Type
 
+'' Idx = -1 means "declared somewhere else", i.e. bound to an included
+'' module. Its keys belong to the file that declares it, so they are
+'' refused here rather than written into a slot that is not ours.
 Sub Module.Key(k As String, v As String)
-  safModKeys(This.Idx) = safModKeys(This.Idx) + " " + k + "=" + v
+  If This.Idx >= 0 Then
+    safModKeys(This.Idx) = safModKeys(This.Idx) + " " + k + "=" + v
+  End If
 End Sub
 
 Sub Module.KeyN(k As String, v As Double)
-  safModKeys(This.Idx) = safModKeys(This.Idx) + " " + k + "=" + Str(v)
+  If This.Idx >= 0 Then
+    safModKeys(This.Idx) = safModKeys(This.Idx) + " " + k + "=" + Str(v)
+  End If
 End Sub
 
 '' osc — declaration keys: freq, shape
@@ -131,15 +153,23 @@ Type Osc Extends Module
     Pw As Port
     Sync As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Osc.Init(nm As String)
-  This.Idx = SafDeclare(nm, "osc")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Osc.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.Pitch.Path = nm + ".pitch"
   This.Pw.Path = nm + ".pw"
   This.Sync.Path = nm + ".sync"
+End Sub
+
+Sub Osc.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "osc")
 End Sub
 
 '' filter — declaration keys: cutoff, mode
@@ -149,15 +179,23 @@ Type Filter Extends Module
     Cutoff As Port
     Res As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Filter.Init(nm As String)
-  This.Idx = SafDeclare(nm, "filter")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Filter.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.Cutoff.Path = nm + ".cutoff"
   This.Res.Path = nm + ".res"
+End Sub
+
+Sub Filter.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "filter")
 End Sub
 
 '' amp
@@ -166,14 +204,22 @@ Type Amp Extends Module
     In As Port
     Gain As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Amp.Init(nm As String)
-  This.Idx = SafDeclare(nm, "amp")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Amp.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.Gain.Path = nm + ".gain"
+End Sub
+
+Sub Amp.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "amp")
 End Sub
 
 '' env — declaration keys: a, d, r, s
@@ -181,13 +227,21 @@ Type Env Extends Module
   Public:
     Gate As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Env.Init(nm As String)
-  This.Idx = SafDeclare(nm, "env")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Env.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.Gate.Path = nm + ".gate"
+End Sub
+
+Sub Env.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "env")
 End Sub
 
 '' lfo — declaration keys: phase, rate, shape
@@ -195,13 +249,21 @@ Type Lfo Extends Module
   Public:
     Rate As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Lfo.Init(nm As String)
-  This.Idx = SafDeclare(nm, "lfo")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Lfo.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.Rate.Path = nm + ".rate"
+End Sub
+
+Sub Lfo.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "lfo")
 End Sub
 
 '' delay — declaration keys: time
@@ -209,25 +271,41 @@ Type Delay Extends Module
   Public:
     In As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Delay.Init(nm As String)
-  This.Idx = SafDeclare(nm, "delay")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Delay.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
+End Sub
+
+Sub Delay.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "delay")
 End Sub
 
 '' input — declaration keys: channel
 Type AudioIn Extends Module
   Public:
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub AudioIn.Init(nm As String)
-  This.Idx = SafDeclare(nm, "input")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub AudioIn.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
+End Sub
+
+Sub AudioIn.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "input")
 End Sub
 
 '' note
@@ -237,15 +315,23 @@ Type Note Extends Module
     Gate As Port
     Vel As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Note.Init(nm As String)
-  This.Idx = SafDeclare(nm, "note")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Note.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.Pitch.Path = nm + ".pitch"
   This.Gate.Path = nm + ".gate"
   This.Vel.Path = nm + ".vel"
+End Sub
+
+Sub Note.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "note")
 End Sub
 
 '' seq — declaration keys: gatems, gates, steps, values
@@ -255,15 +341,23 @@ Type Seq Extends Module
     Reset As Port
     Gate As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Seq.Init(nm As String)
-  This.Idx = SafDeclare(nm, "seq")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Seq.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.Clock.Path = nm + ".clock"
   This.Reset.Path = nm + ".reset"
   This.Gate.Path = nm + ".gate"
+End Sub
+
+Sub Seq.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "seq")
 End Sub
 
 '' sh
@@ -272,14 +366,22 @@ Type Sh Extends Module
     In As Port
     Trig As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Sh.Init(nm As String)
-  This.Idx = SafDeclare(nm, "sh")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Sh.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.Trig.Path = nm + ".trig"
+End Sub
+
+Sub Sh.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "sh")
 End Sub
 
 '' ring
@@ -288,14 +390,22 @@ Type Ring Extends Module
     A As Port
     B As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Ring.Init(nm As String)
-  This.Idx = SafDeclare(nm, "ring")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Ring.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.A.Path = nm + ".a"
   This.B.Path = nm + ".b"
+End Sub
+
+Sub Ring.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "ring")
 End Sub
 
 '' glide
@@ -304,26 +414,42 @@ Type Glide Extends Module
     In As Port
     Time As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Glide.Init(nm As String)
-  This.Idx = SafDeclare(nm, "glide")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Glide.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.Time.Path = nm + ".time"
 End Sub
 
+Sub Glide.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "glide")
+End Sub
+
 '' noise — declaration keys: color, seed, type
 Type Noise Extends Module
   Public:
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Noise.Init(nm As String)
-  This.Idx = SafDeclare(nm, "noise")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Noise.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
+End Sub
+
+Sub Noise.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "noise")
 End Sub
 
 '' quant — declaration keys: scale
@@ -331,13 +457,21 @@ Type Quant Extends Module
   Public:
     In As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Quant.Init(nm As String)
-  This.Idx = SafDeclare(nm, "quant")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Quant.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
+End Sub
+
+Sub Quant.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "quant")
 End Sub
 
 '' follow
@@ -347,15 +481,23 @@ Type Follow Extends Module
     Attack As Port
     Release As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Follow.Init(nm As String)
-  This.Idx = SafDeclare(nm, "follow")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Follow.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.Attack.Path = nm + ".attack"
   This.Release.Path = nm + ".release"
+End Sub
+
+Sub Follow.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "follow")
 End Sub
 
 '' fold
@@ -365,15 +507,23 @@ Type Fold Extends Module
     Fold As Port
     Sym As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Fold.Init(nm As String)
-  This.Idx = SafDeclare(nm, "fold")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Fold.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.Fold.Path = nm + ".fold"
   This.Sym.Path = nm + ".sym"
+End Sub
+
+Sub Fold.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "fold")
 End Sub
 
 '' lpg
@@ -383,15 +533,23 @@ Type Lpg Extends Module
     Cv As Port
     Resp As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Lpg.Init(nm As String)
-  This.Idx = SafDeclare(nm, "lpg")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Lpg.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.Cv.Path = nm + ".cv"
   This.Resp.Path = nm + ".resp"
+End Sub
+
+Sub Lpg.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "lpg")
 End Sub
 
 '' karplus — declaration keys: freq
@@ -401,15 +559,23 @@ Type Karplus Extends Module
     Gate As Port
     Amp As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Karplus.Init(nm As String)
-  This.Idx = SafDeclare(nm, "karplus")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Karplus.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.Pitch.Path = nm + ".pitch"
   This.Gate.Path = nm + ".gate"
   This.Amp.Path = nm + ".amp"
+End Sub
+
+Sub Karplus.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "karplus")
 End Sub
 
 '' modal — declaration keys: freq
@@ -419,15 +585,23 @@ Type Modal Extends Module
     Gate As Port
     Amp As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Modal.Init(nm As String)
-  This.Idx = SafDeclare(nm, "modal")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Modal.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.Pitch.Path = nm + ".pitch"
   This.Gate.Path = nm + ".gate"
   This.Amp.Path = nm + ".amp"
+End Sub
+
+Sub Modal.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "modal")
 End Sub
 
 '' bowed — declaration keys: freq
@@ -437,15 +611,23 @@ Type Bowed Extends Module
     Gate As Port
     Amp As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Bowed.Init(nm As String)
-  This.Idx = SafDeclare(nm, "bowed")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Bowed.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.Pitch.Path = nm + ".pitch"
   This.Gate.Path = nm + ".gate"
   This.Amp.Path = nm + ".amp"
+End Sub
+
+Sub Bowed.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "bowed")
 End Sub
 
 '' reed — declaration keys: freq
@@ -455,15 +637,23 @@ Type Reed Extends Module
     Gate As Port
     Amp As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Reed.Init(nm As String)
-  This.Idx = SafDeclare(nm, "reed")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Reed.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.Pitch.Path = nm + ".pitch"
   This.Gate.Path = nm + ".gate"
   This.Amp.Path = nm + ".amp"
+End Sub
+
+Sub Reed.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "reed")
 End Sub
 
 '' fmop — declaration keys: detune, feedback, fixedfreq, ratio
@@ -474,16 +664,24 @@ Type Fmop Extends Module
     Amp As Port
     Phasem As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Fmop.Init(nm As String)
-  This.Idx = SafDeclare(nm, "fmop")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Fmop.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.Pitch.Path = nm + ".pitch"
   This.Gate.Path = nm + ".gate"
   This.Amp.Path = nm + ".amp"
   This.Phasem.Path = nm + ".phasem"
+End Sub
+
+Sub Fmop.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "fmop")
 End Sub
 
 '' inst — declaration keys: freq, instrument, library, preset, source
@@ -494,16 +692,24 @@ Type Inst Extends Module
     Amp As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Inst.Init(nm As String)
-  This.Idx = SafDeclare(nm, "inst")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Inst.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.Pitch.Path = nm + ".pitch"
   This.Gate.Path = nm + ".gate"
   This.Amp.Path = nm + ".amp"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Inst.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "inst")
 End Sub
 
 '' pan
@@ -513,15 +719,23 @@ Type Pan Extends Module
     Pan As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Pan.Init(nm As String)
-  This.Idx = SafDeclare(nm, "pan")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Pan.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.Pan.Path = nm + ".pan"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Pan.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "pan")
 End Sub
 
 '' width
@@ -532,16 +746,24 @@ Type Widener Extends Module
     Width As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Widener.Init(nm As String)
-  This.Idx = SafDeclare(nm, "width")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Widener.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.InR.Path = nm + ".inR"
   This.Width.Path = nm + ".width"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Widener.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "width")
 End Sub
 
 '' space — declaration keys: doppler, max, ref, rolloff
@@ -553,10 +775,13 @@ Type Room Extends Module
     Z As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Room.Init(nm As String)
-  This.Idx = SafDeclare(nm, "space")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Room.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
@@ -566,20 +791,33 @@ Sub Room.Init(nm As String)
   This.OutR.Path = nm + ".outR"
 End Sub
 
+Sub Room.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "space")
+End Sub
+
 '' formant — declaration keys: body, kind
 Type Formant Extends Module
   Public:
     In As Port
     Mix As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Formant.Init(nm As String)
-  This.Idx = SafDeclare(nm, "formant")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Formant.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.Mix.Path = nm + ".mix"
+End Sub
+
+Sub Formant.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "formant")
 End Sub
 
 '' tube — declaration keys: mode
@@ -590,16 +828,24 @@ Type Tube Extends Module
     Res As Port
     Mix As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Tube.Init(nm As String)
-  This.Idx = SafDeclare(nm, "tube")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Tube.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.Freq.Path = nm + ".freq"
   This.Res.Path = nm + ".res"
   This.Mix.Path = nm + ".mix"
+End Sub
+
+Sub Tube.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "tube")
 End Sub
 
 '' sdelay — declaration keys: feedback, moddepth, modrate, time
@@ -610,16 +856,24 @@ Type Sdelay Extends Module
     Mix As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Sdelay.Init(nm As String)
-  This.Idx = SafDeclare(nm, "sdelay")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Sdelay.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.InR.Path = nm + ".inR"
   This.Mix.Path = nm + ".mix"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Sdelay.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "sdelay")
 End Sub
 
 '' schorus — declaration keys: depth, rate, voices
@@ -630,16 +884,24 @@ Type Schorus Extends Module
     Mix As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Schorus.Init(nm As String)
-  This.Idx = SafDeclare(nm, "schorus")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Schorus.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.InR.Path = nm + ".inR"
   This.Mix.Path = nm + ".mix"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Schorus.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "schorus")
 End Sub
 
 '' sflanger
@@ -650,16 +912,24 @@ Type Sflanger Extends Module
     Mix As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Sflanger.Init(nm As String)
-  This.Idx = SafDeclare(nm, "sflanger")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Sflanger.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.InR.Path = nm + ".inR"
   This.Mix.Path = nm + ".mix"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Sflanger.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "sflanger")
 End Sub
 
 '' sphaser
@@ -670,16 +940,24 @@ Type Sphaser Extends Module
     Mix As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Sphaser.Init(nm As String)
-  This.Idx = SafDeclare(nm, "sphaser")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Sphaser.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.InR.Path = nm + ".inR"
   This.Mix.Path = nm + ".mix"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Sphaser.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "sphaser")
 End Sub
 
 '' sreverb — declaration keys: damping, size, width
@@ -690,16 +968,24 @@ Type Sreverb Extends Module
     Mix As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Sreverb.Init(nm As String)
-  This.Idx = SafDeclare(nm, "sreverb")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Sreverb.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.InR.Path = nm + ".inR"
   This.Mix.Path = nm + ".mix"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Sreverb.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "sreverb")
 End Sub
 
 '' scomp — declaration keys: ratio, threshold
@@ -710,16 +996,24 @@ Type Scomp Extends Module
     Mix As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Scomp.Init(nm As String)
-  This.Idx = SafDeclare(nm, "scomp")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Scomp.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.InR.Path = nm + ".inR"
   This.Mix.Path = nm + ".mix"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Scomp.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "scomp")
 End Sub
 
 '' slimiter
@@ -730,16 +1024,24 @@ Type Slimiter Extends Module
     Mix As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Slimiter.Init(nm As String)
-  This.Idx = SafDeclare(nm, "slimiter")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Slimiter.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.InR.Path = nm + ".inR"
   This.Mix.Path = nm + ".mix"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Slimiter.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "slimiter")
 End Sub
 
 '' sdist — declaration keys: drive, gain, tone
@@ -750,16 +1052,24 @@ Type Sdist Extends Module
     Mix As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Sdist.Init(nm As String)
-  This.Idx = SafDeclare(nm, "sdist")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Sdist.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.InR.Path = nm + ".inR"
   This.Mix.Path = nm + ".mix"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Sdist.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "sdist")
 End Sub
 
 '' sautospace — declaration keys: reflect, size, width
@@ -770,16 +1080,24 @@ Type Sautospace Extends Module
     Mix As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Sautospace.Init(nm As String)
-  This.Idx = SafDeclare(nm, "sautospace")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Sautospace.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.InR.Path = nm + ".inR"
   This.Mix.Path = nm + ".mix"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Sautospace.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "sautospace")
 End Sub
 
 '' sbody — declaration keys: body, kind, width
@@ -790,16 +1108,24 @@ Type Sbody Extends Module
     Mix As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Sbody.Init(nm As String)
-  This.Idx = SafDeclare(nm, "sbody")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Sbody.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.InR.Path = nm + ".inR"
   This.Mix.Path = nm + ".mix"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Sbody.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "sbody")
 End Sub
 
 '' sconv — declaration keys: ir, irraw
@@ -810,16 +1136,24 @@ Type Sconv Extends Module
     Mix As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Sconv.Init(nm As String)
-  This.Idx = SafDeclare(nm, "sconv")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Sconv.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.InR.Path = nm + ".inR"
   This.Mix.Path = nm + ".mix"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Sconv.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "sconv")
 End Sub
 
 '' seq3 — declaration keys: gain, bNtype, bNfreq, bNgain, bNq, bNoff  (N = 0..7)
@@ -830,16 +1164,24 @@ Type Seq3 Extends Module
     Mix As Port
     OutR As Port
     Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
 End Type
 
-Sub Seq3.Init(nm As String)
-  This.Idx = SafDeclare(nm, "seq3")
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Seq3.Bind(nm As String)
+  This.Idx = -1
   This.Nm = nm
   This.Out.Path = nm + ".out"
   This.In.Path = nm + ".in"
   This.InR.Path = nm + ".inR"
   This.Mix.Path = nm + ".mix"
   This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Seq3.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "seq3")
 End Sub
 
 '' Printing. One place, at the end, so declarations may come in any order.
@@ -852,6 +1194,13 @@ Sub SafEmit()
     Print "voices " + Str(safVoices)
   End If
   Print ""
+  For i = 0 To safIncN - 1
+    Dim As String inc
+    inc = "include " + Chr(34) + safIncFile(i) + Chr(34) + " as " + safIncPrefix(i)
+    If safIncHash(i) <> "" Then inc = inc + " hash=" + safIncHash(i)
+    Print inc
+  Next
+  If safIncN > 0 Then Print ""
   For i = 0 To safModN - 1
     Print "module " + safModName(i) + " = " + safModType(i) + safModKeys(i)
   Next

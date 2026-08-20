@@ -157,6 +157,11 @@ begin
   WriteLn('Dim Shared As Integer safLinkNorm(0 To 1023)');
   WriteLn('Dim Shared As Integer safLinkN');
   WriteLn;
+  WriteLn('Dim Shared As String  safIncFile(0 To 31)');
+  WriteLn('Dim Shared As String  safIncPrefix(0 To 31)');
+  WriteLn('Dim Shared As String  safIncHash(0 To 31)');
+  WriteLn('Dim Shared As Integer safIncN');
+  WriteLn;
   WriteLn('Dim Shared As String  safOutPath(0 To 15)');
   WriteLn('Dim Shared As Double  safOutPos(0 To 15)');
   WriteLn('Dim Shared As Integer safOutHasPos(0 To 15)');
@@ -185,6 +190,16 @@ begin
   WriteLn('  safLinkAmt(safLinkN) = amount');
   WriteLn('  safLinkNorm(safLinkN) = normalled');
   WriteLn('  safLinkN = safLinkN + 1');
+  WriteLn('End Sub');
+  WriteLn;
+  WriteLn(''''' An included file brings in modules under a prefix. They are NOT declared');
+  WriteLn(''''' here — the engine reads the other file — so the objects that stand for');
+  WriteLn(''''' them are Bind-ed rather than Init-ed.');
+  WriteLn('Sub SafInclude(file As String, prefix As String, hash As String)');
+  WriteLn('  safIncFile(safIncN) = file');
+  WriteLn('  safIncPrefix(safIncN) = prefix');
+  WriteLn('  safIncHash(safIncN) = hash');
+  WriteLn('  safIncN = safIncN + 1');
   WriteLn('End Sub');
   WriteLn;
   WriteLn('Sub SafOutput(path As String)');
@@ -243,12 +258,19 @@ begin
   WriteLn('    Declare Sub KeyN(k As String, v As Double)');
   WriteLn('End Type');
   WriteLn;
+  WriteLn(''''' Idx = -1 means "declared somewhere else", i.e. bound to an included');
+  WriteLn(''''' module. Its keys belong to the file that declares it, so they are');
+  WriteLn(''''' refused here rather than written into a slot that is not ours.');
   WriteLn('Sub Module.Key(k As String, v As String)');
-  WriteLn('  safModKeys(This.Idx) = safModKeys(This.Idx) + " " + k + "=" + v');
+  WriteLn('  If This.Idx >= 0 Then');
+  WriteLn('    safModKeys(This.Idx) = safModKeys(This.Idx) + " " + k + "=" + v');
+  WriteLn('  End If');
   WriteLn('End Sub');
   WriteLn;
   WriteLn('Sub Module.KeyN(k As String, v As Double)');
-  WriteLn('  safModKeys(This.Idx) = safModKeys(This.Idx) + " " + k + "=" + Str(v)');
+  WriteLn('  If This.Idx >= 0 Then');
+  WriteLn('    safModKeys(This.Idx) = safModKeys(This.Idx) + " " + k + "=" + Str(v)');
+  WriteLn('  End If');
   WriteLn('End Sub');
 
   Types := AllTypes;
@@ -276,10 +298,13 @@ begin
           WriteLn('    ', FieldNameOf(P.Name), ' As Port');
         end;
         WriteLn('    Declare Sub Init(nm As String)');
+        WriteLn('    Declare Sub Bind(nm As String)');
         WriteLn('End Type');
         WriteLn;
-        WriteLn('Sub ', TypeNameOf(T), '.Init(nm As String)');
-        WriteLn('  This.Idx = SafDeclare(nm, "', T, '")');
+        WriteLn(''''' Bind names the ports without declaring the module: for something');
+        WriteLn(''''' an included file already declared.');
+        WriteLn('Sub ', TypeNameOf(T), '.Bind(nm As String)');
+        WriteLn('  This.Idx = -1');
         WriteLn('  This.Nm = nm');
         WriteLn('  This.Out.Path = nm + ".out"');
         for J := 0 to M.PortCount - 1 do
@@ -288,6 +313,11 @@ begin
           if SameText(P.Name, 'out') and (P.Kind = pkOutput) then Continue;
           WriteLn('  This.', FieldNameOf(P.Name), '.Path = nm + ".', P.Name, '"');
         end;
+        WriteLn('End Sub');
+        WriteLn;
+        WriteLn('Sub ', TypeNameOf(T), '.Init(nm As String)');
+        WriteLn('  This.Bind(nm)');
+        WriteLn('  This.Idx = SafDeclare(nm, "', T, '")');
         WriteLn('End Sub');
       finally
         M.Free;
@@ -308,6 +338,13 @@ begin
   WriteLn('    Print "voices " + Str(safVoices)');
   WriteLn('  End If');
   WriteLn('  Print ""');
+  WriteLn('  For i = 0 To safIncN - 1');
+  WriteLn('    Dim As String inc');
+  WriteLn('    inc = "include " + Chr(34) + safIncFile(i) + Chr(34) + " as " + safIncPrefix(i)');
+  WriteLn('    If safIncHash(i) <> "" Then inc = inc + " hash=" + safIncHash(i)');
+  WriteLn('    Print inc');
+  WriteLn('  Next');
+  WriteLn('  If safIncN > 0 Then Print ""');
   WriteLn('  For i = 0 To safModN - 1');
   WriteLn('    Print "module " + safModName(i) + " = " + safModType(i) + safModKeys(i)');
   WriteLn('  Next');
@@ -350,7 +387,8 @@ type
   end;
 
 var
-  Decls: array of TDecl;
+  Decls: array of TDecl;      // dichiarati in questo file
+  Bound: array of TDecl;      // portati da un include: esistono, ma altrove
 
 function KindOfModule(const AName: string): string;
 var
@@ -358,6 +396,8 @@ var
 begin
   for I := 0 to High(Decls) do
     if SameText(Decls[I].Name, AName) then Exit(Decls[I].Kind);
+  for I := 0 to High(Bound) do
+    if SameText(Bound[I].Name, AName) then Exit(Bound[I].Kind);
   Result := '';
 end;
 
@@ -415,6 +455,70 @@ begin
     Result := AText;
 end;
 
+// Read an included file (and anything IT includes) and record what it declares,
+// under the prefix it was given. The modules are not ours to declare — the
+// engine reads the other file — but every connection to them needs a name, so
+// they are recorded and later bound rather than initialised.
+//
+// The prefix chains, exactly as the loader chains it: an include inside an
+// include is `outer.inner.name`. Depth is capped at 8 for the same reason the
+// loader caps it: past that it is a cycle, not a design.
+procedure CollectIncluded(const AFile, APrefix, ABaseDir: string; ADepth: Integer);
+var
+  Src: TStringList;
+  I, K: Integer;
+  Line, Nm, IncName, IncPrefix, IncPath: string;
+  W: TStringArray;
+begin
+  if ADepth >= 8 then Exit;
+  if not FileExists(AFile) then
+  begin
+    WriteLn(StdErr, 'include: file non trovato: ', AFile);
+    Halt(3);
+  end;
+  Src := TStringList.Create;
+  try
+    Src.LoadFromFile(AFile);
+    for I := 0 to Src.Count - 1 do
+    begin
+      Line := Trim(Src[I]);
+      K := Pos('#', Line); if K > 0 then Line := Trim(Copy(Line, 1, K - 1));
+      if Line = '' then Continue;
+      W := SplitWords(Line);
+      if Length(W) = 0 then Continue;
+
+      if SameText(W[0], 'module') and (Length(W) >= 3) then
+      begin
+        if (Length(W[1]) > 0) and (W[1][Length(W[1])] = '=') then
+        begin
+          Nm := Copy(W[1], 1, Length(W[1]) - 1);
+          SetLength(Bound, Length(Bound) + 1);
+          Bound[High(Bound)].Name := APrefix + '.' + Nm;
+          Bound[High(Bound)].Kind := W[2];
+        end
+        else if (Length(W) >= 4) and (W[2] = '=') then
+        begin
+          SetLength(Bound, Length(Bound) + 1);
+          Bound[High(Bound)].Name := APrefix + '.' + W[1];
+          Bound[High(Bound)].Kind := W[3];
+        end;
+      end
+      else if SameText(W[0], 'include') and (Length(W) >= 4) and SameText(W[2], 'as') then
+      begin
+        IncName := W[1];
+        if (Length(IncName) >= 2) and (IncName[1] = '"') then
+          IncName := Copy(IncName, 2, Length(IncName) - 2);
+        IncPrefix := APrefix + '.' + W[3];
+        if ABaseDir <> '' then IncPath := IncludeTrailingPathDelimiter(ABaseDir) + IncName
+                          else IncPath := IncName;
+        CollectIncluded(IncPath, IncPrefix, ExtractFilePath(IncPath), ADepth + 1);
+      end;
+    end;
+  finally
+    Src.Free;
+  end;
+end;
+
 procedure EmitProgram(const AFile: string);
 var
   Src: TStringList;
@@ -431,20 +535,21 @@ begin
   try
     Src.LoadFromFile(AFile);
 
-    // An `include` brings in modules this reader never sees declared, so every
-    // connection to them would dangle. Refusing is the only honest answer: a
-    // program that looks right and is not is worse than no program.
+    // pass 0: follow every include and record what it brings in, so that pass 2
+    // can name the modules it connects to. They are recorded, not declared.
+    SetLength(Bound, 0);
     for I := 0 to Src.Count - 1 do
     begin
       Line := Trim(Src[I]);
       K := Pos('#', Line); if K > 0 then Line := Trim(Copy(Line, 1, K - 1));
-      if LowerCase(Copy(Line, 1, 8)) = 'include ' then
+      if Line = '' then Continue;
+      W := SplitWords(Line);
+      if (Length(W) >= 4) and SameText(W[0], 'include') and SameText(W[2], 'as') then
       begin
-        WriteLn(StdErr, ExtractFileName(AFile),
-                ': usa `include`, che questo traduttore non sa ancora seguire.');
-        WriteLn(StdErr, '  I moduli inclusi non verrebbero dichiarati e le connessioni');
-        WriteLn(StdErr, '  a loro resterebbero appese. Niente in uscita, di proposito.');
-        Halt(3);
+        Nm := W[1];
+        if (Length(Nm) >= 2) and (Nm[1] = '"') then Nm := Copy(Nm, 2, Length(Nm) - 2);
+        CollectIncluded(ExtractFilePath(AFile) + Nm, W[3],
+                        ExtractFilePath(ExtractFilePath(AFile) + Nm), 1);
       end;
     end;
 
@@ -484,10 +589,20 @@ begin
     WriteLn;
     for I := 0 to High(Decls) do
       WriteLn('Dim As ', TypeNameOf(Decls[I].Kind), ' Ptr ', VarNameOf(Decls[I].Name));
+    for I := 0 to High(Bound) do
+      WriteLn('Dim As ', TypeNameOf(Bound[I].Kind), ' Ptr ', VarNameOf(Bound[I].Name));
     WriteLn;
     for I := 0 to High(Decls) do
       WriteLn(VarNameOf(Decls[I].Name), ' = New ', TypeNameOf(Decls[I].Kind),
               ' : ', VarNameOf(Decls[I].Name), '->Init("', Decls[I].Name, '")');
+    if Length(Bound) > 0 then
+    begin
+      WriteLn;
+      WriteLn(''' these are declared by the included file: bound, not initialised');
+      for I := 0 to High(Bound) do
+        WriteLn(VarNameOf(Bound[I].Name), ' = New ', TypeNameOf(Bound[I].Kind),
+                ' : ', VarNameOf(Bound[I].Name), '->Bind("', Bound[I].Name, '")');
+    end;
     WriteLn;
 
     // pass 2: everything else, IN ORDER — the order of connections into one
@@ -529,6 +644,17 @@ begin
           else
             WriteLn(VarNameOf(Nm), '->Key("', Src1, '", "', S, '")');
         end;
+      end
+      else if Cmd = 'include' then
+      begin
+        if (Length(W) < 4) or (not SameText(W[2], 'as')) then Continue;
+        Nm := W[1];
+        if (Length(Nm) >= 2) and (Nm[1] = '"') then Nm := Copy(Nm, 2, Length(Nm) - 2);
+        S := '';
+        for J := 4 to High(W) do
+          if LowerCase(Copy(W[J], 1, 5)) = 'hash=' then
+            S := Copy(W[J], 6, Length(W[J]));
+        WriteLn('SafInclude("', Nm, '", "', W[3], '", "', S, '")');
       end
       else if Cmd = 'voices' then
         WriteLn('safVoices = ', W[1])

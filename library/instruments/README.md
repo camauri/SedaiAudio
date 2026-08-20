@@ -51,9 +51,20 @@ touching the registry.
 
 `patch_bas` lifts an existing `.patch` back into MODERN. That exists mostly to
 be a **test**: `.patch → .bas → sb → .patch'` and then require `.patch'` to
-render *byte-identically*. Over the shipped library that is currently **24 of
-24**, with two effect patches skipped (they need an audio input, as
-`patch_fixture` also skips them) and one refused — see the traps.
+render *byte-identically*. Over the shipped library that is **25 of 25**, with
+two effect patches skipped — they need an audio input, as `patch_fixture` also
+skips them.
+
+An `include` is followed, and preserved rather than flattened: the lifted
+program calls `SafInclude` and the modules the other file declares are **bound**
+instead of initialised, because they are not this file's to declare. The prefix
+chains the way the loader chains it, so an include inside an include is
+`outer.inner.name`.
+
+⚠️ **A regenerated patch that uses `include` must sit beside the original.**
+The include path is relative to the patch file, so writing the regenerated one
+into a different directory breaks it — which looks exactly like a wrong
+translation until you read the error.
 
 ## Traps, all of them measured
 
@@ -76,11 +87,6 @@ violation on the first nested member access, read or write. As a local, or as an
 array of pointers, it works. So modules are held as `Ptr` and allocated with
 `New` — which is what polymorphism wants anyway: an array declared `As Osc`
 could not hold a `Saw`.
-
-**`include` is not followed yet.** A `.patch` that includes another is refused by
-the lifter rather than half-translated, because the included modules would never
-be declared and every connection to them would dangle. `moog_shared.patch` is
-the one that hits this.
 
 **The order of connections is part of the sound.** An input sums its sources in
 the order they were declared, which is what makes the velocity trick in
