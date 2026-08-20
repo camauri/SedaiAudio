@@ -24,7 +24,7 @@ The user handles compilation. For reference only:
 - **Language**: Free Pascal (FPC), `{$mode objfpc}{$H+}`
 - **Build scripts**: `build.ps1` (Windows) / `build.sh` (Linux/macOS) — functionally equivalent ports; `setup.ps1` / `setup.sh` fetch deps
   - PowerShell `-Switch` ⇄ bash `--switch` (`-Target x` ⇄ `--target x`, `-SkipDemos` ⇄ `--skip-demos`, ...); the mapping is in each script's header
-- **Targets**: `sng_player`, `sng_dump` (tool) · `saf_play`, `demo_synth` (demo) · `test_saf_main`, `audiotest`, `sedaisid_test`, `saf_regression` (test)
+- **Targets**: `sng_player`, `sng_dump`, `patch_bas` (tool) · `saf_play`, `demo_synth` (demo) · `test_saf_main`, `audiotest`, `sedaisid_test`, `saf_regression` (test)
   - Build one: `./build.ps1 -Target sng_player` / `./build.sh --target sng_player`  (add `-Clean` / `--clean` to rebuild)
 - **Output**: `bin/<cpu>-<os>/` (executables), `lib/<cpu>-<os>/` (compiled units) — Linux artefacts live in `bin/x86_64-linux/`, Windows ones in `bin/x86_64-win64/`
 - **Platform flags**: `-CPU`/`--cpu` `x86_64|i386|aarch64`, `-OS`/`--os` `win64|win32|linux|darwin` (the .sh defaults to the host)
@@ -65,6 +65,14 @@ Sedai Audio Foundation (SAF) is a modular Free Pascal audio framework.
 messaggi d'errore veri, e la **referenza dei moduli generata** da `patch_doc`
 interrogando il registro — non trascritta, quindi non può divergere. Si rigenera
 con `bin/<plat>/patch_doc`.
+
+**Strumenti in SedaiBasic MODERN (2026-08-20)**: `library/instruments/` — un
+`.bas` eseguito da `sb` STAMPA un `.patch`, quindi si possono usare cicli,
+ereditarieta' e conti veri per costruire uno strumento. I due progetti non si
+nominano: `sb` stampa testo, SAF legge un `.patch`. `patch_bas --lib` genera la
+libreria MODERN dal registro; `patch_bas <f.patch>` fa il verso inverso.
+Collaudo: `.patch -> .bas -> sb -> .patch'` rende identico su 24 patch su 24.
+⚠️ **`sb` esce 0 anche quando fallisce**: controllare l'uscita, mai il codice.
 
 Fixture sonore in `library/patches/fixtures.txt`: `bin/<plat>/patch_fixture` dice
 quali patch sono cambiate e di quanto (picco, RMS, centroide). `--update` per

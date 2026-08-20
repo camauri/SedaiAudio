@@ -869,6 +869,12 @@ $allTargets = @{
         Output = 'saf_regression.exe'
         Kind = 'test'
     }
+    'patch_bas' = @{
+        Source = 'patch_bas.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'test')
+        Output = 'patch_bas.exe'
+        Kind = 'tool'
+    }
 }
 
 # Adjust extension based on OS

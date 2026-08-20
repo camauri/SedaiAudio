@@ -167,6 +167,7 @@ show_help() {
     echo "    audiotest         Audio backend test                 [test]"
     echo "    sedaisid_test     SedaiSIDEvo verification test      [test]"
     echo "    saf_regression    Headless render-path regression    [test]"
+    echo "    patch_bas         .patch <-> SedaiBasic MODERN bridge [tool]"
     echo ""
     echo -e "${YELLOW}EXAMPLES:${NC}"
     echo "    ./build.sh                              # Build tools (+ demo prompt)"
@@ -620,6 +621,7 @@ ALL_TARGETS=(
     "audiotest|audiotest.lpr|$TEST_DIR|audiotest|test"
     "sedaisid_test|sedaisid_test.lpr|$TEST_DIR|sedaisid_test|test"
     "saf_regression|saf_regression.lpr|$TEST_DIR|saf_regression|test"
+    "patch_bas|patch_bas.lpr|$TEST_DIR|patch_bas|tool"
 )
 
 target_field() {   # target_field <name> <index 2..5>
