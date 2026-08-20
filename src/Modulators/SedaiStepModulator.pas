@@ -13,7 +13,7 @@ unit SedaiStepModulator;
 interface
 
 uses
-  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject;
+  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiRandom;
 
 const
   MAX_STEPS = 64;
@@ -48,6 +48,9 @@ type
   // Step sequencer for modulation
   TSedaiStepModulator = class(TSedaiAudioObject)
   private
+    // Its own stream: a random walk that borrowed the global one would change
+    // whenever anything else in the program drew a number.
+    FRandom: TSedaiRandom;
     // Step data
     FSteps: array[0..MAX_STEPS-1] of TStepData;
     FStepCount: Integer;
@@ -143,6 +146,7 @@ var
 begin
   inherited Create;
 
+  FRandom.Seed(SedaiNextSeed);
   FStepCount := DEFAULT_STEPS;
 
   // Initialize all steps
@@ -271,11 +275,11 @@ begin
       end;
 
     sdRandom:
-      Result := Random(FStepCount);
+      Result := FRandom.NextBelow(FStepCount);
 
     sdRandomWalk:
       begin
-        if Random(2) = 0 then
+        if FRandom.NextBelow(2) = 0 then
           Result := FCurrentStep + 1
         else
           Result := FCurrentStep - 1;
@@ -384,7 +388,7 @@ var
   I: Integer;
 begin
   for I := 0 to FStepCount - 1 do
-    FSteps[I].Value := AMin + Random * (AMax - AMin);
+    FSteps[I].Value := AMin + FRandom.NextFloat * (AMax - AMin);
 end;
 
 procedure TSedaiStepModulator.Start;

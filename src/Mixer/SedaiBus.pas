@@ -13,7 +13,8 @@ unit SedaiBus;
 interface
 
 uses
-  Classes, SysUtils, Math, SedaiAudioTypes, SedaiSignalNode, SedaiFilter, SedaiEffect;
+  Classes, SysUtils, Math, SedaiAudioTypes, SedaiSignalNode, SedaiFilter, SedaiEffect,
+  SedaiRandom;
 
 const
   MAX_BUS_INSERTS = 8;
@@ -136,6 +137,10 @@ type
   // Master output bus with limiting
   TSedaiMasterBus = class(TSedaiBus)
   private
+    // Dither must be its OWN noise. Sharing a stream with the instruments is
+    // how dither stops being independent of the signal, which is the one thing
+    // dither has to be.
+    FRandom: TSedaiRandom;
     FLimiterEnabled: Boolean;
     FLimiterThreshold: Single;    // dB
     FLimiterRelease: Single;      // ms
@@ -474,6 +479,7 @@ constructor TSedaiMasterBus.Create;
 begin
   inherited Create;
 
+  FRandom.Seed(SedaiNextSeed);
   FBusType := btMaster;
   FName := 'Master';
 
@@ -544,7 +550,7 @@ var
 begin
   // Triangular PDF dither
   Scale := 1.0 / (1 shl (FDitherBits - 1));
-  Result := (Random - 0.5 + Random - 0.5) * Scale;
+  Result := (FRandom.NextFloat - 0.5 + FRandom.NextFloat - 0.5) * Scale;
 end;
 
 procedure TSedaiMasterBus.ProcessBlock(AInput, AOutput: PSingle; AFrameCount: Integer);

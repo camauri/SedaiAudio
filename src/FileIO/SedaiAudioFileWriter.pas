@@ -15,7 +15,8 @@ unit SedaiAudioFileWriter;
 interface
 
 uses
-  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer, SedaiFLACEncoder;
+  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioBuffer, SedaiFLACEncoder,
+  SedaiRandom;
 
 type
   // Export format settings
@@ -67,6 +68,9 @@ type
   // Unified audio file writer
   TSedaiAudioFileWriter = class
   private
+    // Dither has to be independent of the signal, so it gets its own stream
+    // rather than one shared with whatever generated the audio.
+    FRandom: TSedaiRandom;
     FStream: TStream;
     FOwnsStream: Boolean;
     FSettings: TAudioExportSettings;
@@ -167,6 +171,7 @@ implementation
 
 constructor TSedaiAudioFileWriter.Create;
 begin
+  FRandom.Seed(SedaiNextSeed);
   FStream := nil;
   FOwnsStream := False;
   FIsOpen := False;
@@ -195,9 +200,9 @@ function TSedaiAudioFileWriter.GetDitherSample: Single;
 begin
   case FSettings.DitherType of
     dtRPDF:
-      Result := (Random - 0.5) / 32768.0;
+      Result := (FRandom.NextFloat - 0.5) / 32768.0;
     dtTPDF:
-      Result := ((Random - 0.5) + (Random - 0.5)) / 32768.0;
+      Result := ((FRandom.NextFloat - 0.5) + (FRandom.NextFloat - 0.5)) / 32768.0;
   else
     Result := 0;
   end;
@@ -208,7 +213,7 @@ var
   Dither: Single;
 begin
   // Simple first-order noise shaping
-  Dither := ((Random - 0.5) + (Random - 0.5)) / 32768.0;
+  Dither := ((FRandom.NextFloat - 0.5) + (FRandom.NextFloat - 0.5)) / 32768.0;
   Result := Dither - 0.5 * FNoiseShapeBuffer[AChannel];
   FNoiseShapeBuffer[AChannel] := Dither;
 end;

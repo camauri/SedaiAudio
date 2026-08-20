@@ -26,7 +26,8 @@ uses
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
   SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
   SedaiSpatialChain, SedaiConvolver, SedaiTubeResonator, SedaiFormantBody,
-  SedaiPatchGraph, SedaiPatchModules, SedaiPatchEvents, SedaiPatchVoices;
+  SedaiPatchGraph, SedaiPatchModules, SedaiPatchEvents, SedaiPatchVoices,
+  SedaiRandom;
 
 const
   SR    = 44100;
@@ -1005,12 +1006,14 @@ var
   ms: TMemoryStream;
   idx: Integer;
 
-  // Render a part's middle-C note. ASeed forces the RNG so techniques that excite
-  // with noise (Karplus) stay deterministic across two renders.
+  // Render a part's middle-C note. Determinism no longer comes from forcing a
+  // global seed here: each generator owns its own, handed out at construction,
+  // so the two Parts are made comparable by restarting the seed dispenser
+  // before each is BUILT (see below). ASeed is kept for the call sites and is
+  // what the dispenser restarts from.
   procedure Render(APart: TSAFPart; var ABuf: array of Single; AFrames: Integer; ASeed: LongInt);
   begin
     APart.SetSampleRate(SR);
-    RandSeed := ASeed;
     APart.NoteOn(60, 1.0);
     FillChar(ABuf[0], AFrames * 2 * SizeOf(Single), 0);
     APart.RenderBlock(@ABuf[0], AFrames);
@@ -1025,10 +1028,16 @@ var
     j: Integer;
     md, pk: Single;
   begin
-    pa := TSAFPart.Create;
-    pb := TSAFPart.Create;
+    pa := nil; pb := nil;
     try
+      // Restart the dispenser before each Part is BUILT: both then construct
+      // the same generators in the same order and are handed the same seeds,
+      // which is what makes a bit-for-bit comparison mean anything.
+      SedaiSeedSequence(QWord(ASeed));
+      pa := TSAFPart.Create;
       pa.SetSampleRate(SR); pa.SetInstrument(ASource, AKey);
+      SedaiSeedSequence(QWord(ASeed));
+      pb := TSAFPart.Create;
       pb.SetSampleRate(SR); pb.SetInstrument(ASource, AKey);
       AConfigureBlock(pb, AKey);    // apply the exploded full-parameter block
       Render(pa, bufA, frames, ASeed);
@@ -2053,9 +2062,13 @@ begin
     ga.SetMicroInstability(5, 0.1, 5); gb.SetMicroInstability(5, 0.1, 5);
     gb.SetUnison(1, 20, 0.02);        // 1 voice = off, must not perturb anything
     n := TSR div 2; SetLength(bufa, n); SetLength(bufb, n);
-    RandSeed := 555; ga.NoteOn(60, 1.0);
+    // Each generator owns its randomness now, so reproducibility is asked of
+    // the OBJECT. Setting the global RandSeed used to work only because
+    // everything drew from one stream — the very thing that made an
+    // instrument's sound depend on unrelated code.
+    ga.SetSeed(555); ga.NoteOn(60, 1.0);
     for i := 0 to n-1 do bufa[i] := ga.GenerateSample;
-    RandSeed := 555; gb.NoteOn(60, 1.0);
+    gb.SetSeed(555); gb.NoteOn(60, 1.0);
     for i := 0 to n-1 do bufb[i] := gb.GenerateSample;
     maxdiff := 0;
     for i := 0 to n-1 do if Abs(bufa[i]-bufb[i]) > maxdiff then maxdiff := Abs(bufa[i]-bufb[i]);
@@ -2066,13 +2079,13 @@ begin
   ga := TSedaiAdditiveGenerator.Create;
   try
     Setup(ga, 1);
-    RandSeed := 321; ga.NoteOn(69, 1.0);
+    ga.SetSeed(321); ga.NoteOn(69, 1.0);
     n := TSR; SetLength(bufa, n);
     for i := 0 to n-1 do bufa[i] := ga.GenerateSample;
     cvSolo := CvOf(bufa);
 
     ga.SetUnison(4, 20, 0);
-    RandSeed := 321; ga.NoteOn(69, 1.0);
+    ga.SetSeed(321); ga.NoteOn(69, 1.0);
     SetLength(bufb, n);
     for i := 0 to n-1 do bufb[i] := ga.GenerateSample;
     cvEns := CvOf(bufb);

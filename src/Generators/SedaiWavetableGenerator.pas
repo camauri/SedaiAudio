@@ -14,7 +14,8 @@ unit SedaiWavetableGenerator;
 interface
 
 uses
-  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiOscillator;
+  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiOscillator,
+  SedaiRandom;
 
 const
   DEFAULT_WAVETABLE_SIZE = 2048;
@@ -84,6 +85,9 @@ type
   // Wavetable oscillator with morphing
   TSedaiWavetableGenerator = class(TSedaiSignalGenerator)
   private
+    // Its own stream, used to scatter the unison phases. Shared, two stacked
+    // voices could be handed the SAME phases and stop being a unison at all.
+    FRandom: TSedaiRandom;
     FWavetable: TSedaiWavetable;
     FOwnsWavetable: Boolean;
 
@@ -409,6 +413,7 @@ constructor TSedaiWavetableGenerator.Create;
 begin
   inherited Create;
 
+  FRandom.Seed(SedaiNextSeed);
   FWavetable := nil;
   FOwnsWavetable := False;
 
@@ -443,7 +448,7 @@ begin
   FPhase := 0.0;
 
   for I := 0 to High(FUnisonPhases) do
-    FUnisonPhases[I] := Random;
+    FUnisonPhases[I] := FRandom.NextFloat;
 end;
 
 procedure TSedaiWavetableGenerator.SetFrequency(AValue: Single);
@@ -644,7 +649,7 @@ begin
   begin
     SetLength(FUnisonPhases, FUnisonVoices);
     for I := 0 to FUnisonVoices - 1 do
-      FUnisonPhases[I] := Random;
+      FUnisonPhases[I] := FRandom.NextFloat;
   end;
 
   FramePos := FFramePosition + FFrameModulation * FWavetable.FrameCount;

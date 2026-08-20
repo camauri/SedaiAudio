@@ -14,7 +14,8 @@ unit SedaiLFO;
 interface
 
 uses
-  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiEnvelope;
+  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiEnvelope,
+  SedaiRandom;
 
 type
   // LFO sync mode
@@ -46,6 +47,10 @@ type
   // Low frequency oscillator for modulation
   TSedaiLFO = class(TSedaiModulator)
   private
+    // This LFO's own randomness, for sample-and-hold. Not the global one: two
+    // LFOs sharing a stream would step together, which is the opposite of what
+    // sample-and-hold is for.
+    FRandom: TSedaiRandom;
     // Waveform and rate
     FWaveform: TWaveformType;
     FRate: Single;                // Rate in Hz (free mode) or beat division (tempo mode)
@@ -138,6 +143,7 @@ constructor TSedaiLFO.Create;
 begin
   inherited Create;
 
+  FRandom.Seed(SedaiNextSeed);
   FWaveform := wtSine;
   FRate := 1.0;                   // 1 Hz default
   FBeatDivision := lbd1_4;        // Quarter note
@@ -332,7 +338,7 @@ begin
 
   // Sample new random value when phase wraps
   if EffectivePhase < FPreviousPhase then
-    FSampleHoldValue := Random * 2.0 - 1.0;
+    FSampleHoldValue := FRandom.NextBipolar;
 
   FPreviousPhase := EffectivePhase;
   Result := FSampleHoldValue;

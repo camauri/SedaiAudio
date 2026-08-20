@@ -15,7 +15,7 @@ interface
 
 uses
   Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiSignalNode,
-  SedaiOscillator, SedaiEnvelope;
+  SedaiOscillator, SedaiEnvelope, SedaiRandom;
 
 const
   ADDITIVE_MAX_HARMONICS = 64;
@@ -51,6 +51,13 @@ type
   // Additive synthesis generator with per-harmonic control
   TSedaiAdditiveGenerator = class(TSedaiSignalGenerator)
   private
+    // This voice's own randomness. It feeds the breath and band noise, the
+    // slow drift of the vibrato LFOs, the scattered harmonic phases and the
+    // per-copy detune of the unison — all the things that must differ between
+    // two voices for a section to sound like a section rather than one player
+    // amplified. Drawn from the global generator they were at the mercy of
+    // whatever else in the program had drawn a number first.
+    FRandom: TSedaiRandom;
     FHarmonicCount: Integer;
 
     // Per-harmonic state
@@ -192,6 +199,9 @@ type
   public
     constructor Create; override;
     destructor Destroy; override;
+    // Make this voice's randomness reproducible. Call it before NoteOn, which
+    // is where the phases, the detune and the drift are drawn.
+    procedure SetSeed(ASeed: QWord);
 
     // From TSedaiAudioObject
     procedure SampleRateChanged; override;
@@ -295,6 +305,7 @@ var
 begin
   inherited Create;
 
+  FRandom.Seed(SedaiNextSeed);
   FHarmonicCount := ADDITIVE_DEFAULT_HARMONICS;
   FCurrentPreset := apSaw;
   FNote := -1;
@@ -344,6 +355,11 @@ begin
 
   // Default to saw wave
   LoadSawWave;
+end;
+
+procedure TSedaiAdditiveGenerator.SetSeed(ASeed: QWord);
+begin
+  FRandom.Seed(ASeed);
 end;
 
 destructor TSedaiAdditiveGenerator.Destroy;
@@ -435,7 +451,7 @@ begin
       // active harmonic every sample so the bands stay decorrelated.
       if FBandDepth > 0 then
       begin
-        FBandState[I] := FBandState[I] + FBandCoeff * ((Random * 2 - 1) - FBandState[I]);
+        FBandState[I] := FBandState[I] + FBandCoeff * ((FRandom.NextBipolar) - FBandState[I]);
         HarmonicLevel := HarmonicLevel * (1.0 + FBandDepth * FBandNorm * FBandState[I]);
         if HarmonicLevel < 0 then HarmonicLevel := 0;
       end;
@@ -508,7 +524,7 @@ begin
       if FBandDepth > 0 then
       begin
         FUniBandState[c][I] := FUniBandState[c][I] +
-          FBandCoeff * ((Random * 2 - 1) - FUniBandState[c][I]);
+          FBandCoeff * ((FRandom.NextBipolar) - FUniBandState[c][I]);
         lvl := lvl * (1.0 + FBandDepth * FBandNorm * FUniBandState[c][I]);
         if lvl < 0 then lvl := 0;
       end;
@@ -572,12 +588,12 @@ begin
     SeedUnison
   else if (FJitterCents > 0) or (FShimmerDepth > 0) or (FBreathLevel > 0) or (FVibDepthCents > 0) then
   begin
-    FLfoPCur := Random * 2 - 1; FLfoPTgt := Random * 2 - 1;
-    FLfoACur := Random * 2 - 1; FLfoATgt := Random * 2 - 1;
-    FVibPhase := Random;
+    FLfoPCur := FRandom.NextBipolar; FLfoPTgt := FRandom.NextBipolar;
+    FLfoACur := FRandom.NextBipolar; FLfoATgt := FRandom.NextBipolar;
+    FVibPhase := FRandom.NextFloat;
     for I := 0 to ADDITIVE_MAX_HARMONICS - 1 do
     begin
-      FHarmonicPhases[I] := Random;      // 0..1 (turns); decorrelates stacked voices
+      FHarmonicPhases[I] := FRandom.NextFloat;      // 0..1 (turns); decorrelates stacked voices
       FTrackCursor[I] := 0; FBandState[I] := 0;
       if FUseHarmonicEnvelopes then FHarmonicEnvelopes[I].Trigger;
     end;
@@ -676,7 +692,7 @@ begin
   // Airy breath layer: one-pole low-passed white noise, following the envelope
   if FBreathLevel > 0 then
   begin
-    FBreathState := FBreathState + FBreathCoeff * ((Random * 2 - 1) - FBreathState);
+    FBreathState := FBreathState + FBreathCoeff * ((FRandom.NextBipolar) - FBreathState);
     Result := Result + FBreathState * FBreathLevel * EnvValue * FVelocity * FAmplitude;
   end;
 
@@ -685,7 +701,7 @@ begin
   // spectral envelope. Following the amp envelope so it fades with the note.
   if FResidualLevel > 0 then
   begin
-    noise := Random * 2 - 1;
+    noise := FRandom.NextBipolar;
     resAcc := 0;
     for ri := 0 to RESIDUAL_BANDS - 1 do
       with FResidualBP[ri] do
@@ -872,8 +888,8 @@ begin
     if FLfoPhase >= 1.0 then
     begin
       FLfoPhase := FLfoPhase - 1.0;
-      FLfoPCur := FLfoPTgt; FLfoPTgt := Random * 2 - 1;
-      FLfoACur := FLfoATgt; FLfoATgt := Random * 2 - 1;
+      FLfoPCur := FLfoPTgt; FLfoPTgt := FRandom.NextBipolar;
+      FLfoACur := FLfoATgt; FLfoATgt := FRandom.NextBipolar;
     end;
     lp := FLfoPCur + (FLfoPTgt - FLfoPCur) * FLfoPhase;   // -1..1, smooth
     la := FLfoACur + (FLfoATgt - FLfoACur) * FLfoPhase;
@@ -917,8 +933,8 @@ begin
       if FUniLfoPhase[c] >= 1.0 then
       begin
         FUniLfoPhase[c] := FUniLfoPhase[c] - 1.0;
-        FUniLfoPCur[c] := FUniLfoPTgt[c]; FUniLfoPTgt[c] := Random * 2 - 1;
-        FUniLfoACur[c] := FUniLfoATgt[c]; FUniLfoATgt[c] := Random * 2 - 1;
+        FUniLfoPCur[c] := FUniLfoPTgt[c]; FUniLfoPTgt[c] := FRandom.NextBipolar;
+        FUniLfoACur[c] := FUniLfoATgt[c]; FUniLfoATgt[c] := FRandom.NextBipolar;
       end;
       lp := FUniLfoPCur[c] + (FUniLfoPTgt[c] - FUniLfoPCur[c]) * FUniLfoPhase[c];
       la := FUniLfoACur[c] + (FUniLfoATgt[c] - FUniLfoACur[c]) * FUniLfoPhase[c];
@@ -955,14 +971,14 @@ begin
   for c := 0 to FUnisonVoices - 1 do
   begin
     baseCents := (c - (FUnisonVoices - 1) / 2) * spacing;
-    jit := (Random - 0.5) * spacing;                       // +/- spacing/2
+    jit := (FRandom.NextFloat - 0.5) * spacing;                       // +/- spacing/2
     FUniDetuneRatio[c] := Power(2, (baseCents + jit) / 1200);
-    FUniVibRate[c] := FVibRate * (1 + 0.04 * (Random * 2 - 1));
-    FUniModRate[c] := FModRate * (1 + 0.04 * (Random * 2 - 1));
-    FUniVibPhase[c] := Random;
+    FUniVibRate[c] := FVibRate * (1 + 0.04 * (FRandom.NextBipolar));
+    FUniModRate[c] := FModRate * (1 + 0.04 * (FRandom.NextBipolar));
+    FUniVibPhase[c] := FRandom.NextFloat;
     FUniLfoPhase[c] := 0;
-    FUniLfoPCur[c] := Random * 2 - 1; FUniLfoPTgt[c] := Random * 2 - 1;
-    FUniLfoACur[c] := Random * 2 - 1; FUniLfoATgt[c] := Random * 2 - 1;
+    FUniLfoPCur[c] := FRandom.NextBipolar; FUniLfoPTgt[c] := FRandom.NextBipolar;
+    FUniLfoACur[c] := FRandom.NextBipolar; FUniLfoATgt[c] := FRandom.NextBipolar;
     FUniPitchMod[c] := 1.0; FUniAmpMod[c] := 1.0;
     if FUnisonAttack > 0 then
       FUniOnset[c] := (c / (FUnisonVoices - 1)) * FUnisonAttack
@@ -970,7 +986,7 @@ begin
       FUniOnset[c] := 0;
     for h := 0 to ADDITIVE_MAX_HARMONICS - 1 do
     begin
-      FUniPhases[c][h] := Random;      // decorrelate stacked copies
+      FUniPhases[c][h] := FRandom.NextFloat;   // decorrelate stacked copies
       FUniBandState[c][h] := 0;
     end;
   end;
@@ -1230,7 +1246,7 @@ begin
   begin
     FHarmonicLevels[I] := 1.0 / Power(I + 1, 0.8);
     // Add slight random detuning for chorus-like effect
-    FHarmonicDetune[I] := (Random - 0.5) * 4;
+    FHarmonicDetune[I] := (FRandom.NextFloat - 0.5) * 4;
   end;
   FCurrentPreset := apStrings;
   UpdateActiveHarmonics;
@@ -1254,7 +1270,7 @@ begin
 
   // Slight vibrato-like detuning
   for I := 0 to 11 do
-    FHarmonicDetune[I] := (Random - 0.5) * 3;
+    FHarmonicDetune[I] := (FRandom.NextFloat - 0.5) * 3;
 
   FCurrentPreset := apChoir;
   UpdateActiveHarmonics;

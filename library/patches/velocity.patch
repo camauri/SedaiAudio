@@ -1,0 +1,49 @@
+# Come si suona forte. Una voce sottrattiva in cui la velocity non fa solo
+# piu' FORTE ma anche piu' LUMINOSO — che e' come si comporta ogni strumento
+# acustico: la corda percossa piu' duramente non alza il volume soltanto, mette
+# energia nelle armoniche alte.
+#
+# Le due strade sono diverse, e la differenza e' istruttiva.
+#
+#   Sul FILTRO si SOMMA. Il cutoff e' un ingresso in volt-per-ottava, quindi
+#   sommare volt significa moltiplicare la frequenza: la velocity apre il
+#   filtro di 1.5 ottave da chiusa ad aperta, 350 Hz -> circa 990.
+#
+#   Sull'AMPIEZZA bisogna MOLTIPLICARE, e le connessioni sommano soltanto.
+#   Sommare la velocity al guadagno sarebbe un errore che si sente subito: il
+#   guadagno non tornerebbe mai a zero e la nota non finirebbe piu'. Percio'
+#   l'inviluppo passa dentro un `ring`, che e' un moltiplicatore — un VCA con
+#   un segnale di controllo da un lato.
+#
+# A velocity 1.0 il `ring` moltiplica per uno e la voce e' identica a quella di
+# basic.patch: la piena forza e' il punto di partenza, non un caso speciale.
+#
+#   bin/<plat>/patch_play library/patches/velocity.patch out.wav 3 4 60@1.0 1.5
+#   bin/<plat>/patch_play library/patches/velocity.patch out.wav 3 4 60@0.25 1.5
+
+module note = note
+module osc1 = osc    shape=saw freq=110
+module filt = filter mode=lowpass cutoff=350
+module env1 = env    a=0.004 d=0.20 s=0.55 r=0.35
+module vca  = ring
+module amp  = amp
+
+set     filt.res    = 0.30
+
+connect note.pitch -> osc1.pitch
+connect note.gate  -> env1.gate
+
+connect osc1.out   -> filt.in
+# quanto forte -> quanto luminoso: 1.5 ottave fra il tocco piu' lieve e il piu' duro
+connect note.vel   -> filt.cutoff  amount=1.5
+# e l'inviluppo che richiude il filtro dopo l'attacco, come su ogni corda
+connect env1.out   -> filt.cutoff  amount=0.7
+
+# l'inviluppo MOLTIPLICATO per la velocity, non sommato
+connect env1.out   -> vca.a
+connect note.vel   -> vca.b
+
+connect filt.out   -> amp.in
+connect vca.out    -> amp.gain     amount=0.30
+
+output  amp.out

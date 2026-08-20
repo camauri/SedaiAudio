@@ -13,7 +13,8 @@ unit SedaiNoiseGenerator;
 interface
 
 uses
-  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiOscillator;
+  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiOscillator,
+  SedaiRandom;
 
 type
   // Noise type
@@ -30,7 +31,12 @@ type
   TSedaiNoiseGenerator = class(TSedaiSignalGenerator)
   private
     FNoiseType: TNoiseType;
-    FSeed: Cardinal;              // Random seed
+    FSeed: Cardinal;              // what the caller last asked for, 0 = ours
+    // Was a linear congruential generator with the SAME fixed seed in every
+    // instance, so two noise sources in one mix produced identical noise —
+    // correlated, which is the one thing noise must not be. Now each gets its
+    // own stream, and an LCG's poor low bits are gone with it.
+    FRandom: TSedaiRandom;
 
     // Pink noise state (Voss-McCartney algorithm)
     FPinkRows: array[0..15] of Single;
@@ -80,7 +86,8 @@ begin
   inherited Create;
 
   FNoiseType := ntWhite;
-  FSeed := 22222;
+  FSeed := 0;
+  FRandom.Seed(SedaiNextSeed);
 
   // Initialize pink noise state
   for I := 0 to 15 do
@@ -122,15 +129,14 @@ end;
 procedure TSedaiNoiseGenerator.SetSeed(ASeed: Cardinal);
 begin
   FSeed := ASeed;
-  if FSeed = 0 then FSeed := 1;
+  // Any value is legal for SplitMix64, zero included, so the old "must not be
+  // 0" fix-up is gone. Setting a seed makes the noise exactly reproducible.
+  FRandom.Seed(ASeed);
 end;
 
 function TSedaiNoiseGenerator.FastRandom: Single;
 begin
-  // Linear congruential generator
-  FSeed := FSeed * 1664525 + 1013904223;
-  // Convert to float in range -1 to +1
-  Result := (FSeed / 2147483648.0) - 1.0;
+  Result := FRandom.NextBipolar;
 end;
 
 function TSedaiNoiseGenerator.GenerateWhiteNoise: Single;

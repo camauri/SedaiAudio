@@ -15,7 +15,8 @@ unit SedaiKarplusGenerator;
 interface
 
 uses
-  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiOscillator;
+  Classes, SysUtils, Math, SedaiAudioTypes, SedaiAudioObject, SedaiOscillator,
+  SedaiRandom;
 
 type
   { TSedaiKarplusGenerator }
@@ -29,6 +30,11 @@ type
     FBlend: Single;         // averaging weight (0.5 = pure string)
     FEnergy: Single;        // running level estimate, for end-of-note detection
     FGate: Boolean;
+    // The string's OWN noise. Shared with nothing: this used to draw from the
+    // global Random, which made the pluck depend on whatever else in the
+    // program had drawn a number first — see SedaiRandom's header for how that
+    // was found.
+    FRandom: TSedaiRandom;
 
     procedure RebuildDelay;
     procedure Excite(AVelocity: Single);
@@ -53,6 +59,9 @@ type
     property Damping: Single read FDamping write FDamping;
     property Blend: Single read FBlend write FBlend;
     property Gate: Boolean read FGate;
+    // Set it to make a pluck exactly reproducible; leave it and each string
+    // still gets its own, the same on every run.
+    procedure SetSeed(ASeed: QWord);
   end;
 
 implementation
@@ -70,6 +79,12 @@ begin
   FEnergy := 0.0;
   FGate := False;
   SetLength(FDelayLine, 0);
+  FRandom.Seed(SedaiNextSeed);
+end;
+
+procedure TSedaiKarplusGenerator.SetSeed(ASeed: QWord);
+begin
+  FRandom.Seed(ASeed);
 end;
 
 procedure TSedaiKarplusGenerator.Reset;
@@ -109,7 +124,7 @@ var
 begin
   // Fill the delay line with white noise scaled by velocity (the "pluck").
   for I := 0 to FDelayLength - 1 do
-    FDelayLine[I] := (Random * 2.0 - 1.0) * AVelocity;
+    FDelayLine[I] := FRandom.NextBipolar * AVelocity;
   FPos := 0;
   FEnergy := AVelocity;
 end;

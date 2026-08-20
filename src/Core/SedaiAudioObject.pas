@@ -145,6 +145,10 @@ begin
     Exit;
   end;
   // Fallback (never expected on Windows): random bytes are plenty for internal object ids.
+  // DELIBERATELY the global Random and not a TSedaiRandom: an object id wants
+  // to be unpredictable, which is the opposite of what every generator in the
+  // audio path wants. This is the one place in SAF that should keep drawing
+  // from the shared stream — do not "fix" it to match the others.
   for i := 0 to 3 do
     PCardinal(@G)[i] := Cardinal(Random($7FFFFFFF)) xor (Cardinal(Random($7FFFFFFF)) shl 1);
 end;
