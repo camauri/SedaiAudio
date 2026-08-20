@@ -9,11 +9,39 @@ module amp  = amp
 
 set     filt.res   = 0.35
 
+# --- velocity ----------------------------------------------------------------
+# Suonare piu' forte fa piu' FORTE e piu' LUMINOSO, come su ogni strumento
+# acustico: la corda percossa piu' duramente non alza solo il volume, mette
+# energia nelle armoniche alte.
+#
+# A VELOCITA' PIENA QUESTO STRUMENTO E' IDENTICO A COM'ERA, campione per
+# campione, e non per gentilezza: il knob del cutoff parte da -1.5 e la velocity
+# ne riporta 1.5, quindi a 1.0 la somma fa esattamente zero; e il `ring`
+# moltiplica l'inviluppo per 0.25 + 0.75 = 1.0 esatto. La forza piena e' il
+# punto di partenza, non un caso particolare, e la velocity puo' solo scurire e
+# attenuare a partire da li'.
+#
+# Sul GUADAGNO serve un `ring` perche' le connessioni SOMMANO: sommare la
+# velocity al guadagno lo terrebbe sopra lo zero e la nota non finirebbe mai.
+# Sul CUTOFF si somma davvero, perche' e' in volt-per-ottava e sommare volt
+# significa moltiplicare la frequenza.
+#
+# L'ORDINE DI QUESTE RIGHE CONTA. Le somme di un ingresso si accumulano
+# nell'ordine in cui sono dichiarate, e solo mettendo la velocity per prima
+# -1.5 + 1.5 fa esattamente zero prima che si aggiunga l'inviluppo.
+module vvca = ring
+set     vvca.b = 0.25                    # pianissimo = un quarto del livello
+connect note.vel -> vvca.b amount=0.75
+connect env1.out -> vvca.a
+set     filt.cutoff = -1.5
+connect note.vel -> filt.cutoff amount=1.5
+# --- fine velocity -----------------------------------------------------------
+
 connect note.pitch -> osc1.pitch
 connect lfo1.out   -> osc1.pitch  amount=0.02
 connect note.gate  -> env1.gate
 connect osc1.out   -> filt.in
 connect filt.out   -> amp.in
-connect env1.out   -> amp.gain  amount=0.3
+connect vvca.out   -> amp.gain  amount=0.3
 
 output  amp.out

@@ -11,6 +11,34 @@ module fenv = env a=0.075 d=0.45 s=0.55 r=0.22
 module aenv = env a=0.020 d=0.20 s=0.90 r=0.25
 module amp  = amp
 
+# --- velocity ----------------------------------------------------------------
+# Suonare piu' forte fa piu' FORTE e piu' LUMINOSO. Su un Minimoog i filtri sono
+# DUE in cascata, quindi la velocity ne apre due: un'ottava per ciascuno si
+# sente piu' di un'ottava su un filtro solo.
+#
+# A VELOCITA' PIENA QUESTO STRUMENTO E' IDENTICO A COM'ERA, campione per
+# campione: il knob di ogni cutoff parte da -1.0 e la velocity ne riporta 1.0,
+# quindi a 1.0 la somma fa esattamente zero; e il `ring` moltiplica l'inviluppo
+# per 0.25 + 0.75 = 1.0 esatto. La forza piena e' il punto di partenza, non un
+# caso particolare.
+#
+# Sul GUADAGNO serve un `ring` perche' le connessioni SOMMANO: sommare la
+# velocity al guadagno lo terrebbe sopra lo zero e la nota non finirebbe mai.
+# Sul CUTOFF si somma davvero, perche' e' in volt-per-ottava.
+#
+# L'ORDINE DI QUESTE RIGHE CONTA. Le somme di un ingresso si accumulano
+# nell'ordine dichiarato, e solo con la velocity per prima -1.0 + 1.0 fa
+# esattamente zero prima che si aggiunga il contour dell'inviluppo.
+module vvca = ring
+set     vvca.b = 0.25                    # pianissimo = un quarto del livello
+connect note.vel -> vvca.b amount=0.75
+connect aenv.out -> vvca.a
+set     f1.cutoff = -1.0
+connect note.vel -> f1.cutoff amount=1.0
+set     f2.cutoff = -1.0
+connect note.vel -> f2.cutoff amount=1.0
+# --- fine velocity -----------------------------------------------------------
+
 connect note.pitch -> osc1.pitch
 connect note.pitch -> osc2.pitch
 connect note.pitch -> osc3.pitch
@@ -26,5 +54,5 @@ connect fenv.out -> f1.cutoff amount=2.75
 connect fenv.out -> f2.cutoff amount=2.75
 connect f1.out -> f2.in
 connect f2.out -> amp.in
-connect aenv.out -> amp.gain amount=0.24
+connect vvca.out -> amp.gain amount=0.24
 output amp.out

@@ -308,6 +308,28 @@ silent for it. And it **keeps its value through the note-off**: the release is
 still part of the note that was struck, and a release stage that suddenly saw a
 different velocity would be describing a different note.
 
+**Eight of the shipped instruments respond to it**: `basic`, `poly`, `vibrato`,
+`lead`, the three Minimoogs and `moog_shared`. And they do so under a rule worth
+copying — **at full velocity each one is bit-identical to what it was before
+velocity existed**. Full strength is the instrument's voice; velocity can only
+darken and soften from there, never add to it.
+
+That is arranged, not hoped for. The cutoff knob is set to `-N` and velocity
+brings back `+N`, so at 1.0 the two cancel to exactly zero and the envelope sums
+onto an untouched base; the amplifier gets the envelope multiplied by
+`0.25 + 0.75 × vel`, which is exactly 1.0 at full strength. Both are exact in
+binary floating point, and the sound fixtures prove it: after wiring all eight,
+`patch_fixture` still reports **0 changed**.
+
+⚠️ **The order of the connections matters** and it is the one trap here. An
+input accumulates its sources in the order they are declared, so the velocity
+line must come BEFORE any envelope on the same cutoff — otherwise `-N + env + N`
+is not `env`, and the exactness is gone even though the sound is nearly the same.
+
+    set     filt.cutoff = -1.5
+    connect note.vel -> filt.cutoff amount=1.5     # first...
+    connect fenv.out -> filt.cutoff amount=3.8     # ...then the envelope
+
 **The note module must be NAMED `note`.** The voice pool looks it up by name,
 not by type, so `module kbd = note` is a perfectly good note module that nothing
 will ever find — the patch compiles, renders, and is silent. The loader does say

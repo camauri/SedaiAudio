@@ -15,6 +15,21 @@ module aenv = env a=0.002 d=0.60 s=0.55 r=0.14
 module drv  = sdist drive=1.6 tone=0.45
 module amp  = amp
 
+# --- velocity ----------------------------------------------------------------
+# Come su moog_bass, ma i filtri stanno DENTRO il componente incluso: si
+# raggiungono col prefisso, `core.f1`. A velocita' piena lo strumento resta
+# identico campione per campione (-1.0 + 1.0 = 0 esatto, e il `ring` moltiplica
+# per 0.25 + 0.75 = 1.0). L'ordine conta: la velocity per prima sul cutoff.
+module vvca = ring
+set     vvca.b = 0.25
+connect note.vel -> vvca.b amount=0.75
+connect aenv.out -> vvca.a
+set     core.f1.cutoff = -1.0
+connect note.vel -> core.f1.cutoff amount=1.0
+set     core.f2.cutoff = -1.0
+connect note.vel -> core.f2.cutoff amount=1.0
+# --- fine velocity -----------------------------------------------------------
+
 connect note.pitch -> gl.in
 connect gl.out -> core.osc1.pitch
 connect gl.out -> core.osc2.pitch
@@ -26,5 +41,5 @@ connect fenv.out -> core.f2.cutoff amount=2.30
 set  drv.mix   = 0.35
 connect core.f2.out -> drv.in
 connect drv.out -> amp.in
-connect aenv.out -> amp.gain amount=0.26
+connect vvca.out -> amp.gain amount=0.26
 output amp.out
