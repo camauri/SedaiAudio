@@ -178,6 +178,7 @@ show_help() {
     echo "    patch_fixture     Sound fixtures: which patches changed, and by how much [tool]"
     echo "    patch_doc         The module reference, generated from the registry [tool]"
     echo "    midi_probe        Watch what arrives on a MIDI port; --patch renders it live [tool]"
+    echo "    arr_render        Render an arrangement: instruments placed in a room [tool]"
     echo ""
     echo -e "${YELLOW}EXAMPLES:${NC}"
     echo "    ./build.sh                              # Build tools (+ demo prompt)"
@@ -517,7 +518,8 @@ build_target() {
     opts+=("-Fu$SRC_DIR")
     local sub
     for sub in Core Generators Modulators Processors Effects Voice Mixer \
-               Transport Project Platform SID Players FileIO Engine Wavetable Patch; do
+               Transport Project Platform SID Players FileIO Engine Wavetable Patch \
+               Arrange; do
         [[ -d "$SRC_DIR/$sub" ]] && opts+=("-Fu$SRC_DIR/$sub")
     done
     opts+=("-Fu$TEST_DIR")
@@ -641,6 +643,7 @@ ALL_TARGETS=(
     "patch_fixture|patch_fixture.lpr|$TOOLS_DIR|patch_fixture|tool"
     "patch_doc|patch_doc.lpr|$TOOLS_DIR|patch_doc|tool"
     "midi_probe|midi_probe.lpr|$TOOLS_DIR|midi_probe|tool"
+    "arr_render|arr_render.lpr|$TOOLS_DIR|arr_render|tool"
 )
 
 target_field() {   # target_field <name> <index 2..5>

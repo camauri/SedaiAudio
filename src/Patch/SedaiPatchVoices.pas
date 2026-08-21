@@ -146,6 +146,11 @@ type
     // fixtures or previews skip it rather than recording a zero.
     function HasAudioInput: Boolean;
     function ActiveVoices: Integer;
+    // Where each output radiates FROM, on the instrument's own axis (-1..+1),
+    // and how far apart in metres the outermost points really are. The patch
+    // declares these; an arrangement is what turns them into a place.
+    function OutputPos(AIndex: Integer): Single;
+    function Extent: Single;
 
     function Describe: string;
 
@@ -693,6 +698,18 @@ function TSedaiPatchVoicePool.OutputCount: Integer;
 begin
   if Length(FVoices) = 0 then Result := 1
   else Result := FVoices[0].FGraph.OutputCount;
+end;
+
+function TSedaiPatchVoicePool.OutputPos(AIndex: Integer): Single;
+begin
+  if Length(FVoices) = 0 then Result := 0.0
+  else Result := FVoices[0].FGraph.OutputPos(AIndex);
+end;
+
+function TSedaiPatchVoicePool.Extent: Single;
+begin
+  if Length(FVoices) = 0 then Result := 0.0
+  else Result := FVoices[0].FGraph.Extent;
 end;
 
 function TSedaiPatchVoicePool.VoiceCount: Integer;

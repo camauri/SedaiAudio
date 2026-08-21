@@ -587,6 +587,7 @@ function Build-Target {
     $opts += "-Fu`"$SrcDir\Engine`""
     $opts += "-Fu`"$SrcDir\Wavetable`""
     $opts += "-Fu`"$SrcDir\Patch`""
+    $opts += "-Fu`"$SrcDir\Arrange`""
     $opts += "-Fu`"$TestDir`""
     $opts += "-Fu`"$ToolsDir`""
     $opts += "-Fu`"$SDL2Dir`""  # SDL2 Pascal bindings
@@ -924,6 +925,12 @@ $allTargets = @{
         Source = 'midi_probe.lpr'
         SourceDir = (Join-Path $ProjectRoot 'tools')
         Output = 'midi_probe.exe'
+        Kind = 'tool'
+    }
+    'arr_render' = @{
+        Source = 'arr_render.lpr'
+        SourceDir = (Join-Path $ProjectRoot 'tools')
+        Output = 'arr_render.exe'
         Kind = 'tool'
     }
 }

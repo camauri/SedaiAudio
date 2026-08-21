@@ -27,7 +27,7 @@ uses
   SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
   SedaiSpatialChain, SedaiConvolver, SedaiTubeResonator, SedaiFormantBody,
   SedaiPatchGraph, SedaiPatchModules, SedaiPatchEvents, SedaiPatchVoices,
-  SedaiRandom;
+  SedaiRandom, SedaiArrangement;
 
 const
   SR    = 44100;
@@ -3342,6 +3342,117 @@ begin
 end;
 
 // ---------------------------------------------------------------------------
+// The arrangement: where the instruments stand.
+//
+// The invariant worth testing is SYMMETRY. Mirror every position across the
+// listener's axis and the two channels must swap EXACTLY — not approximately.
+// That one check catches a panning law that is not symmetric, a sign error in
+// the right-hand axis, and a distance model that treats left and right
+// differently, none of which are visible by listening once.
+// ---------------------------------------------------------------------------
+procedure TestArrangement;
+const
+  VOICE =
+    'module note = note'#10 +
+    'module osc1 = osc shape=square freq=220'#10 +
+    'module amp  = amp'#10 +
+    'connect osc1.out  -> amp.in'#10 +
+    'connect note.gate -> amp.gain'#10 +
+    'output amp.out'#10;
+var
+  dir, pv, aL, aR: string;
+  arr: TSedaiArrangement;
+  buf: array of Single;
+  i, frames: Integer;
+  sumL, sumR, mL, mR: Double;
+
+  // Render one arrangement and give back the energy in each channel.
+  procedure Energy(const AFile: string; out EL, ER: Double);
+  var
+    a: TSedaiArrangement;
+    k, n: Integer;      // own counters: FPC refuses an outer variable as one
+  begin
+    EL := 0; ER := 0;
+    a := TSedaiArrangement.Create;
+    try
+      if not a.LoadFromFile(AFile) then
+      begin
+        Ok('arrangement loads', False, a.LastError);
+        Exit;
+      end;
+      a.Prepare(48000, 512);
+      a.Reset;
+      a.Part(0).Pool.NoteOn(60, 1.0);
+      for k := 0 to 9 do
+      begin
+        a.Render(512, @buf[0]);
+        for n := 0 to 511 do
+        begin
+          EL := EL + buf[n * 2] * buf[n * 2];
+          ER := ER + buf[n * 2 + 1] * buf[n * 2 + 1];
+        end;
+      end;
+    finally
+      a.Free;
+    end;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('== arrangement: instruments placed in a room ==');
+  dir := IncludeTrailingPathDelimiter(GetTempDir(False));
+  pv  := dir + 'saf_regr_arr.patch';
+  aL  := dir + 'saf_regr_left.arr';
+  aR  := dir + 'saf_regr_right.arr';
+  WritePatch('saf_regr_arr.patch', VOICE);
+  SetLength(buf, 512 * 2);
+  frames := 512;
+
+  // A grammar that refuses what it cannot mean.
+  arr := TSedaiArrangement.Create;
+  try
+    WritePatch('saf_regr_bad.arr', 'nonsense here'#10);
+    Ok('refuses an unknown directive', not arr.LoadFromFile(dir + 'saf_regr_bad.arr'),
+       arr.LastError);
+    WritePatch('saf_regr_bad2.arr', 'rate 48000'#10);
+    Ok('refuses an arrangement with no parts',
+       not arr.LoadFromFile(dir + 'saf_regr_bad2.arr'), arr.LastError);
+    // The trap people actually hit: a space after the equals sign.
+    WritePatch('saf_regr_bad3.arr',
+      'part a = ' + pv + #10 + 'place a at= 1,0,2'#10);
+    Ok('names the space-after-equals trap',
+       (not arr.LoadFromFile(dir + 'saf_regr_bad3.arr')) and
+       (Pos('space', arr.LastError) > 0), arr.LastError);
+  finally
+    arr.Free;
+  end;
+
+  WritePatch('saf_regr_left.arr',
+    'rate 48000'#10 + 'listen at=0,0,0 facing=0,0,-1'#10 +
+    'part a = ' + pv + ' voices=2'#10 + 'place a at=-3,0,4'#10);
+  WritePatch('saf_regr_right.arr',
+    'rate 48000'#10 + 'listen at=0,0,0 facing=0,0,-1'#10 +
+    'part a = ' + pv + ' voices=2'#10 + 'place a at=3,0,4'#10);
+
+  Energy(aL, sumL, sumR);
+  Energy(aR, mL, mR);
+
+  Ok('a placed instrument is heard at all', (sumL + sumR) > 1e-6,
+     Format('L=%.5f R=%.5f', [sumL, sumR]));
+  Ok('on the left it IS louder on the left', sumL > sumR * 1.05,
+     Format('L=%.5f R=%.5f', [sumL, sumR]));
+  // The whole point: mirroring must swap the channels EXACTLY.
+  Ok('mirroring swaps the channels exactly',
+     (Abs(sumL - mR) < 1e-9) and (Abs(sumR - mL) < 1e-9),
+     Format('L=%.6f<->%.6f  R=%.6f<->%.6f', [sumL, mR, sumR, mL]));
+
+  DeleteFile(pv); DeleteFile(aL); DeleteFile(aR);
+  DeleteFile(dir + 'saf_regr_bad.arr');
+  DeleteFile(dir + 'saf_regr_bad2.arr');
+  DeleteFile(dir + 'saf_regr_bad3.arr');
+end;
+
+// ---------------------------------------------------------------------------
 
 begin
   WriteLn('========================================');
@@ -3392,6 +3503,7 @@ begin
   TestPatchNoteVelocity;
   TestPatchVoicePoolEvents;
   TestPatchSustainPedal;
+  TestArrangement;
 
   WriteLn;
   if Failures = 0 then
