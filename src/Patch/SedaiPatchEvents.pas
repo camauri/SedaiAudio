@@ -124,12 +124,26 @@ type
 
 const
   // The three controller numbers that are note logic rather than sound design,
-  // and so belong to the voice pool rather than to a patch. Everything else a
-  // wheel or a pedal can send needs a destination inside the instrument before
-  // it means anything, and that is routing, which does not exist yet.
+  // and so belong to the voice pool rather than to a patch. They still reach
+  // the patch as signals like every other controller — the pool acting on them
+  // does not consume them.
   SEDAI_CC_SUSTAIN        = 64;
   SEDAI_CC_ALL_SOUND_OFF  = 120;
   SEDAI_CC_ALL_NOTES_OFF  = 123;
+
+  // The expressive ones, named because a patch that says `cc num=breath` is
+  // readable and one that says `cc num=2` is a lookup.
+  SEDAI_CC_MOD            = 1;
+  SEDAI_CC_BREATH         = 2;
+  SEDAI_CC_FOOT           = 4;
+  SEDAI_CC_EXPRESSION     = 11;
+
+  // Channel pressure is NOT a controller on the wire — it has its own status
+  // byte and no number. Given one here anyway, above the 127 the wire can
+  // reach, so that everything a player can lean on arrives through one door and
+  // a patch routes it the same way. Param is a Word; there is room.
+  SEDAI_CTRL_PRESSURE     = 128;
+  SEDAI_CTRL_MAX          = 128;
 
   // 1024 events is about eight seconds of very busy playing, and costs 16 KB.
   // The size that matters is not the average but the worst gap between two

@@ -50,6 +50,7 @@ type
     procedure Note(AChannel, ANote, AVelocity: Byte; ANoteOn: Boolean);
     procedure Ctrl(AChannel, AController, AValue: Byte);
     procedure Bend(AChannel: Byte; AValue: Integer);
+    procedure Press(AChannel, AValue: Byte);
     property NoteOnCount: Integer read FNoteOn;
     property NoteOffCount: Integer read FNoteOff;
     property CtrlCount: Integer read FCtrl;
@@ -101,14 +102,11 @@ var
   Extra: string;
 begin
   Inc(FCtrl);
-  if FPool <> nil then
-    case AController of
-      64:       FPool.PostSustain(AValue >= 64);
-      120, 123: FPool.PostAllNotesOff;
-    end;
+  if FPool <> nil then FPool.PostControl(AController, AValue / 127.0);
   if FQuiet then Exit;
-  // Name the three that the voice pool actually acts on, so it is obvious when
-  // a pedal is the reason something is or is not ringing.
+  // Name the three the pool acts on itself, so it is obvious when a pedal is
+  // the reason something is or is not ringing. Everything else now reaches the
+  // patch too, and does something only if a `cc` module asked for it.
   case AController of
      1: Extra := '  (mod wheel)';
     64: if AValue >= 64 then Extra := '  (sustain DOWN)' else Extra := '  (sustain up)';
@@ -129,6 +127,17 @@ begin
   if FQuiet then Exit;
   WriteLn(Format('%s  ch%-2d  bend      %6d  (%+.2f of range)',
                  [Stamp, AChannel + 1, AValue, AValue / 8192.0]));
+end;
+
+procedure TProbe.Press(AChannel, AValue: Byte);
+begin
+  Inc(FCtrl);
+  // Channel pressure reaches a patch as controller 128 — above anything the
+  // wire can send, so it can never collide with a real one.
+  if FPool <> nil then FPool.PostPressure(AValue / 127.0);
+  if FQuiet then Exit;
+  WriteLn(Format('%s  ch%-2d  pressure  %3d  (aftertouch)',
+                 [Stamp, AChannel + 1, AValue]));
 end;
 
 // ---------------------------------------------------------------------------
@@ -294,6 +303,7 @@ begin
     MIDI.OnNote := @Probe.Note;
     MIDI.OnController := @Probe.Ctrl;
     MIDI.OnPitchBend := @Probe.Bend;
+    MIDI.OnPressure := @Probe.Press;
 
     if PatchFile <> '' then
     begin

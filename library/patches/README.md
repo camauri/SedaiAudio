@@ -58,6 +58,9 @@ address like `24:0` or any part of a port's name. Velocity arrives as
 wheel bends every sounding voice — `--bend=<semitones>` sets how far, default 2,
 because the wire says how far the wheel moved and never what that means.
 
+Every other controller is forwarded whole and reaches the patch, where a `cc`
+module decides what — if anything — it means. See *Controllers* below.
+
 **With no keyboard plugged in, this is still testable**, and it was tested that
 way: `alsa-utils` is a sequencer somebody else wrote, so none of it is our code
 checking our own work.
@@ -210,6 +213,9 @@ drawback does not exist, so the metaphor is taken without its price.
 | `lead.patch` | A subtractive lead with some bite. Two detuned oscillators plus a sub an octave down, and — the thing that actually matters — a SECOND envelope on the filter cutoff. Measured, its spectral centroid sweeps 4.1x from attack to sustain, where `poly.patch` sits at 1.0x and sounds static because of it. |
 | `fx_chain.patch` | An EFFECT patch: its source is a module of type `input`, so the incoming audio takes the oscillator's place. Same graph, same scheduler, same modules — no second architecture. Run it with `patch_fx`. |
 | `fx.patch` | The bridge at work: a native lead running into SAF's own distortion, chorus and reverb — units that had been written long before and that no patch could reach. |
+| `vector.patch` | Vector synthesis: four different timbres at the corners of a square and a path that walks the joystick across them on its own. One note, four sounds, nothing touched but the lever. |
+| `wheel.patch` | A mod wheel doing the two things a real one does at once: opening the filter by 2.5 octaves and bringing a vibrato up from nothing. Play it with `data/midi/wheel.mid`, which sweeps the wheel, and no keyboard is needed. |
+| `granular.patch` | A cloud of grains from a recording, where pitch and speed stop being the same knob. Point `sample=` at your own file. |
 | `echo.patch` | A loop through a 120 ms delay line. The graph works out that the shortest cycle carries 5293 samples of delay and advances the loop in chunks of 5293 rather than one at a time - bit-identical output, 42% faster. |
 
 Format:
@@ -404,6 +410,7 @@ patched in, and the range they clamp to.
 | `lpg` | both | — | in [audio 0], cv [0..+ 0 0..1], resp [0..+ 0.02 0..1] | out |
 | `vector` | both | law | a [audio 0], b [audio 0], c [audio 0], d [audio 0], x [-..+ 0 -1..1], y [-..+ 0 -1..1] | out |
 | `vpath` | both | loop, points | gate [gate 0] | x, y |
+| `cc` | both | init, lag, num | — | out |
 
 ### Instruments
 
@@ -586,6 +593,64 @@ and filtered noise at the four corners, with the path resting on each in turn.
 Measured at the four dwells its spectral centroid reads 119, 3839, 2644 and
 6719 Hz — four different sounds out of one note, with nothing touched but the
 joystick.
+
+## Controllers: the wheel becomes a signal
+
+    cc       a channel controller as an output: `num`, `lag`, `init`
+             num = 0..127, or a name: mod, breath, foot, expr, sustain, touch
+
+Until this module existed the voice pool understood exactly three controllers —
+the sustain pedal and the two panics — and threw everything else away. That was
+the honest thing to do rather than a gap: **a mod wheel means nothing at all
+until a patch says where it goes**, and inventing a destination for it would
+have been worse than ignoring it. This is where the patch says.
+
+    module mw = cc num=mod lag=0.015
+    connect mw.out -> filt.cutoff  amount=2.5
+    connect mw.out -> vib.gain
+
+Nothing is routed by the module: `out` is an output like any other, so one
+wheel can reach a cutoff, an FM index, a vibrato depth, three of them at once
+with different amounts — or nothing. There is no range mapping here on purpose:
+`amount=` already scales and may be negative, and two ways to do one thing is
+one too many.
+
+**`lag` is not a nicety.** A controller on the wire is *seven bits*: 128 steps,
+and a step straight into a filter cutoff is the zipper noise every early digital
+synth had. A one-pole with a few milliseconds on it turns the step into a slope.
+Measured on a 0→1 shove with `lag=0.02`: the first 64 samples are at 0.070 and
+the last 64 of the block at 0.440, where `lag=0` is at 1.0 throughout. `lag=0`
+is there when you want the steps.
+
+Three things the routing guarantees, each checked in the suite:
+
+- **A controller arrives at the sample it was posted for**, like a note. Posted
+  for frame 256 it is not there at 255.
+- **A voice allocated after the wheel moved is born where the wheel is.** This
+  is the one easy to get wrong, because it only shows on the note *after* a
+  gesture — which is the note nobody tests by hand. A new voice is seeded with
+  every controller at once, with no smoothing.
+- **An instrument with no `cc` module is deaf to all of it**, which is what
+  makes it safe for the MIDI bridges to forward the whole wire.
+
+The pedal is a special case worth knowing: the pool still acts on CC 64 itself,
+because voice stealing and release are not things a graph can see — but acting
+on it does not *consume* it, so `cc num=sustain` reads it too and a patch may
+open a filter with the same foot that holds the notes.
+
+**Aftertouch is controller 128.** Channel pressure has no number on the wire and
+is given one here, above anything the wire can send, so that everything a player
+can lean on arrives through one door: `cc num=touch`.
+
+`wheel.patch` is the demonstration, and it makes the wheel do the two things a
+real wheel does at once — open the filter by 2.5 octaves *and* bring the vibrato
+up from nothing. Neither alone is expressive; together they are "the sound
+opens". Without a keyboard:
+
+    bin/<plat>/patch_midi data/midi/wheel.mid library/patches/wheel.patch out.wav 4 9
+
+That file plays the same note twice, wheel down and then wheel sweeping. The
+spectral centroid measures 343 Hz at rest and 1459 Hz at full wheel.
 
 ## The body stage
 

@@ -32,7 +32,8 @@ unit SedaiPatchElectronic;
 interface
 
 uses
-  SysUtils, Math, SedaiAudioTypes, SedaiPatchGraph, SedaiNoiseGenerator, SedaiRandom;
+  SysUtils, Math, SedaiAudioTypes, SedaiPatchGraph, SedaiNoiseGenerator,
+  SedaiRandom, SedaiPatchEvents;
 
 const
   SEDAI_SEQ_MAX_STEPS = 32;
@@ -89,6 +90,53 @@ type
   public
     constructor Create; override;
     procedure RenderSample(AIndex: Integer); override;
+  end;
+
+  { TSedaiModCC — a controller becomes a signal, and stops being special.
+
+    Until this module existed the voice pool understood exactly three
+    controllers — the sustain pedal and the two panics — and threw the rest
+    away. That was the honest thing to do: a mod wheel means nothing at all
+    until a patch says where it goes, and inventing a destination for it would
+    have been worse than ignoring it. This is where the patch says.
+
+      module mw  = cc num=mod lag=0.015
+      connect mw.out -> filt.cutoff  amount=2.0
+      connect mw.out -> lfo1.rate    amount=6.0
+
+    Nothing routes it anywhere: it is an output like any other, so the wheel can
+    reach a cutoff, an index, an LFO depth, three of them at once with different
+    amounts, or nothing. `amount=` scales and may be negative, which is why this
+    module has no range mapping of its own — the attenuverter is already in the
+    connection, and two ways to do one thing is one too many.
+
+    `lag` is not a nicety. A controller on the wire is SEVEN BITS: 128 steps,
+    and a step straight into a filter cutoff is the zipper noise every early
+    digital synth had. A one-pole with a few milliseconds on it makes the steps
+    into a slope and the artefact goes away — measurably, and the suite measures
+    it. Set lag=0 to get the raw steps back.
+
+    Channel pressure arrives here too, as number 128, because a player leaning
+    on a key means the same kind of thing as a player pushing a wheel and should
+    not need a different mechanism. }
+  TSedaiModCC = class(TSedaiPatchModule)
+  private
+    FOut: TSedaiPatchPort;
+    FNum: Integer;
+    FInit: Single;
+    FLagSec: Single;
+    FTarget, FCur, FCoef: Single;
+    procedure Recalc;
+  public
+    constructor Create; override;
+    function ConfigKeys: string; override;
+    function Configure(const AKey, AValue: string): Boolean; override;
+    procedure Prepare(ASampleRate: Cardinal; ABlockSize: Integer); override;
+    procedure ResetState; override;
+    procedure SetController(ANumber: Integer; AValue: Single;
+                            AImmediate: Boolean); override;
+    procedure RenderSample(AIndex: Integer); override;
+    property Number: Integer read FNum;
   end;
 
   { TSedaiModVector — the vector-synthesis crossfade: four sources, one joystick.
@@ -758,6 +806,115 @@ begin
   FOut.Write(AIndex, FZ1 * G);
 end;
 
+{ TSedaiModCC }
+
+constructor TSedaiModCC.Create;
+begin
+  inherited Create;
+  TypeName := 'cc';
+  Rate := mrBoth;
+  FNum := SEDAI_CC_MOD;
+  FInit := 0.0;
+  FLagSec := 0.010;
+  FTarget := 0.0;
+  FCur := 0.0;
+  FCoef := 1.0;
+  FOut := AddOutput('out', prUnipolar);
+end;
+
+function TSedaiModCC.ConfigKeys: string;
+begin
+  Result := 'init, lag, num';
+end;
+
+procedure TSedaiModCC.Recalc;
+begin
+  // One pole, given as the time to cover about 63% of a jump. At lag=0 the
+  // coefficient is 1 and the module passes the wire's own steps through.
+  if (FLagSec <= 0.0) or (FSR <= 0.0) then FCoef := 1.0
+  else FCoef := 1.0 - Exp(-1.0 / (FLagSec * FSR));
+end;
+
+function TSedaiModCC.Configure(const AKey, AValue: string): Boolean;
+var
+  V: Single;
+  N: Integer;
+  T: string;
+  FS: TFormatSettings;
+begin
+  Result := False;
+  FS := DefaultFormatSettings; FS.DecimalSeparator := '.';
+  T := LowerCase(Trim(AValue));
+
+  if SameText(AKey, 'num') then
+  begin
+    // Names for the ones a player actually touches. A patch that says
+    // `num=breath` is readable; one that says `num=2` is a lookup.
+    if      (T = 'mod') or (T = 'wheel')    then N := SEDAI_CC_MOD
+    else if T = 'breath'                    then N := SEDAI_CC_BREATH
+    else if T = 'foot'                      then N := SEDAI_CC_FOOT
+    else if (T = 'expr') or (T = 'expression') then N := SEDAI_CC_EXPRESSION
+    else if T = 'sustain'                   then N := SEDAI_CC_SUSTAIN
+    else if (T = 'touch') or (T = 'pressure') or (T = 'aftertouch') then
+      N := SEDAI_CTRL_PRESSURE
+    else if not TryStrToInt(T, N) then Exit(False);
+    if (N < 0) or (N > SEDAI_CTRL_MAX) then Exit(False);
+    FNum := N;
+    Exit(True);
+  end;
+
+  if SameText(AKey, 'init') then
+  begin
+    if not TryStrToFloat(T, V, FS) then Exit(False);
+    if (V < 0.0) or (V > 1.0) then Exit(False);
+    FInit := V; FTarget := V; FCur := V;
+    Exit(True);
+  end;
+
+  if SameText(AKey, 'lag') then
+  begin
+    // Seconds, plain, the way `delay time=0.120` is seconds: a module key is
+    // read by the module, and the loader's unit suffixes never reach here.
+    if not TryStrToFloat(T, V, FS) then Exit(False);
+    if V < 0.0 then Exit(False);
+    FLagSec := V;
+    Recalc;
+    Exit(True);
+  end;
+end;
+
+procedure TSedaiModCC.Prepare(ASampleRate: Cardinal; ABlockSize: Integer);
+begin
+  inherited Prepare(ASampleRate, ABlockSize);
+  Recalc;
+end;
+
+procedure TSedaiModCC.ResetState;
+begin
+  inherited ResetState;
+  // Back to what the patch declared, NOT to zero: a patch whose wheel rests at
+  // 0.5 must sound like itself before anyone has touched anything. The pool
+  // then pushes the wheel's real position over the top, immediately.
+  FTarget := FInit;
+  FCur := FInit;
+end;
+
+procedure TSedaiModCC.SetController(ANumber: Integer; AValue: Single;
+  AImmediate: Boolean);
+begin
+  if ANumber <> FNum then Exit;
+  if AValue < 0.0 then AValue := 0.0;
+  if AValue > 1.0 then AValue := 1.0;
+  FTarget := AValue;
+  if AImmediate then FCur := AValue;
+end;
+
+procedure TSedaiModCC.RenderSample(AIndex: Integer);
+begin
+  FCur := FCur + (FTarget - FCur) * FCoef;
+  FOut.Write(AIndex, FCur);
+end;
+
 { TSedaiModVector }
 
 constructor TSedaiModVector.Create;
@@ -955,7 +1112,8 @@ end;
 
 function CreateElectronicModuleByType(const ATypeName: string): TSedaiPatchModule;
 begin
-  if SameText(ATypeName, 'vector') then Result := TSedaiModVector.Create
+  if SameText(ATypeName, 'cc') then Result := TSedaiModCC.Create
+  else if SameText(ATypeName, 'vector') then Result := TSedaiModVector.Create
   else if SameText(ATypeName, 'vpath') then Result := TSedaiModVPath.Create
   else if SameText(ATypeName, 'seq') then Result := TSedaiModSeq.Create
   else if SameText(ATypeName, 'sh') then Result := TSedaiModSampleHold.Create
@@ -972,7 +1130,7 @@ end;
 function KnownElectronicTypes: string;
 begin
   Result := 'seq, sh, ring, glide, noise, quant, follow, fold, lpg, ' +
-            'vector, vpath';
+            'vector, vpath, cc';
 end;
 
 end.

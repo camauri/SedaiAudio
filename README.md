@@ -74,7 +74,7 @@ sb library/instruments/hammond.bas > library/patches/hammond.patch
 **Check that everything still works.**
 
 ```
-bin/x86_64-linux/saf_regression      # 233 checks, headless
+bin/x86_64-linux/saf_regression      # 255 checks, headless
 bin/x86_64-linux/sedaisid_test       # SID Evo against reSID
 ```
 
@@ -111,7 +111,7 @@ connect env1.out   -> amp.gain  amount=0.3
 output  amp.out
 ```
 
-Seven statements, **43 module types**, and 29 patches shipped in
+Seven statements, **44 module types**, and 30 patches shipped in
 [`library/patches/`](library/patches/). The full grammar, the traps with their
 real error messages, and a **module reference generated from the registry** —
 not transcribed, so it cannot drift — are in
@@ -205,6 +205,14 @@ loaded at runtime rather than linked — so a machine without it says "no MIDI"
 instead of failing to start. Velocity arrives as `note.vel`, the sustain pedal
 holds notes past the key, and the pitch wheel bends every sounding voice.
 
+**Controllers reach the patch, and the patch decides what they mean.** A mod
+wheel, breath, a foot pedal, aftertouch: the bridges forward the whole wire, and
+a `cc` module inside the instrument is what turns one of them into a signal — so
+one wheel can open a filter and raise a vibrato at once, or do nothing at all,
+which is what an instrument without a `cc` module does. A controller lands on
+the sample it was posted for, is smoothed against the wire's seven bits, and a
+voice allocated after a gesture is born where the hands already are.
+
 Note events cross into the audio thread through a **lock-free queue**, and the
 block is split at each event's sample position. At a 256-sample buffer, rounding
 events to block boundaries would throw away 5.8 ms of timing — more than the
@@ -220,7 +228,12 @@ Standard MIDI files play through `TSedaiMIDIPlayer`, or straight into a patch:
 
 ```
 bin/x86_64-linux/patch_midi song.mid library/patches/poly.patch out.wav 16
+bin/x86_64-linux/patch_midi data/midi/wheel.mid library/patches/wheel.patch out.wav 4 9
 ```
+
+The file's velocity and its controllers both play, which is also how the live
+path is testable without owning a keyboard: the second line above sweeps a mod
+wheel written into the score.
 
 ---
 
@@ -426,7 +439,7 @@ mapping (`-Target x` ⇄ `--target x`) is in each script's header. Output goes t
 | `test_saf_main` | test | facade test (classic / FM / wavetable) |
 | `audiotest` | test | backend and render path |
 | `sedaisid_test` | test | SID Evo verification against reSID |
-| `saf_regression` | test | headless regression suite, 233 checks |
+| `saf_regression` | test | headless regression suite, 255 checks |
 
 Sources for tools live in `tools/`, QA and the historic frontends in `test/`.
 Local diagnostic probes that are *not* shipped stay in the gitignored
@@ -483,12 +496,12 @@ Live MIDI **input** uses `SedaiMIDIInput` (`TSedaiMIDIInput`): `Enumerate`,
 
 Four independent guards, all runnable.
 
-**`saf_regression` — 233 checks, headless.** The whole render path with no audio
+**`saf_regression` — 255 checks, headless.** The whole render path with no audio
 device: engine to mixer to master, every source type, cycle detection, file
 formats round-tripping, the note queue, sample-accurate events, the sustain
-pedal. It also runs as a Windows binary under Wine, same 233.
+pedal. It also runs as a Windows binary under Wine, same 255.
 
-**Sound fixtures — 27 patches.** Every shipped patch has a signature (hash, peak,
+**Sound fixtures — 28 patches.** Every shipped patch has a signature (hash, peak,
 RMS, spectral centroid). `patch_fixture` says which sounds changed and by how
 much, so a change to the engine cannot alter an instrument quietly. It writes
 the reference **only** with `--update`.
@@ -496,7 +509,7 @@ the reference **only** with `--update`.
 **`sedaisid_test` — bit-exact against reSID.** Not "close": zero mismatches over
 tens of millions of cycles, on both the classic and the distortion filter paths.
 
-**The MODERN round trip — 26 of 26.** A shipped `.patch` is lifted back into
+**The MODERN round trip — 27 of 27.** A shipped `.patch` is lifted back into
 SedaiBasic, run, and the regenerated patch must render **byte-identically** to
 the original. Two effect patches are skipped, because they need an audio input
 and rendering one with nothing connected measures silence, which proves

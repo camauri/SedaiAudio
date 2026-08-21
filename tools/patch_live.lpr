@@ -89,6 +89,7 @@ type
     procedure Note(AChannel, ANote, AVelocity: Byte; ANoteOn: Boolean);
     procedure Ctrl(AChannel, AController, AValue: Byte);
     procedure Bend(AChannel: Byte; AValue: Integer);
+    procedure Press(AChannel, AValue: Byte);
   end;
 
 var
@@ -112,10 +113,10 @@ procedure TMidiBridge.Ctrl(AChannel, AController, AValue: Byte);
 begin
   Inc(GMidiIn);
   if GPool = nil then Exit;
-  case AController of
-    64:       GPool.PostSustain(AValue >= 64);
-    120, 123: GPool.PostAllNotesOff;
-  end;
+  // Everything goes through, including the pedal and the panics: the pool
+  // decides what is note logic, and a `cc` module in the patch decides what is
+  // sound. This bridge is a wire, and a wire that filters is a bug waiting.
+  GPool.PostControl(AController, AValue / 127.0);
 end;
 
 procedure TMidiBridge.Bend(AChannel: Byte; AValue: Integer);
@@ -123,6 +124,13 @@ begin
   Inc(GMidiIn);
   if GPool = nil then Exit;
   GPool.PostPitchBend(AValue / 8192.0 * GBendSemis);
+end;
+
+procedure TMidiBridge.Press(AChannel, AValue: Byte);
+begin
+  Inc(GMidiIn);
+  if GPool = nil then Exit;
+  GPool.PostPressure(AValue / 127.0);
 end;
 
 // ---------------------------------------------------------------------------
@@ -564,6 +572,7 @@ begin
         GMIDI.OnNote := @GBridge.Note;
         GMIDI.OnController := @GBridge.Ctrl;
         GMIDI.OnPitchBend := @GBridge.Bend;
+        GMIDI.OnPressure := @GBridge.Press;
         if GMidiSpec <> '' then I := GMIDI.ConnectByName(GMidiSpec)
         else I := GMIDI.ConnectAnything;
         WriteLn('  midi: porta ', GMIDI.PortSpec, ', ', I, ' sorgenti collegate',

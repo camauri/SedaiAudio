@@ -22,11 +22,13 @@ type
   private
     FPool: TSedaiPatchVoicePool;
     FTranspose: Integer;
-    FOnCount, FOffCount, FMaxVoices: Integer;
+    FOnCount, FOffCount, FMaxVoices, FCtrlCount: Integer;
   public
     constructor Create(APool: TSedaiPatchVoicePool; ATranspose: Integer);
     procedure Handle(AChannel, ANote, AVelocity: Byte; ANoteOn: Boolean);
+    procedure Ctrl(AChannel, AController, AValue: Byte);
     property OnCount: Integer read FOnCount;
+    property CtrlCount: Integer read FCtrlCount;
     property OffCount: Integer read FOffCount;
     property MaxVoices: Integer read FMaxVoices;
   end;
@@ -36,7 +38,16 @@ begin
   inherited Create;
   FPool := APool;
   FTranspose := ATranspose;
-  FOnCount := 0; FOffCount := 0; FMaxVoices := 0;
+  FOnCount := 0; FOffCount := 0; FMaxVoices := 0; FCtrlCount := 0;
+end;
+
+// The file's controllers, straight through. Whether a mod wheel written into a
+// score does anything is the patch's business — a `cc` module is how it says
+// yes — so this bridge forwards everything and decides nothing.
+procedure TNoteBridge.Ctrl(AChannel, AController, AValue: Byte);
+begin
+  Inc(FCtrlCount);
+  FPool.SetControl(AController, AValue / 127.0);
 end;
 
 procedure TNoteBridge.Handle(AChannel, ANote, AVelocity: Byte; ANoteOn: Boolean);
@@ -49,7 +60,10 @@ begin
   // but honour it here too in case a file uses the other convention.
   if ANoteOn and (AVelocity > 0) then
   begin
-    FPool.NoteOn(N);
+    // The file's velocity, not a flat full strength. Every shipped instrument
+    // is bit-identical at 127, so nothing that used to render one way renders
+    // differently unless the file really does play softly.
+    FPool.NoteOn(N, AVelocity / 127.0);
     Inc(FOnCount);
     if FPool.ActiveVoices > FMaxVoices then FMaxVoices := FPool.ActiveVoices;
   end
@@ -135,6 +149,7 @@ begin
 
     Bridge := TNoteBridge.Create(Pool, Transpose);
     Player.OnNoteEvent := @Bridge.Handle;
+    Player.OnControlEvent := @Bridge.Ctrl;
 
     if Secs <= 0 then Secs := Player.GetDurationSeconds + 2.0;   // let tails ring
     Total := Round(Secs * SAMPLE_RATE);
@@ -169,8 +184,9 @@ begin
     end;
 
     SaveWav(ParamStr(3), SAMPLE_RATE, Pool.OutputCount);
-    WriteLn(Format('  %d note-on, %d note-off, %d voices at once, peak %.3f -> %s',
-                   [Bridge.OnCount, Bridge.OffCount, Bridge.MaxVoices, Peak, ParamStr(3)]));
+    WriteLn(Format('  %d note-on, %d note-off, %d controller, %d voices at once, peak %.3f -> %s',
+                   [Bridge.OnCount, Bridge.OffCount, Bridge.CtrlCount,
+                    Bridge.MaxVoices, Peak, ParamStr(3)]));
   finally
     Bridge.Free;
     Outp.Free;

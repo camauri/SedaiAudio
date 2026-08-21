@@ -72,6 +72,10 @@ type
   // -8192..+8191, centre 0. Deliberately NOT converted to semitones here: the
   // bend range is a property of the instrument, not of the wire.
   TSedaiMIDIBendEvent = procedure(AChannel: Byte; AValue: Integer) of object;
+  // Channel pressure: one number for the whole channel, 0..127. Not a
+  // controller on the wire, and given a callback of its own here rather than a
+  // fake number — the fake number belongs one layer up, where a patch routes it.
+  TSedaiMIDIPressEvent = procedure(AChannel, AValue: Byte) of object;
 
   { TSedaiMIDIInput }
 
@@ -97,9 +101,11 @@ type
     FOnNote: TSedaiMIDINoteEvent;
     FOnController: TSedaiMIDICtrlEvent;
     FOnPitchBend: TSedaiMIDIBendEvent;
+    FOnPressure: TSedaiMIDIPressEvent;
     procedure DoNote(AChannel, ANote, AVelocity: Byte; ANoteOn: Boolean);
     procedure DoController(AChannel, AController, AValue: Byte);
     procedure DoBend(AChannel: Byte; AValue: Integer);
+    procedure DoPressure(AChannel, AValue: Byte);
     // Decode one packed MIDI message, status in the low byte. Used by the
     // Windows path; the wire is the same even when the driver is not.
     procedure DispatchRaw(AMessage: LongWord);
@@ -150,6 +156,7 @@ type
     property OnNote: TSedaiMIDINoteEvent read FOnNote write FOnNote;
     property OnController: TSedaiMIDICtrlEvent read FOnController write FOnController;
     property OnPitchBend: TSedaiMIDIBendEvent read FOnPitchBend write FOnPitchBend;
+    property OnPressure: TSedaiMIDIPressEvent read FOnPressure write FOnPressure;
   end;
 
 implementation
@@ -185,6 +192,7 @@ const
   SND_SEQ_EVENT_NOTEON     = 6;
   SND_SEQ_EVENT_NOTEOFF    = 7;
   SND_SEQ_EVENT_CONTROLLER = 10;
+  SND_SEQ_EVENT_CHANPRESS  = 12;
   SND_SEQ_EVENT_PITCHBEND  = 13;
 
   SND_SEQ_EVENT_SIZE = 28;
@@ -484,6 +492,11 @@ begin
   if Assigned(FOnPitchBend) then FOnPitchBend(AChannel, AValue);
 end;
 
+procedure TSedaiMIDIInput.DoPressure(AChannel, AValue: Byte);
+begin
+  if Assigned(FOnPressure) then FOnPressure(AChannel, AValue);
+end;
+
 procedure TSedaiMIDIInput.DispatchRaw(AMessage: LongWord);
 var
   Status, Chan, D1, D2: Byte;
@@ -500,6 +513,9 @@ begin
     $90: if D2 = 0 then DoNote(Chan, D1, 0, False)
          else DoNote(Chan, D1, D2, True);
     $B0: DoController(Chan, D1, D2);
+    // ONE data byte, not two: D2 belongs to the next message. Reading it as a
+    // two-byte message is the classic way to lose every event after the first.
+    $D0: DoPressure(Chan, D1);
     $E0: DoBend(Chan, (Integer(D2) shl 7) + Integer(D1) - 8192);
   end;
 end;
@@ -715,6 +731,9 @@ begin
         DoController(Ev^.data.control.channel,
                      Byte(Ev^.data.control.param and $7F),
                      Byte(Ev^.data.control.value and $7F));
+      SND_SEQ_EVENT_CHANPRESS:
+        DoPressure(Ev^.data.control.channel,
+                   Byte(Ev^.data.control.value and $7F));
       SND_SEQ_EVENT_PITCHBEND:
         begin
           // ALSA hands this over ALREADY CENTRED on zero, unlike the wire,

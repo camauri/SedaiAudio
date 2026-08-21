@@ -164,6 +164,14 @@ type
     // Returns False if the key is not understood, so the loader can complain.
     function Configure(const AKey, AValue: string): Boolean; virtual;
 
+    // A channel controller arriving from outside: mod wheel, breath, a pedal,
+    // aftertouch. Almost no module cares — the one that does is `cc`, which is
+    // what turns it into a signal the patch can use. AImmediate skips the
+    // smoothing, which is what a voice being allocated needs: it has to START
+    // at where the wheel is, not slide there from zero while the note sounds.
+    procedure SetController(ANumber: Integer; AValue: Single;
+                            AImmediate: Boolean); virtual;
+
     // THE primitive. Everything else is built from it: RenderBlock is a loop.
     // Writing modules sample-first is what lets one implementation serve both
     // schedulers (design notes, 6.1).
@@ -243,6 +251,10 @@ type
     function Connect(const ASource, ADest: string; AAmount: Single = 1.0;
                      ANormalled: Boolean = False): Boolean;
     function SetValue(const APath: string; AValue: Single): Boolean;
+    // Hand a controller to every module that wants one. Nothing is looked up by
+    // name: a patch may have five `cc` modules on the same number, or none.
+    procedure SetController(ANumber: Integer; AValue: Single;
+                            AImmediate: Boolean = False);
     // Each `output` line adds a CHANNEL, in declaration order. One line is a
     // mono patch, two are stereo, eight are 7.1 — the number of output channels
     // is a property of the patch, not of the ports, which stay one signal each.
@@ -502,6 +514,12 @@ end;
 // be advanced a sample at a time. That is what a wrapper around a legacy
 // block-oriented SAF unit will report, and declaring it by hand is also how the
 // refusal path is exercised before that wrapper exists.
+// Ignored by everything except the modules that exist to receive it.
+procedure TSedaiPatchModule.SetController(ANumber: Integer; AValue: Single;
+  AImmediate: Boolean);
+begin
+end;
+
 function TSedaiPatchModule.Configure(const AKey, AValue: string): Boolean;
 var
   P: TSedaiPatchPort;
@@ -724,6 +742,15 @@ end;
 function TSedaiPatchGraph.OutputCount: Integer;
 begin
   Result := Length(FOutputs);
+end;
+
+procedure TSedaiPatchGraph.SetController(ANumber: Integer; AValue: Single;
+  AImmediate: Boolean);
+var
+  I: Integer;
+begin
+  for I := 0 to High(FModules) do
+    FModules[I].SetController(ANumber, AValue, AImmediate);
 end;
 
 function TSedaiPatchGraph.ModuleAt(AIndex: Integer): TSedaiPatchModule;

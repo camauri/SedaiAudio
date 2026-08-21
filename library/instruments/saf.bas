@@ -610,6 +610,26 @@ Sub Vpath.Init(nm As String)
   This.Idx = SafDeclare(nm, "vpath")
 End Sub
 
+'' cc — declaration keys: init, lag, num
+Type Cc Extends Module
+  Public:
+    Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
+End Type
+
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Cc.Bind(nm As String)
+  This.Idx = -1
+  This.Nm = nm
+  This.Out.Path = nm + ".out"
+End Sub
+
+Sub Cc.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "cc")
+End Sub
+
 '' granular — declaration keys: sample, seed, skirt, speed, window
 Type Granular Extends Module
   Public:

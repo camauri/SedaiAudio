@@ -3342,6 +3342,216 @@ begin
 end;
 
 // ---------------------------------------------------------------------------
+// Controller routing: the mod wheel stops being thrown away.
+//
+// Three claims worth proving, because each of them is a way the feature can be
+// present and useless. That the controller REACHES THE SOUND, and at the sample
+// it was posted for. That the smoothing is real, because a 7-bit controller
+// stepping into a cutoff is the zipper noise of every early digital synth. And
+// that a voice allocated AFTER the wheel moved is born where the wheel is —
+// the one that is easy to miss, because it only shows on the note after the
+// gesture, which is exactly the note nobody tests by hand.
+// ---------------------------------------------------------------------------
+procedure TestPatchControllers;
+const
+  // Gain comes from the wheel and nowhere else, so the peak IS the controller.
+  CTRL_PATCH =
+    'module note = note'#10 +
+    'module osc1 = osc shape=square freq=440'#10 +
+    'module mw   = cc num=mod lag=0'#10 +
+    'module amp  = amp'#10 +
+    'connect osc1.out -> amp.in'#10 +
+    'connect mw.out   -> amp.gain'#10 +
+    'output amp.out'#10;
+  // The same, with 20 ms on it: the only difference is the slope.
+  LAG_PATCH =
+    'module note = note'#10 +
+    'module osc1 = osc shape=square freq=440'#10 +
+    'module mw   = cc num=mod lag=0.02'#10 +
+    'module amp  = amp'#10 +
+    'connect osc1.out -> amp.in'#10 +
+    'connect mw.out   -> amp.gain'#10 +
+    'output amp.out'#10;
+  // Pressure and the pedal, side by side, both as ordinary signals.
+  TOUCH_PATCH =
+    'module note = note'#10 +
+    'module osc1 = osc shape=square freq=440'#10 +
+    'module at   = cc num=touch lag=0'#10 +
+    'module ped  = cc num=sustain lag=0'#10 +
+    'module amp  = amp'#10 +
+    'connect osc1.out -> amp.in'#10 +
+    'connect at.out   -> amp.gain'#10 +
+    'connect ped.out  -> amp.gain  amount=0.5'#10 +
+    'output amp.out'#10;
+var
+  m: TSedaiModCC;
+  pool: TSedaiPatchVoicePool;
+  path: string;
+  p0, p1, first, last: Single;
+begin
+  WriteLn;
+  WriteLn('== controller routing ==');
+
+  // The names, because `cc num=breath` is the whole point of having them.
+  m := TSedaiModCC.Create;
+  try
+    Ok('num=mod is controller 1', m.Configure('num', 'mod') and (m.Number = 1),
+       Format('%d', [m.Number]));
+    Ok('num=breath is controller 2', m.Configure('num', 'breath') and (m.Number = 2));
+    Ok('num=expr is controller 11', m.Configure('num', 'expr') and (m.Number = 11));
+    Ok('num=sustain is controller 64', m.Configure('num', 'sustain') and (m.Number = 64));
+    Ok('num=touch is 128, above the wire',
+       m.Configure('num', 'touch') and (m.Number = SEDAI_CTRL_PRESSURE));
+    Ok('a plain number works too', m.Configure('num', '74') and (m.Number = 74));
+    Ok('out of range is refused', not m.Configure('num', '200'));
+    Ok('a name that means nothing is refused', not m.Configure('num', 'joystick'));
+    Ok('a negative lag is refused', not m.Configure('lag', '-1'));
+    Ok('init outside 0..1 is refused', not m.Configure('init', '2'));
+  finally
+    m.Free;
+  end;
+
+  path := WritePatch('saf_regr_cc.patch', CTRL_PATCH);
+  pool := TSedaiPatchVoicePool.Create;
+  try
+    if not pool.LoadFromFile(path, 4) then
+    begin
+      Ok('the cc patch loads', False, pool.LastError);
+      Exit;
+    end;
+    Ok('the cc patch loads', True);
+    pool.Prepare(SR, 512);
+    pool.Limit := False;
+    pool.Reset;
+
+    // Nothing has been touched: the wheel is where the patch left it, which is
+    // down. A patch that made a sound here would be reading uninitialised state.
+    pool.NoteOn(60, 1.0);
+    pool.Render(512);
+    Ok('untouched, the wheel is where the patch put it',
+       MixPeak(pool, 0, 511) < 1e-9, Format('peak=%.3e', [MixPeak(pool, 0, 511)]));
+
+    pool.Reset;
+    pool.NoteOn(60, 1.0);
+    pool.SetControl(SEDAI_CC_MOD, 1.0);
+    pool.Render(512);
+    Ok('the wheel reaches the sound', MixPeak(pool, 0, 511) > 0.9,
+       Format('peak=%.3f', [MixPeak(pool, 0, 511)]));
+    Ok('and the pool remembers where it is',
+       Abs(pool.Control(SEDAI_CC_MOD) - 1.0) < 1e-6);
+
+    // THE timing test: posted for frame 256, it must not be there at 255.
+    pool.Reset;
+    pool.NoteOn(60, 1.0);
+    pool.PostControl(SEDAI_CC_MOD, 1.0, 256);
+    pool.Render(512);
+    p0 := MixPeak(pool, 0, 255);
+    p1 := MixPeak(pool, 256, 511);
+    Ok('a posted controller waits for its sample', p0 < 1e-9,
+       Format('peak=%.3e', [p0]));
+    Ok('and arrives on it', p1 > 0.9, Format('peak=%.3f', [p1]));
+
+    // A controller nobody asked for changes nothing. This is what makes it safe
+    // to forward the whole wire: an instrument with no `cc` module is deaf to it.
+    pool.Reset;
+    pool.NoteOn(60, 1.0);
+    pool.SetControl(74, 1.0);              // brightness, unrouted here
+    pool.Render(512);
+    Ok('an unrouted controller does nothing', MixPeak(pool, 0, 511) < 1e-9);
+
+    // Reset puts the wheels back: a render that started wherever the last one
+    // stopped would not be reproducible, and the fixtures depend on that.
+    pool.SetControl(SEDAI_CC_MOD, 1.0);
+    pool.Reset;
+    Ok('reset puts the wheels back', pool.Control(SEDAI_CC_MOD) = 0.0);
+  finally
+    pool.Free;
+    DeleteFile(path);
+  end;
+
+  // Smoothing, measured as a slope rather than asserted as a feature.
+  path := WritePatch('saf_regr_cclag.patch', LAG_PATCH);
+  pool := TSedaiPatchVoicePool.Create;
+  try
+    if not pool.LoadFromFile(path, 4) then
+    begin
+      Ok('the lagged patch loads', False, pool.LastError);
+      Exit;
+    end;
+    pool.Prepare(SR, 512);
+    pool.Limit := False;
+
+    // The wheel is shoved from 0 to 1 while the note is already sounding, so
+    // the seeding cannot hide the ramp.
+    pool.Reset;
+    pool.NoteOn(60, 1.0);
+    pool.SetControl(SEDAI_CC_MOD, 1.0);
+    pool.Render(512);
+    first := MixPeak(pool, 0, 63);
+    last  := MixPeak(pool, 448, 511);
+    Ok('20 ms of lag is a slope, not a step', (first < 0.2) and (last > 0.3),
+       Format('first 64 = %.3f, last 64 = %.3f', [first, last]));
+
+    // And the one that is easy to miss. The wheel moved BEFORE this note
+    // existed, so the note has to start where the wheel is — not slide up to it
+    // over the first 20 ms, which is a fault you would hear on every note after
+    // a gesture and blame on the envelope.
+    pool.Reset;
+    pool.SetControl(SEDAI_CC_MOD, 1.0);
+    pool.NoteOn(60, 1.0);
+    pool.Render(512);
+    Ok('a new voice is born where the wheel is', MixPeak(pool, 0, 63) > 0.9,
+       Format('first 64 = %.3f', [MixPeak(pool, 0, 63)]));
+  finally
+    pool.Free;
+    DeleteFile(path);
+  end;
+
+  // Pressure and the pedal as signals. The pedal is the interesting one: the
+  // pool acts on it AND the patch sees it, because acting on it must not
+  // consume it.
+  path := WritePatch('saf_regr_cctouch.patch', TOUCH_PATCH);
+  pool := TSedaiPatchVoicePool.Create;
+  try
+    if not pool.LoadFromFile(path, 4) then
+    begin
+      Ok('the pressure patch loads', False, pool.LastError);
+      Exit;
+    end;
+    pool.Prepare(SR, 512);
+    pool.Limit := False;
+
+    pool.Reset;
+    pool.NoteOn(60, 1.0);
+    pool.SetControl(SEDAI_CTRL_PRESSURE, 0.8);
+    pool.Render(512);
+    Ok('aftertouch reaches the patch',
+       Abs(MixPeak(pool, 0, 511) - 0.8) < 0.02,
+       Format('peak=%.3f', [MixPeak(pool, 0, 511)]));
+
+    // The pedal: down, the pool holds the note AND the patch reads 1.0 through
+    // its own `cc` module, worth +0.5 of gain here.
+    pool.Reset;
+    pool.NoteOn(60, 1.0);
+    pool.PostSustain(True);
+    pool.Render(512);
+    Ok('the pedal is note logic AND a signal',
+       (pool.Sustain) and (Abs(MixPeak(pool, 0, 511) - 0.5) < 0.02),
+       Format('sustain=%s peak=%.3f', [BoolToStr(pool.Sustain, True),
+                                       MixPeak(pool, 0, 511)]));
+    // ...and it still holds the note when the key comes up, which is the thing
+    // it was doing before it was also a signal.
+    pool.NoteOff(60);
+    pool.Render(512);
+    Ok('and still holds the note', pool.ActiveVoices = 1,
+       Format('%d voices', [pool.ActiveVoices]));
+  finally
+    pool.Free;
+    DeleteFile(path);
+  end;
+end;
+
+// ---------------------------------------------------------------------------
 // Vector synthesis: the crossfade and the path that drives it.
 //
 // The two questions worth asking a crossfader are asked here as equalities, not
@@ -3847,6 +4057,7 @@ begin
   TestPatchSustainPedal;
   TestGranular;
   TestVectorSynthesis;
+  TestPatchControllers;
   TestArrangement;
 
   WriteLn;

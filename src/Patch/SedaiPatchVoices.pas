@@ -88,6 +88,11 @@ type
     FQueue: TSedaiPatchEventQueue;
     FSustain: Boolean;
     FBendSemitones: Single;
+    // Where every controller stands right now, kept by the pool because a
+    // controller belongs to the CHANNEL and not to a note: a voice allocated
+    // later has to be born with the wheel where the wheel is, not at zero.
+    FCC: array[0..SEDAI_CTRL_MAX] of Single;
+    FCCSeen: array[0..SEDAI_CTRL_MAX] of Boolean;
     FLastError: string;
     FWarnings: string;
     FPatchVoices: Integer;
@@ -101,6 +106,11 @@ type
     procedure ApplyDueEvents(ANow: QWord);
     procedure RenderChunk(AOffset, ACount, AChannels: Integer);
     procedure SetSustain(AOn: Boolean);
+    // Push every controller that has ever arrived into one voice's graph, with
+    // no smoothing. Called when a voice is allocated: it must START where the
+    // player's hands are, and a wheel that slid up over the first 10 ms of
+    // every note would be a fault you could hear.
+    procedure SeedControllers(AIndex: Integer);
   public
     constructor Create;
     destructor Destroy; override;
@@ -121,6 +131,12 @@ type
     // Bend applies to every sounding voice and to every one that follows, the
     // way a wheel does. In semitones, signed.
     procedure PitchBend(ASemitones: Single);
+    // A controller: mod wheel, breath, a pedal, aftertouch (number 128). 0..1.
+    // The pool does not decide what it means — it hands it to every voice, and
+    // a `cc` module inside the patch is what turns it into a signal. A patch
+    // with no such module is unaffected, which is why sending everything is
+    // safe.
+    procedure SetControl(ANumber: Integer; AValue: Single);
 
     // --- queued, for ANY OTHER THREAD ---
     // These take no lock and touch no voice: they hand the event to the ring,
@@ -134,6 +150,11 @@ type
     function PostAllNotesOff(AAt: QWord = 0): Boolean;
     function PostPitchBend(ASemitones: Single; AAt: QWord = 0): Boolean;
     function PostSustain(AOn: Boolean; AAt: QWord = 0): Boolean;
+    function PostControl(ANumber: Integer; AValue: Single;
+                         AAt: QWord = 0): Boolean;
+    // Channel pressure, which has no controller number on the wire and gets one
+    // here so that a patch routes it exactly like a wheel.
+    function PostPressure(AValue: Single; AAt: QWord = 0): Boolean;
 
     // Render ACount frames of the mix. Only voices that are actually sounding
     // are walked, so an idle pool costs nothing.
@@ -180,6 +201,9 @@ type
     function EventsPending: Integer;
     // The pedal, as the pool currently believes it to be.
     property Sustain: Boolean read FSustain;
+    // What a controller stands at, as the pool believes it. Useful to a display
+    // and to a test; the sound reads it through a `cc` module, not through this.
+    function Control(ANumber: Integer): Single;
     property Bend: Single read FBendSemitones;
   end;
 
@@ -342,6 +366,14 @@ begin
   FSamplePos := 0;
   FSustain := False;
   FBendSemitones := 0.0;
+  // The wheels go back where the patch put them. A controller is performance
+  // state, and a render that started from wherever the last one left off would
+  // not be reproducible — which is the whole basis of the sound fixtures.
+  for I := 0 to SEDAI_CTRL_MAX do
+  begin
+    FCC[I] := 0.0;
+    FCCSeen[I] := False;
+  end;
   // Anything still queued belongs to a performance that has just ended.
   FQueue.Clear;
 end;
@@ -410,6 +442,7 @@ begin
   FVoices[Idx].FVelocity := AVelocity;
   FVoices[Idx].FAge := FClock;
   FVoices[Idx].FQuietBlocks := 0;
+  SeedControllers(Idx);
   RetuneVoice(Idx);
 end;
 
@@ -459,6 +492,37 @@ begin
   // that let go of the tail would sound like a fault.
   for I := 0 to High(FVoices) do
     if FVoices[I].FActive then RetuneVoice(I);
+end;
+
+procedure TSedaiPatchVoicePool.SetControl(ANumber: Integer; AValue: Single);
+var
+  I: Integer;
+begin
+  if (ANumber < 0) or (ANumber > SEDAI_CTRL_MAX) then Exit;
+  if AValue < 0.0 then AValue := 0.0;
+  if AValue > 1.0 then AValue := 1.0;
+  FCC[ANumber] := AValue;
+  FCCSeen[ANumber] := True;
+  // Every voice, not only the sounding ones: a voice in its release is still
+  // making a sound the wheel is entitled to change, and an idle one costs a
+  // comparison inside a module that will not match.
+  for I := 0 to High(FVoices) do
+    FVoices[I].FGraph.SetController(ANumber, AValue, False);
+end;
+
+procedure TSedaiPatchVoicePool.SeedControllers(AIndex: Integer);
+var
+  N: Integer;
+begin
+  for N := 0 to SEDAI_CTRL_MAX do
+    if FCCSeen[N] then
+      FVoices[AIndex].FGraph.SetController(N, FCC[N], True);
+end;
+
+function TSedaiPatchVoicePool.Control(ANumber: Integer): Single;
+begin
+  if (ANumber < 0) or (ANumber > SEDAI_CTRL_MAX) then Exit(0.0);
+  Result := FCC[ANumber];
 end;
 
 procedure TSedaiPatchVoicePool.SetSustain(AOn: Boolean);
@@ -515,6 +579,17 @@ begin
   Result := FQueue.PostController(SEDAI_CC_SUSTAIN, V, AAt);
 end;
 
+function TSedaiPatchVoicePool.PostControl(ANumber: Integer; AValue: Single;
+  AAt: QWord): Boolean;
+begin
+  Result := FQueue.PostController(ANumber, AValue, AAt);
+end;
+
+function TSedaiPatchVoicePool.PostPressure(AValue: Single; AAt: QWord): Boolean;
+begin
+  Result := FQueue.PostController(SEDAI_CTRL_PRESSURE, AValue, AAt);
+end;
+
 function TSedaiPatchVoicePool.EventsDropped: Cardinal;
 begin
   Result := FQueue.Dropped;
@@ -535,14 +610,19 @@ begin
     ekAllNotesOff: AllNotesOff;
     ekPitchBend:   PitchBend(AEvent.Value);
     ekController:
-      // Only the controllers that are pure note logic are handled here. A mod
-      // wheel or a breath controller has no meaning until a patch says where it
-      // goes, and inventing a destination would be worse than ignoring it —
-      // so the rest are dropped, deliberately, until there is routing.
-      case AEvent.Param of
-        SEDAI_CC_SUSTAIN:      SetSustain(AEvent.Value >= 0.5);
-        SEDAI_CC_ALL_SOUND_OFF,
-        SEDAI_CC_ALL_NOTES_OFF: AllNotesOff;
+      begin
+        // EVERY controller reaches the patch, including the three below: the
+        // pool acting on the pedal does not consume it, and a patch is entitled
+        // to open a filter with the same foot that holds the notes.
+        SetControl(AEvent.Param, AEvent.Value);
+        // These three are note logic rather than sound design, and belong to
+        // the pool because no patch can implement them: voice stealing and
+        // release are not things a graph can see.
+        case AEvent.Param of
+          SEDAI_CC_SUSTAIN:      SetSustain(AEvent.Value >= 0.5);
+          SEDAI_CC_ALL_SOUND_OFF,
+          SEDAI_CC_ALL_NOTES_OFF: AllNotesOff;
+        end;
       end;
   end;
 end;

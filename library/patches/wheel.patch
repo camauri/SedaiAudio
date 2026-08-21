@@ -1,0 +1,66 @@
+# La rotella smette di essere buttata via.
+#
+# Fino a ieri il pool capiva tre controller — pedale e i due panici — e
+# scartava tutto il resto. Era la cosa onesta: una rotella non significa
+# NIENTE finche' una patch non dice dove va. Qui lo dice.
+#
+# `cc` non instrada niente da solo: ha un'uscita come tutti gli altri, quindi
+# la rotella puo' andare su un taglio, su una profondita', su tre cose
+# insieme con dosi diverse, o su niente. `amount=` scala e puo' essere
+# negativo — l'attenuverter sta gia' nella connessione.
+#
+# Qui la rotella fa due cose insieme, che e' come suona una rotella vera:
+# apre il filtro DI 2.5 OTTAVE e tira su il vibrato da zero. Nessuna delle
+# due da sola sarebbe espressiva; insieme sono "il suono si apre".
+#
+# `lag` non e' una raffinatezza: un controller sul filo ha SETTE BIT, e uno
+# scalino dritto dentro un taglio e' il rumore di cerniera di ogni digitale
+# degli anni '80. 15 ms lo trasformano in una salita.
+#
+# Provalo senza tastiera, con un file MIDI che contiene la rotella:
+#   bin/<plat>/patch_midi job/midi/wheel.mid library/patches/wheel.patch out.wav
+# oppure dal vivo:
+#   bin/<plat>/patch_live library/patches/wheel.patch
+
+module note = note
+module gl   = glide time=0.03
+
+# La rotella. Prova num=breath o num=touch: cambia solo questa riga.
+module mw   = cc num=mod lag=0.015 init=0
+
+module osc1 = osc shape=saw
+module osc2 = osc shape=saw
+module lfo1 = lfo shape=sine rate=5.5
+module vib  = amp                    # il vibrato passa di qui: la rotella e' il guadagno
+module filt = filter mode=lowpass cutoff=300
+module env1 = env a=0.02 d=0.4 s=0.7 r=0.5
+module env2 = env a=0.05 d=0.6 s=0.5 r=0.4
+module amp  = amp
+
+set osc2.pitch = 0.008               # dodici centesimi: due voci, non due note
+
+connect note.pitch -> gl.in
+connect gl.out     -> osc1.pitch
+connect gl.out     -> osc2.pitch
+
+# Vibrato a profondita' variabile: l'LFO entra in un VCA e la rotella E' il
+# guadagno di quel VCA. A rotella giu' il vibrato non c'e' proprio.
+connect lfo1.out   -> vib.in
+connect mw.out     -> vib.gain
+connect vib.out    -> osc1.pitch  amount=0.012
+connect vib.out    -> osc2.pitch  amount=0.012
+
+connect osc1.out   -> filt.in     amount=0.5
+connect osc2.out   -> filt.in     amount=0.5
+
+# Il taglio: l'inviluppo apre poco, la rotella apre molto. Volt per ottava,
+# quindi 2.5 sono due ottave e mezzo.
+connect env2.out   -> filt.cutoff amount=1.2
+connect mw.out     -> filt.cutoff amount=2.5
+
+connect note.gate  -> env1.gate
+connect note.gate  -> env2.gate
+connect filt.out   -> amp.in
+connect env1.out   -> amp.gain    amount=0.35
+
+output amp.out
