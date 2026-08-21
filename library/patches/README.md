@@ -215,6 +215,7 @@ drawback does not exist, so the metaphor is taken without its price.
 | `fx.patch` | The bridge at work: a native lead running into SAF's own distortion, chorus and reverb — units that had been written long before and that no patch could reach. |
 | `vector.patch` | Vector synthesis: four different timbres at the corners of a square and a path that walks the joystick across them on its own. One note, four sounds, nothing touched but the lever. |
 | `wheel.patch` | A mod wheel doing the two things a real one does at once: opening the filter by 2.5 octaves and bringing a vibrato up from nothing. Play it with `data/midi/wheel.mid`, which sweeps the wheel, and no keyboard is needed. |
+| `brass.patch` | Lips and a tube. The breath IS the envelope, so the note starts when the air arrives and stops dead below the threshold; velocity tightens the embouchure instead of just turning it up. |
 | `granular.patch` | A cloud of grains from a recording, where pitch and speed stop being the same knob. Point `sample=` at your own file. |
 | `echo.patch` | A loop through a 120 ms delay line. The graph works out that the shortest cycle carries 5293 samples of delay and advances the loop in chunks of 5293 rather than one at a time - bit-identical output, 42% faster. |
 
@@ -421,6 +422,7 @@ patched in, and the range they clamp to.
 | `modal` | both | freq | pitch [pitch 0], gate [gate 0], amp [0..+ 1.25 0..8] | out |
 | `bowed` | both | freq | pitch [pitch 0], gate [gate 0], amp [0..+ 5 0..8] | out |
 | `reed` | both | freq | pitch [pitch 0], gate [gate 0], amp [0..+ 1.8 0..8] | out |
+| `brass` | both | bell, drive, freq, lipq, tune | pitch [pitch 0], gate [gate 0], amp [0..+ 0.63 0..8], press [0..+ 1.8 0..4], open [0..+ 0.4 0..2] | out |
 | `fmop` | both | detune, feedback, fixedfreq, ratio | pitch [pitch 0], gate [gate 0], amp [0..+ 0.33 0..8], phasem [audio 0] | out |
 
 ### Instrument library
@@ -651,6 +653,66 @@ opens". Without a keyboard:
 
 That file plays the same note twice, wheel down and then wheel sweeping. The
 spectral centroid measures 343 Hz at rest and 1459 Hz at full wheel.
+
+## Lips and a tube: `brass`
+
+    brass    a lip-reed physical model: keys `bell`, `drive`, `lipq`, `tune`
+             inputs `press` (the breath) and `open` (the embouchure)
+
+The fourth physical model, and the one that was abandoned twice. What makes it
+different from `reed` is not the sign of a coefficient. A reed is a valve that
+the bore closes; **lips are a mass on a spring with a resonance of their own**,
+and a brass player chooses a note by tuning that resonance rather than by
+choosing a fingering.
+
+`press` and `open` are **inputs, not declaration keys**, because a wind
+instrument is played continuously: a note is not struck and left, it is held and
+pushed. Patch an envelope into `press` and the note starts when the air arrives,
+which is why a brass attack sounds the way it does — below the breath threshold
+the model does not oscillate *at all*, so the bottom of a diminuendo is an edge
+and not a fade. Patch velocity into `open` with a negative amount and playing
+harder closes the lips, which is the difference between a round mezzo and a loud
+one with an edge on it.
+
+⚠️ **Measured range: MIDI 30..65** — F#1 to F4, which is tuba, trombone and low
+horn, and is what it sounds like. Above 65 it can fall into the **pedal** note an
+octave down. The range is stated because it was measured note by note: a sweep at
+three-semitone steps looked clean to MIDI 82, and a sweep at one semitone showed
+ten notes out of fourteen dropping an octave. The coarse sweep was the mistake.
+Inside the range the pitch lands within **-2 to +4 cents** across breath
+pressures from 1.1 to 2.4.
+
+### Three things that had to be got right, and were got wrong first
+
+**The delay line is two periods, not one.** A brass player never plays the tube's
+fundamental — the pedal note is a curiosity — so every note actually played is
+the *second mode* or above, and the tube is twice as long as the note's period.
+With one period the loop also has a mode at DC for the blocker to fight over,
+and the first attempt at this model locked to about 212 Hz whatever note it was
+given.
+
+**The lip filter has to be all-pole.** The valve's opening is the lip
+displacement *squared*, and a square is where the DC matters: with an offset,
+`(D + a)^2` gives `D^2 + 2Da + a^2`, and it is the middle term — at the lip's own
+frequency — that drives the bore. Put zeros at ±1 to make a tidy bandpass and D
+vanishes, leaving `a^2` at **twice** the lip frequency; the model then answers a
+half-semitone change of embouchure by jumping an octave.
+
+**The opening is one-sided.** Lips close and stay closed. A symmetric square
+about zero opens twice per cycle, and the even harmonics collapse — measured, the
+4th harmonic at 0.06 against the 5th at 0.23, with nothing at all above the 8th.
+One-sided, the same note reads 1.00 0.46 0.69 0.30 0.84 0.55 0.38 0.38 0.31 0.45
+0.21 0.23: a full series. This is also what the model sounds like: symmetric it
+was *"a brass with a reed vibrating oddly"*, one-sided it is lips.
+
+The loop's high-pass **tracks the note** rather than sitting at a fixed corner,
+and that is what refuses the pedal. A real mouthpiece and flare make the pedal
+weak and hard to find; an idealised tube has no such reticence. Fixed at 76 Hz
+the low notes would not start at all; fixed at 8 Hz the top octave fell into the
+pedal. Both measured; the answer was a ratio, not a corner.
+
+`brass.patch` is the demonstration: the breath is the envelope and velocity
+tightens the lips.
 
 ## The body stage
 

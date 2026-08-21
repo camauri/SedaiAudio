@@ -772,6 +772,36 @@ Sub Reed.Init(nm As String)
   This.Idx = SafDeclare(nm, "reed")
 End Sub
 
+'' brass — declaration keys: bell, drive, freq, lipq, tune
+Type Brass Extends Module
+  Public:
+    Pitch As Port
+    Gate As Port
+    Amp As Port
+    Press As Port
+    Open As Port
+    Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
+End Type
+
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Brass.Bind(nm As String)
+  This.Idx = -1
+  This.Nm = nm
+  This.Out.Path = nm + ".out"
+  This.Pitch.Path = nm + ".pitch"
+  This.Gate.Path = nm + ".gate"
+  This.Amp.Path = nm + ".amp"
+  This.Press.Path = nm + ".press"
+  This.Open.Path = nm + ".open"
+End Sub
+
+Sub Brass.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "brass")
+End Sub
+
 '' fmop — declaration keys: detune, feedback, fixedfreq, ratio
 Type Fmop Extends Module
   Public:

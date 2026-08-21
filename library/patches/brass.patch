@@ -1,0 +1,46 @@
+# Un paio di labbra e un tubo.
+#
+# Il quarto modello fisico, e quello che era stato abbandonato due volte. Cio'
+# che lo distingue da `reed` non e' il segno di un coefficiente: un'ancia e'
+# una valvola che il tubo CHIUDE, le labbra sono una massa su una molla con
+# una risonanza PROPRIA, e un ottonista sceglie la nota accordando quella,
+# non scegliendo una diteggiatura.
+#
+# Due ingressi che non sono manopole. `press` e' il fiato e `open` e'
+# l'imboccatura, e sono porte e non chiavi di dichiarazione perche' un
+# ottone si suona di continuo: una nota non si percuote e si lascia andare,
+# si tiene e si spinge.
+#
+# ⚠️ ESTENSIONE MISURATA: MIDI 30..65 (F#1..F4) — tuba, trombone, corno
+# grave. Sopra il 65 il modello puo' cadere nella PEDALE, un'ottava sotto.
+# E' un limite vero e misurato nota per nota, non arrotondato: uno sweep a
+# passo 3 sembrava pulito fino all'82, uno a passo 1 no.
+#
+#   bin/<plat>/patch_render library/patches/brass.patch out.wav 3 -12 2
+
+module note = note
+module brs  = brass bell=0.5 lipq=8 drive=10
+module env  = env a=0.06 d=0.25 s=0.85 r=0.35
+module amp  = amp
+
+# Il fiato E' l'inviluppo. Messo a zero perche' l'inviluppo lo fornisca per
+# intero: sotto la soglia non oscilla affatto, quindi la nota comincia
+# quando l'aria ARRIVA — ed e' per questo che un attacco d'ottone suona
+# cosi'. Un fade non lo fa: c'e' un bordo.
+set brs.press = 0.0
+connect env.out -> brs.press  amount=2.3
+
+# L'imboccatura. A riposo larga e tonda; la velocity la STRINGE, e labbra
+# strette sbattono ogni ciclo — e' li' che nasce lo squillo. Quindi
+# l'ampiezza e' negativa: piu' forte suoni, meno sono aperte.
+set brs.open = 0.62
+connect note.vel -> brs.open  amount=-0.36
+
+connect note.pitch -> brs.pitch
+connect note.gate  -> brs.gate
+connect note.gate  -> env.gate
+
+connect brs.out  -> amp.in
+connect env.out  -> amp.gain  amount=0.9
+
+output amp.out

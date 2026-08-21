@@ -74,7 +74,7 @@ sb library/instruments/hammond.bas > library/patches/hammond.patch
 **Check that everything still works.**
 
 ```
-bin/x86_64-linux/saf_regression      # 255 checks, headless
+bin/x86_64-linux/saf_regression      # 267 checks, headless
 bin/x86_64-linux/sedaisid_test       # SID Evo against reSID
 ```
 
@@ -111,7 +111,7 @@ connect env1.out   -> amp.gain  amount=0.3
 output  amp.out
 ```
 
-Seven statements, **44 module types**, and 30 patches shipped in
+Seven statements, **45 module types**, and 31 patches shipped in
 [`library/patches/`](library/patches/). The full grammar, the traps with their
 real error messages, and a **module reference generated from the registry** —
 not transcribed, so it cannot drift — are in
@@ -255,11 +255,16 @@ them.
 | Waveguide reed | `SedaiReedGenerator` | self-oscillating single reed: nonlinear reed plus bore (clarinet, sax) |
 | Bowed string | `SedaiBowedGenerator` | nonlinear bow friction plus string waveguide |
 | Modal | `SedaiModalGenerator` | a struck body as a bank of ringing modes |
+| Waveguide lips | `SedaiBrassGenerator` | brass: a lip valve with a resonance of its own, driving a tube through its bell. Measured range MIDI 30..65 |
 | Granular | `SedaiGranularGenerator` | a cloud of grains from a recording: pitch and **speed stop being the same knob**, and a sound can be frozen |
 | SID | `SedaiOscillator` (SID mode) | the chip's oscillators as an ordinary voice source; the cycle-exact chip is separate, below |
 
 Noise (`SedaiNoiseGenerator`: white, pink, brown, blue, violet) is a generator
 rather than a preset technique, and is used from inside the others.
+
+The lip-reed model is reachable from a patch as `brass` but is not yet a
+`.safinst` technique: it has no `psBrass` preset, so it is played from the Patch
+Workbench and not from the instrument library.
 
 The physical models are joined by a shared **formant body**
 (`SedaiFormantBody`), a **tube resonator** (`SedaiTubeResonator`) and a
@@ -376,7 +381,7 @@ wrap them.
 |---|---|
 | **Core** (7) | `SedaiAudioTypes` core types · `SedaiAudioObject` root class · `SedaiSignalNode` DSP node · `SedaiAudioBuffer` managed buffer · `SedaiParameterPort` modulatable parameter · `SedaiSpatialAudio` positional maths · `SedaiRandom` per-object generator |
 | **Platform** (5) | `SedaiAudioBackend` device, push or callback · `SedaiAudioSDL2Dyn` runtime-loaded SDL2 · `SedaiMIDIInput` ALSA / winmm · `SedaiThread` · `SedaiTiming` |
-| **Generators** (11) | `SedaiOscillator` · `SedaiNoiseGenerator` · `SedaiWavetableGenerator` · `SedaiSamplePlayer` · `SedaiFMOperator` · `SedaiAdditiveGenerator` · `SedaiPartialGenerator` · `SedaiKarplusGenerator` · `SedaiReedGenerator` · `SedaiBowedGenerator` · `SedaiModalGenerator` |
+| **Generators** (13) | `SedaiOscillator` · `SedaiNoiseGenerator` · `SedaiWavetableGenerator` · `SedaiSamplePlayer` · `SedaiFMOperator` · `SedaiAdditiveGenerator` · `SedaiPartialGenerator` · `SedaiKarplusGenerator` · `SedaiReedGenerator` · `SedaiBrassGenerator` · `SedaiBowedGenerator` · `SedaiModalGenerator` · `SedaiGranularGenerator` |
 | **Modulators** (3) | `SedaiEnvelope` ADSR, 4 curves, SID mode · `SedaiLFO` tempo-syncable · `SedaiStepModulator` |
 | **Processors** (6) | `SedaiFilter` 6 types, 12/24/48 dB/oct · `SedaiAmplifier` · `SedaiCompressor` · `SedaiLimiter` · `SedaiDistortion` · `SedaiEQ` |
 | **Effects** (11) | `SedaiEffect` base · `SedaiDelay` · `SedaiReverb` · `SedaiChorus` · `SedaiFlanger` · `SedaiPhaser` · `SedaiAutoSpace` mono-safe widener · `SedaiBodyResonator` · `SedaiTubeResonator` · `SedaiFormantBody` · `SedaiConvolver` short-FIR |
@@ -439,7 +444,7 @@ mapping (`-Target x` ⇄ `--target x`) is in each script's header. Output goes t
 | `test_saf_main` | test | facade test (classic / FM / wavetable) |
 | `audiotest` | test | backend and render path |
 | `sedaisid_test` | test | SID Evo verification against reSID |
-| `saf_regression` | test | headless regression suite, 255 checks |
+| `saf_regression` | test | headless regression suite, 267 checks |
 
 Sources for tools live in `tools/`, QA and the historic frontends in `test/`.
 Local diagnostic probes that are *not* shipped stay in the gitignored
@@ -496,12 +501,12 @@ Live MIDI **input** uses `SedaiMIDIInput` (`TSedaiMIDIInput`): `Enumerate`,
 
 Four independent guards, all runnable.
 
-**`saf_regression` — 255 checks, headless.** The whole render path with no audio
+**`saf_regression` — 267 checks, headless.** The whole render path with no audio
 device: engine to mixer to master, every source type, cycle detection, file
 formats round-tripping, the note queue, sample-accurate events, the sustain
-pedal. It also runs as a Windows binary under Wine, same 255.
+pedal. It also runs as a Windows binary under Wine, same 267.
 
-**Sound fixtures — 28 patches.** Every shipped patch has a signature (hash, peak,
+**Sound fixtures — 29 patches.** Every shipped patch has a signature (hash, peak,
 RMS, spectral centroid). `patch_fixture` says which sounds changed and by how
 much, so a change to the engine cannot alter an instrument quietly. It writes
 the reference **only** with `--update`.
@@ -509,7 +514,7 @@ the reference **only** with `--update`.
 **`sedaisid_test` — bit-exact against reSID.** Not "close": zero mismatches over
 tens of millions of cycles, on both the classic and the distortion filter paths.
 
-**The MODERN round trip — 27 of 27.** A shipped `.patch` is lifted back into
+**The MODERN round trip — 28 of 28.** A shipped `.patch` is lifted back into
 SedaiBasic, run, and the regenerated patch must render **byte-identically** to
 the original. Two effect patches are skipped, because they need an audio input
 and rendering one with nothing connected measures silence, which proves
@@ -528,16 +533,16 @@ exercised for real.
 
 | | |
 |---|---|
-| Units | 81 (~55,000 lines of Pascal) |
-| Synthesis techniques | 12 |
-| Module types in the workbench | 41 |
-| Shipped patches | 28 |
+| Units | 84 (~57,600 lines of Pascal) |
+| Synthesis techniques | 13 |
+| Module types in the workbench | 45 |
+| Shipped patches | 31 |
 | Instrument libraries | 9 `.safinst` |
 | Dependencies | SDL2, for audio output only |
 | Platforms | Linux and Windows, both first-class; developed on both |
 
 **Done and working**: the core library, the mixer, the transport and project
-layer, all eleven synthesis techniques, the effect chain, file I/O, SID Evo,
+layer, all the synthesis techniques, the effect chain, file I/O, SID Evo,
 the GoatTracker player, the patch workbench, live MIDI input, the SedaiBasic
 MODERN bridge.
 
@@ -552,6 +557,7 @@ physical modelling, which currently does not lock to pitch.
 | API stability | Still moving. Pin a commit for anything serious. |
 | OGG / MP3 | Decode only |
 | Directivity | The cone is gain-only, so a source turned away gets quieter rather than duller |
+| Brass range | `brass` is measured good from MIDI 30 to 65; above that it can fall into the pedal an octave down |
 | Documentation | Unit interfaces are the reference; this file is the map |
 
 ---

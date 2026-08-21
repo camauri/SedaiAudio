@@ -22,7 +22,7 @@ uses
   SedaiAudioTypes, SedaiAudioBuffer,
   SedaiVoice, SedaiSamplePlayer, SedaiPart, SedaiEngine, SedaiInstrumentPreset,
   SedaiFMOperator, SedaiAdditiveGenerator, SedaiPartialGenerator, SedaiReedGenerator,
-  SedaiBowedGenerator, SedaiModalGenerator,
+  SedaiBowedGenerator, SedaiModalGenerator, SedaiBrassGenerator,
   SedaiMixerChannel, SedaiSignalNode, SedaiAudioFileReader, SedaiAudioFileWriter,
   SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
   SedaiSpatialChain, SedaiConvolver, SedaiTubeResonator, SedaiFormantBody,
@@ -1600,6 +1600,212 @@ begin
     pk := 0; for i := 0 to High(buf) do if Abs(buf[i]) > pk then pk := Abs(buf[i]);
     Ok('bandwidth broadens the partial', (cv > 0.02) and (pk < 1.5),
        Format('cv=%.3f peak=%.2f', [cv, pk]));
+  finally
+    g.Free;
+  end;
+end;
+
+// Waveguide lip-reed (TSedaiBrassGenerator): the fourth physical model, and the
+// one that was abandoned twice for failing exactly ONE of these checks.
+//
+// The pitch gate is the reason this test exists. Both earlier attempts produced
+// a perfectly good sound at a frequency of their own — one locked to about
+// 212 Hz whatever note it was given — and nothing else about them was wrong.
+// So the frequency is measured HERE, at four notes three octaves apart, against
+// what was asked for, in cents. Everything else in the model can be argued
+// about by ear; this cannot.
+//
+// The second check that earns its place is the even harmonics. The lip opening
+// is a ONE-SIDED nonlinearity: lips close and stay closed. Make it symmetric —
+// displacement squared about zero, which is the obvious thing to write — and it
+// opens twice per cycle, the even harmonics collapse, and what you hear is a
+// reed buzzing rather than a pair of lips. That was measured (4th harmonic at
+// 0.06 against the 5th at 0.23) and it is measured here.
+procedure TestBrassGenerator;
+const
+  TSR = 48000;
+var
+  g: TSedaiBrassGenerator;
+  buf: array of Single;
+  i, n: Integer;
+  pkPre, pk, want, got, cents, h2, h3, h4, h5, h6, evens, odds: Single;
+  cenDull, cenOpen: Single;
+
+  function MagAt(a, b: Integer; f: Single): Single;
+  var
+    k: Integer;
+    w, c, q0, q1, q2: Single;
+  begin
+    w := 2 * Pi * f / TSR; c := 2 * Cos(w); q1 := 0; q2 := 0;
+    for k := a to b do begin q0 := c * q1 - q2 + buf[k]; q2 := q1; q1 := q0; end;
+    Result := Sqrt(q1 * q1 + q2 * q2 - c * q1 * q2);
+  end;
+
+  // Autocorrelation with the peak interpolated, because whole-lag resolution at
+  // 550 Hz is 20 cents a step and would invent an error that is not there.
+  function PitchOf(a, b: Integer; AMin, AMax: Single): Single;
+  var
+    lagMin, lagMax, lag, bestLag, k, cnt: Integer;
+    s, best, norm, yl, y0, yr, den, sh: Double;
+  begin
+    lagMin := Trunc(TSR / AMax); lagMax := Trunc(TSR / AMin);
+    cnt := b - a + 1;
+    if lagMax > cnt div 2 then lagMax := cnt div 2;
+    best := -1e30; bestLag := 0;
+    for lag := lagMin to lagMax do
+    begin
+      s := 0; norm := 0;
+      for k := 0 to cnt - lag - 1 do
+      begin
+        s := s + buf[a + k] * buf[a + k + lag];
+        norm := norm + buf[a + k + lag] * buf[a + k + lag];
+      end;
+      if norm > 0 then s := s / Sqrt(norm);
+      if s > best then begin best := s; bestLag := lag; end;
+    end;
+    if bestLag = 0 then Exit(0);
+    if (bestLag <= lagMin) or (bestLag >= lagMax) then Exit(TSR / bestLag);
+    yl := 0; y0 := 0; yr := 0;
+    for k := 0 to cnt - (bestLag - 1) - 1 do yl := yl + buf[a + k] * buf[a + k + bestLag - 1];
+    for k := 0 to cnt - bestLag - 1 do y0 := y0 + buf[a + k] * buf[a + k + bestLag];
+    for k := 0 to cnt - (bestLag + 1) - 1 do yr := yr + buf[a + k] * buf[a + k + bestLag + 1];
+    den := yl - 2 * y0 + yr;
+    if Abs(den) < 1e-30 then sh := 0 else sh := 0.5 * (yl - yr) / den;
+    if sh < -1 then sh := -1;
+    if sh > 1 then sh := 1;
+    Result := TSR / (bestLag + sh);
+  end;
+
+  // Render one whole note into buf and give back its sustained peak.
+  function PlayNote(ANote: Integer; APress, AOpen, ABell: Single): Single;
+  var
+    k: Integer;
+  begin
+    g.Kill;
+    g.SetLip(10.0, APress);
+    g.SetLipOpening(AOpen);
+    g.SetBell(ABell);
+    g.SetAttack(0.03);
+    g.NoteOn(ANote, 1.0);
+    for k := 0 to n - 1 do buf[k] := g.GenerateSample;
+    Result := 0;
+    for k := Round(0.5 * TSR) to Round(0.95 * TSR) do
+      if Abs(buf[k]) > Result then Result := Abs(buf[k]);
+  end;
+
+  // Spectral centroid over the sustain, by Goertzel on a coarse ladder: enough
+  // to say "brighter" without a transform in the test suite.
+  function Centroid(a, b: Integer): Single;
+  var
+    f, m, num, den: Single;
+  begin
+    num := 0; den := 0; f := 100;
+    while f < 9000 do
+    begin
+      m := MagAt(a, b, f);
+      num := num + m * f; den := den + m;
+      f := f * 1.15;
+    end;
+    if den <= 0 then Exit(0);
+    Result := num / den;
+  end;
+
+  procedure PitchCheck(ANote: Integer);
+  begin
+    PlayNote(ANote, 1.8, 0.4, 0.55);
+    want := 440.0 * Power(2.0, (ANote - 69) / 12.0);
+    got := PitchOf(Round(0.5 * TSR), Round(0.95 * TSR), want / 3.0, want * 3.0);
+    if got <= 0 then cents := 9999 else cents := 1200 * Log2(got / want);
+    Ok(Format('brass plays MIDI %d, not a note of its own', [ANote]),
+       Abs(cents) < 25,
+       Format('want %.1f got %.1f Hz (%.1f cents)', [want, got, cents]));
+  end;
+
+begin
+  WriteLn;
+  WriteLn('== waveguide lip-reed (brass) engine ==');
+  n := TSR;
+  SetLength(buf, n);
+  g := TSedaiBrassGenerator.Create;
+  try
+    g.SetSampleRate(TSR);
+
+    pkPre := 0;
+    for i := 0 to 199 do
+    begin
+      buf[i] := g.GenerateSample;
+      if Abs(buf[i]) > pkPre then pkPre := Abs(buf[i]);
+    end;
+    Ok('brass silent before note-on', pkPre = 0, Format('pk=%.4f', [pkPre]));
+
+    pk := PlayNote(58, 1.8, 0.4, 0.55);
+    Ok('brass self-oscillates + bounded', (pk > 0.05) and (pk < 1.5),
+       Format('peak=%.3f', [pk]));
+
+    // THE gate. The model's measured range is MIDI 30..65 — F#1 to F4, which is
+    // tuba, trombone and low horn, and is what it sounds like. Above 65 it can
+    // fall into the pedal note an octave down, so the range is stated rather
+    // than pretended: a sweep at three-semitone steps looked clean to 82 and a
+    // sweep at ONE semitone showed ten notes out of fourteen dropping. The
+    // coarse sweep was the mistake, not the model.
+    PitchCheck(34);
+    PitchCheck(45);
+    PitchCheck(55);
+    PitchCheck(65);
+
+    // The threshold is real, and it is not a bug. Below it a player gets air
+    // and no note, which is what makes the bottom of a diminuendo an edge.
+    pk := PlayNote(58, 0.5, 0.4, 0.55);
+    Ok('below the breath threshold there is no note', pk < 0.02,
+       Format('peak=%.4f', [pk]));
+    pk := PlayNote(58, 2.4, 0.4, 0.55);
+    Ok('and above it there is', pk > 0.1, Format('peak=%.3f', [pk]));
+
+    // The one-sided valve, measured as the even harmonics. A symmetric square
+    // opens twice a cycle and takes them out: measured at 0.09 of the odds,
+    // against 0.5 here.
+    PlayNote(58, 2.6, 0.3, 0.55);
+    h2 := MagAt(Round(0.5 * TSR), Round(0.95 * TSR), 466.16);
+    h3 := MagAt(Round(0.5 * TSR), Round(0.95 * TSR), 699.25);
+    h4 := MagAt(Round(0.5 * TSR), Round(0.95 * TSR), 932.33);
+    h5 := MagAt(Round(0.5 * TSR), Round(0.95 * TSR), 1165.41);
+    h6 := MagAt(Round(0.5 * TSR), Round(0.95 * TSR), 1398.49);
+    evens := h2 + h4 + h6;
+    odds := h3 + h5;
+    Ok('the lips are one-sided: the even harmonics are there',
+       evens > 0.25 * odds,
+       Format('evens=%.3f odds=%.3f ratio=%.2f', [evens, odds, evens / odds]));
+
+    // The bell is what makes it bright: it reflects the bottom and radiates the
+    // top, so opening it moves the centroid and nothing else has to.
+    PlayNote(58, 2.0, 0.4, 0.15);
+    cenDull := Centroid(Round(0.5 * TSR), Round(0.95 * TSR));
+    PlayNote(58, 2.0, 0.4, 0.85);
+    cenOpen := Centroid(Round(0.5 * TSR), Round(0.95 * TSR));
+    Ok('opening the bell opens the sound', cenOpen > 1.3 * cenDull,
+       Format('%.0f Hz -> %.0f Hz', [cenDull, cenOpen]));
+
+    // A loose embouchure barely closes, and a valve that barely closes cannot
+    // make many harmonics: the tone goes plain. This is the check that says the
+    // opening really is the opening — and past about 0.8 the lips stop closing
+    // altogether and the note does not start at all, which is a real player's
+    // problem too.
+    PlayNote(58, 1.8, 0.7, 0.55);
+    h2 := MagAt(Round(0.5 * TSR), Round(0.95 * TSR), 466.16);
+    h3 := MagAt(Round(0.5 * TSR), Round(0.95 * TSR), 699.25);
+    pk := MagAt(Round(0.5 * TSR), Round(0.95 * TSR), 233.08);
+    // Still sounding, and much plainer: the check has to prove BOTH, because a
+    // model that simply went silent would pass the harmonics half of it.
+    Ok('lips held open give a plainer tone', (pk > 1.0) and ((h2 + h3) < 0.5 * pk),
+       Format('f0=%.3f h2+h3=%.3f', [pk, h2 + h3]));
+
+    PlayNote(58, 1.8, 0.4, 0.55);
+    g.NoteOff;
+    for i := 0 to n - 1 do buf[i] := g.GenerateSample;
+    pk := 0;
+    for i := Round(0.5 * TSR) to n - 1 do
+      if Abs(buf[i]) > pk then pk := Abs(buf[i]);
+    Ok('brass note-off decays to silence', pk < 0.005, Format('tail peak=%.4f', [pk]));
   finally
     g.Free;
   end;
@@ -4034,6 +4240,7 @@ begin
   TestMicroInstability;
   TestBandwidth;
   TestReedGenerator;
+  TestBrassGenerator;
   TestBowedGenerator;
   TestModalGenerator;
   TestPartialGenerator;

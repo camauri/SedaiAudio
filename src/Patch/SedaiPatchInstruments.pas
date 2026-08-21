@@ -29,7 +29,8 @@ interface
 uses
   SysUtils, Math, SedaiAudioTypes, SedaiPatchGraph, SedaiOscillator,
   SedaiKarplusGenerator, SedaiModalGenerator, SedaiBowedGenerator,
-  SedaiReedGenerator, SedaiFMOperator, SedaiGranularGenerator, SedaiRandom;
+  SedaiReedGenerator, SedaiBrassGenerator, SedaiFMOperator,
+  SedaiGranularGenerator, SedaiRandom;
 
 type
   { TSedaiInstrumentModule }
@@ -133,6 +134,42 @@ type
   protected
     function CreateGen: TSedaiSignalGenerator; override;
     function DefaultTrim: Single; override;
+    procedure TriggerOn(AFreq: Single; ANote: Integer; AVelocity: Single); override;
+    procedure TriggerOff; override;
+  public
+    constructor Create; override;
+  end;
+
+  { TSedaiModBrass — a pair of lips and a tube.
+
+    The fourth physical model, and the one that had to be abandoned twice. What
+    makes it different from `reed` is not the sign of a coefficient: a reed is a
+    valve the bore closes, lips are a mass on a spring with a resonance of their
+    OWN, and a brass player chooses a note by tuning that resonance rather than
+    by choosing a fingering.
+
+    TWO INPUTS THAT ARE NOT KNOBS. `press` is the breath and `open` is the
+    embouchure, and both are ports rather than declaration keys because a wind
+    instrument is played continuously — a note is not struck and left, it is
+    held and pushed. Patch an envelope into `press` and the note starts when the
+    air arrives, which is why a brass attack sounds the way it does. Patch
+    velocity or a wheel into `open` and hard playing closes the lips further,
+    which is the difference between a round mezzo and a loud one with an edge.
+
+    Below its threshold the breath does not oscillate AT ALL. That is not a
+    limitation to work around: it is what a real player runs into, and what
+    makes the bottom of a diminuendo a real edge instead of a fade. }
+  TSedaiModBrass = class(TSedaiInstrumentModule)
+  private
+    FPressIn, FOpenIn: TSedaiPatchPort;
+    FDrive: Single;
+  protected
+    function CreateGen: TSedaiSignalGenerator; override;
+    function DefaultTrim: Single; override;
+    function ConfigKeys: string; override;
+    function ConfigureGen(const AKey, AValue: string;
+      AFloat: Single): Boolean; override;
+    procedure BeforeSample(AIndex: Integer); override;
     procedure TriggerOn(AFreq: Single; ANote: Integer; AVelocity: Single); override;
     procedure TriggerOff; override;
   public
@@ -397,6 +434,72 @@ begin
   TSedaiReedGenerator(FGen).NoteOff;
 end;
 
+{ brass — lips and a tube }
+
+constructor TSedaiModBrass.Create;
+begin
+  inherited Create;
+  TypeName := 'brass';
+  FDrive := 10.0;
+  // The breath. Default well above the oscillation threshold, so a bare module
+  // sounds when it is gated; patch an envelope in and the threshold becomes
+  // audible, which is the point.
+  FPressIn := AddInput('press', prUnipolar, 1.8);
+  FPressIn.Min := 0.0; FPressIn.Max := 4.0;
+  // The embouchure: how far apart the lips rest. Small slams them shut every
+  // cycle and squills; large keeps them open and the tone goes round and, past
+  // about 1.5, stops oscillating.
+  FOpenIn := AddInput('open', prUnipolar, 0.4);
+  FOpenIn.Min := 0.0; FOpenIn.Max := 2.0;
+end;
+
+function TSedaiModBrass.DefaultTrim: Single;
+begin
+  Result := 0.63;  // measured 0.240 bare at 220 Hz; brings it in line with the rest
+end;
+
+function TSedaiModBrass.CreateGen: TSedaiSignalGenerator;
+begin
+  Result := TSedaiBrassGenerator.Create;
+end;
+
+function TSedaiModBrass.ConfigKeys: string;
+begin
+  Result := 'bell, drive, freq, lipq, tune';
+end;
+
+function TSedaiModBrass.ConfigureGen(const AKey, AValue: string;
+  AFloat: Single): Boolean;
+begin
+  Result := True;
+  // How open the bell is: it reflects the low frequencies back down the tube
+  // and radiates the high ones, so this is where the brightness lives.
+  if SameText(AKey, 'bell') then TSedaiBrassGenerator(FGen).SetBell(AFloat)
+  else if SameText(AKey, 'drive') then FDrive := AFloat
+  // The embouchure's Q: how decided the player is about which partial to play.
+  else if SameText(AKey, 'lipq') then TSedaiBrassGenerator(FGen).SetLipQ(AFloat)
+  // Lip tuning in semitones: 0 is centred, and pushing it bends the note the
+  // way a player's does — far enough and it breaks to the next partial.
+  else if SameText(AKey, 'tune') then TSedaiBrassGenerator(FGen).SetLipTuning(AFloat)
+  else Result := inherited ConfigureGen(AKey, AValue, AFloat);
+end;
+
+procedure TSedaiModBrass.BeforeSample(AIndex: Integer);
+begin
+  TSedaiBrassGenerator(FGen).SetLip(FDrive, FPressIn.Read(AIndex));
+  TSedaiBrassGenerator(FGen).SetLipOpening(FOpenIn.Read(AIndex));
+end;
+
+procedure TSedaiModBrass.TriggerOn(AFreq: Single; ANote: Integer; AVelocity: Single);
+begin
+  TSedaiBrassGenerator(FGen).NoteOn(ANote, AVelocity);
+end;
+
+procedure TSedaiModBrass.TriggerOff;
+begin
+  TSedaiBrassGenerator(FGen).NoteOff;
+end;
+
 { fmop — a DX7-style operator }
 
 constructor TSedaiModFMOp.Create;
@@ -598,13 +701,14 @@ begin
   else if SameText(ATypeName, 'modal') then Result := TSedaiModModal.Create
   else if SameText(ATypeName, 'bowed') then Result := TSedaiModBowed.Create
   else if SameText(ATypeName, 'reed') then Result := TSedaiModReed.Create
+  else if SameText(ATypeName, 'brass') then Result := TSedaiModBrass.Create
   else if SameText(ATypeName, 'fmop') then Result := TSedaiModFMOp.Create
   else Result := nil;
 end;
 
 function KnownInstrumentTypes: string;
 begin
-  Result := 'granular, karplus, modal, bowed, reed, fmop';
+  Result := 'granular, karplus, modal, bowed, reed, brass, fmop';
 end;
 
 end.
