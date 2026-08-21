@@ -8,6 +8,11 @@
 '' `env` e `amp` sono tipi, quindi la tastiera qui si chiama `kbd` e
 '' l'amplificatore `vamp`. Il traduttore automatico premette `m_` per lo
 '' stesso motivo.
+'' ⚠️ Le barre si costruiscono E si cablano DENTRO la stessa iterazione, e
+'' l'array non viene piu' riletto dopo il ciclo. Non e' uno stile: un
+'' puntatore assegnato dentro un blocco non sopravvive all'assegnazione
+'' successiva (vedi README). Rileggere bar(i) dopo il Next darebbe nove
+'' volte l'ultimo oscillatore.
 #include "library/instruments/saf.bas"
 
 Dim As Note Ptr kbd

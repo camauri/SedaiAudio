@@ -4,6 +4,10 @@
 '' scordatura si calcola, la quota nel mix si calcola, e un figlio cambia una
 '' sola giuntura senza sapere cosa ha deciso il padre. Il .patch che esce e'
 '' piatto e stupido, come deve essere — l'intelligenza sta qui.
+'' ⚠️ Gli oscillatori si costruiscono E si cablano DENTRO la stessa
+'' iterazione, e Src(i) non viene piu' riletto dopo il ciclo: un puntatore
+'' assegnato dentro un blocco non sopravvive all'assegnazione successiva
+'' (vedi README).
 #include "library/instruments/saf.bas"
 
 Type MoogVoice Extends Object

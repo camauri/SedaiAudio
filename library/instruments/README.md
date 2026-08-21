@@ -33,6 +33,7 @@ working on a machine where SedaiBasic is not installed.
 | `basic.bas` | the reference subtractive voice, lifted from `basic.patch` |
 | `hammond.bas` | nine drawbars as a **loop**, not as nine copied blocks |
 | `moog.bas` | a *family*: a parent with three seams and a child that changes one |
+| `minimoog.bas` | the **three real Minimoogs** — bass, brass, lead — as one family; `sb minimoog.bas bass` |
 
 ## `saf.bas` is generated, not written
 
@@ -72,6 +73,33 @@ translation until you read the error.
 writes the error message *into* `out.patch` and reports success. Anything that
 automates this must look at the **output** — check that it contains `module ` —
 and never at the exit status.
+
+**⚠️ A POINTER ASSIGNED INSIDE A BLOCK DOES NOT SURVIVE.** This is the sharpest
+trap here, and it is silent. Assign a pointer field or variable inside an `If`,
+inside a `For`, or in one virtual method among several, and the next such
+assignment **overwrites it**: every one of them ends up pointing at the last
+object created. Nothing errors; the graph simply comes out wired to the wrong
+modules.
+
+    This.Gld = New Glide                 '' inside an If  -> clobbered
+    This.O1  = New Osc                   '' this one wins, and Gld now reads it
+
+Measured on sb 2.0. What is safe:
+
+- assignment at the top level of a method body;
+- using the pointer **within the same block**, before the next assignment — which
+  is why `hammond.bas` and `moog.bas` are correct: they build and wire each
+  oscillator inside one loop iteration and never read the array afterwards.
+
+The way round it is to take the `New` out of the block and leave only what has
+to be conditional inside:
+
+    This.Gld = New Glide                          '' always, outside any block
+    If This.HasGlide <> 0 Then This.Gld->Init("gl")   '' only the declaring
+
+An object that is never `Init`-ed does not appear in the patch, so allocating one
+that goes unused costs a handful of bytes and nothing else. `minimoog.bas` is
+built this way throughout.
 
 **A variable may not be named after a type.** The library defines `Note`, `Env`,
 `Amp`, `Osc` and so on, so a keyboard variable called `note` collides. Call it
