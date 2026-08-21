@@ -27,7 +27,7 @@ uses
   SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
   SedaiSpatialChain, SedaiConvolver, SedaiTubeResonator, SedaiFormantBody,
   SedaiPatchGraph, SedaiPatchModules, SedaiPatchEvents, SedaiPatchVoices,
-  SedaiRandom, SedaiArrangement, SedaiGranularGenerator;
+  SedaiRandom, SedaiArrangement, SedaiGranularGenerator, SedaiPatchElectronic;
 
 const
   SR    = 44100;
@@ -3342,6 +3342,230 @@ begin
 end;
 
 // ---------------------------------------------------------------------------
+// Vector synthesis: the crossfade and the path that drives it.
+//
+// The two questions worth asking a crossfader are asked here as equalities, not
+// as tendencies. At a corner the output must be EXACTLY that source — not
+// nearly, exactly, because "nearly" means the other three are leaking and a
+// vector patch built on that would never be clean anywhere. And the two laws
+// have to be the laws they claim: linear keeps the sum of the weights at 1,
+// constant power keeps the sum of their SQUARES at 1. Both are checked by
+// feeding one corner at a time and reading the weight back out.
+// ---------------------------------------------------------------------------
+procedure TestVectorSynthesis;
+var
+  v: TSedaiModVector;
+  p: TSedaiModVPath;
+  pa, pb, pc, pd, px, py, po: TSedaiPatchPort;
+  pg, pxo, pyo: TSedaiPatchPort;
+  i: Integer;
+  s, sq, dx, dy: Single;
+  wsum, wsq: Single;
+  held: Boolean;
+
+  // The weight the module currently gives to one corner: put 1 there, 0
+  // everywhere else, render, read. Measuring the law instead of restating it.
+  function WeightOf(AWhich: Integer; AX, AY: Single): Single;
+  begin
+    pa.Value := 0; pb.Value := 0; pc.Value := 0; pd.Value := 0;
+    case AWhich of
+      0: pa.Value := 1.0;
+      1: pb.Value := 1.0;
+      2: pc.Value := 1.0;
+      3: pd.Value := 1.0;
+    end;
+    px.Value := AX; py.Value := AY;
+    v.RenderSample(0);
+    Result := po.Sample(0);
+  end;
+
+  procedure Corner(AX, AY: Single; AWhich: Integer; const ALabel: string);
+  var
+    got: Single;
+  begin
+    pa.Value := 0.11; pb.Value := 0.22; pc.Value := 0.33; pd.Value := 0.44;
+    px.Value := AX; py.Value := AY;
+    v.RenderSample(0);
+    got := po.Sample(0);
+    // Against the PORT, not against the literal: 0.11 written into a Single and
+    // 0.11 as an Extended constant are not the same number, and comparing them
+    // would test the compiler rather than the module.
+    case AWhich of
+      0: Ok(ALabel, got = pa.Value, Format('%.6f', [got]));
+      1: Ok(ALabel, got = pb.Value, Format('%.6f', [got]));
+      2: Ok(ALabel, got = pc.Value, Format('%.6f', [got]));
+      3: Ok(ALabel, got = pd.Value, Format('%.6f', [got]));
+    end;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('== vector synthesis ==');
+
+  v := TSedaiModVector.Create;
+  try
+    v.Prepare(SR, 8);
+    pa := v.PortByName('a'); pb := v.PortByName('b');
+    pc := v.PortByName('c'); pd := v.PortByName('d');
+    px := v.PortByName('x'); py := v.PortByName('y');
+    po := v.PortByName('out');
+    Ok('the vector module has its six inputs',
+       (pa <> nil) and (pb <> nil) and (pc <> nil) and (pd <> nil) and
+       (px <> nil) and (py <> nil) and (po <> nil));
+    if po = nil then Exit;
+
+    // THE test: a corner is that source and nothing else. Exact equality, so a
+    // single leaking weight of 1e-7 fails here rather than muddying a pad.
+    Corner(-1, -1, 0, 'corner A is exactly a');
+    Corner( 1, -1, 1, 'corner B is exactly b');
+    Corner( 1,  1, 2, 'corner C is exactly c');
+    Corner(-1,  1, 3, 'corner D is exactly d');
+
+    // The middle of the square is the average of the four, under the linear law.
+    pa.Value := 1.0; pb.Value := 1.0; pc.Value := 1.0; pd.Value := 1.0;
+    px.Value := 0.0; py.Value := 0.0;
+    v.RenderSample(0);
+    Ok('the centre sums to unity', Abs(po.Sample(0) - 1.0) < 1e-6,
+       Format('%.6f', [po.Sample(0)]));
+
+    // The law, measured across the square rather than at one flattering point.
+    wsum := 0; held := True;
+    dx := -1.0;
+    while dx <= 1.001 do
+    begin
+      dy := -1.0;
+      while dy <= 1.001 do
+      begin
+        s := WeightOf(0, dx, dy) + WeightOf(1, dx, dy) +
+             WeightOf(2, dx, dy) + WeightOf(3, dx, dy);
+        if Abs(s - 1.0) > 1e-6 then held := False;
+        if Abs(s - 1.0) > wsum then wsum := Abs(s - 1.0);
+        dy := dy + 0.25;
+      end;
+      dx := dx + 0.25;
+    end;
+    Ok('linear: the weights sum to 1 everywhere', held,
+       Format('worst |sum-1| = %.3e over 81 points', [wsum]));
+
+    Ok('law=power is accepted', v.Configure('law', 'power'));
+    Ok('an unknown law is refused', not v.Configure('law', 'logarithmic'));
+
+    // Constant power: the SQUARES sum to 1. Which is also why the centre is now
+    // louder than 1 for four correlated sources — that is the point of the law,
+    // not a bug, and the corners are still exact.
+    wsq := 0; held := True;
+    dx := -1.0;
+    while dx <= 1.001 do
+    begin
+      dy := -1.0;
+      while dy <= 1.001 do
+      begin
+        sq := 0;
+        for i := 0 to 3 do
+        begin
+          s := WeightOf(i, dx, dy);
+          sq := sq + s * s;
+        end;
+        if Abs(sq - 1.0) > 1e-6 then held := False;
+        if Abs(sq - 1.0) > wsq then wsq := Abs(sq - 1.0);
+        dy := dy + 0.25;
+      end;
+      dx := dx + 0.25;
+    end;
+    Ok('power: the squares sum to 1 everywhere', held,
+       Format('worst |sum-1| = %.3e over 81 points', [wsq]));
+
+    Corner(-1, -1, 0, 'power: corner A is still exactly a');
+    Corner( 1,  1, 2, 'power: corner C is still exactly c');
+
+    // Past the corner there is nothing to fade to, so the joystick clamps. An
+    // unclamped weight would go negative, which inverts a source instead of
+    // muting it.
+    v.Configure('law', 'linear');
+    pa.Value := 0.11; pb.Value := 0.22; pc.Value := 0.33; pd.Value := 0.44;
+    px.Value := -9.0; py.Value := -9.0;
+    v.RenderSample(0);
+    Ok('the joystick clamps at the corner', po.Sample(0) = pa.Value,
+       Format('%.6f', [po.Sample(0)]));
+  finally
+    v.Free;
+  end;
+
+  // The path: the half of vector synthesis that is not a fader.
+  p := TSedaiModVPath.Create;
+  try
+    pg := p.PortByName('gate');
+    pxo := p.PortByName('x'); pyo := p.PortByName('y');
+    Ok('the path module has gate, x and y',
+       (pg <> nil) and (pxo <> nil) and (pyo <> nil));
+    if pyo = nil then Exit;
+
+    // With no points it is silent rather than undefined: an unconfigured path
+    // should leave the crossfader in the middle, not somewhere arbitrary.
+    p.Prepare(SR, 8);
+    p.RenderSample(0);
+    Ok('no points means the centre', (pxo.Sample(0) = 0.0) and (pyo.Sample(0) = 0.0));
+
+    Ok('a malformed point list is refused',
+       not p.Configure('points', '-1,-1'));
+    Ok('a non-numeric point is refused',
+       not p.Configure('points', 'left,-1,0'));
+    Ok('the path parses', p.Configure('points', '-1,-1,0 : 1,-1,1 : 1,1,2'));
+
+    p.Prepare(SR, 8);
+    p.ResetState;
+    pg.Value := 0.0;
+    p.RenderSample(0);
+    Ok('sits on the first point before the gate',
+       (pxo.Sample(0) = -1.0) and (pyo.Sample(0) = -1.0),
+       Format('%.3f, %.3f', [pxo.Sample(0), pyo.Sample(0)]));
+
+    // Halfway along the first leg: x has travelled half of -1..+1, y has not
+    // moved at all. Interpolation, checked on the axis that should move AND on
+    // the one that should not.
+    pg.Value := 1.0;
+    for i := 0 to (SR div 2) do p.RenderSample(0);
+    Ok('halfway along the first leg', Abs(pxo.Sample(0) - 0.0) < 0.01,
+       Format('x=%.4f', [pxo.Sample(0)]));
+    Ok('and the other axis has not moved', Abs(pyo.Sample(0) + 1.0) < 1e-6,
+       Format('y=%.4f', [pyo.Sample(0)]));
+
+    // Past the end it holds. A pad that snapped back to its first corner when
+    // the path ran out would be unusable.
+    for i := 0 to 4 * SR do p.RenderSample(0);
+    Ok('holds on the last point', (Abs(pxo.Sample(0) - 1.0) < 1e-6) and
+       (Abs(pyo.Sample(0) - 1.0) < 1e-6),
+       Format('%.3f, %.3f', [pxo.Sample(0), pyo.Sample(0)]));
+
+    // ...unless told to loop, and then it is back near the beginning.
+    Ok('loop=yes is accepted', p.Configure('loop', 'yes'));
+    p.ResetState;
+    pg.Value := 0.0; p.RenderSample(0);
+    pg.Value := 1.0;
+    // A lap is 2 s, so at 2.2 s a looping path is 0.2 s into the first leg
+    // again: x = -1 + 2*(0.2/1.0) = -0.6. Held instead of looped it would still
+    // read +1, so the two outcomes are far apart and the check cannot be
+    // accidentally satisfied.
+    for i := 0 to Round(2.2 * SR) do p.RenderSample(0);
+    Ok('and loops back round', Abs(pxo.Sample(0) + 0.6) < 0.02,
+       Format('x=%.4f at 2.2 s of a 2 s lap', [pxo.Sample(0)]));
+
+    // The path restarts on the EDGE, not while the gate is high: a held pad
+    // walks its path once.
+    p.Configure('loop', 'no');
+    p.ResetState;
+    pg.Value := 1.0;
+    for i := 0 to (SR div 2) do p.RenderSample(0);
+    s := pxo.Sample(0);
+    for i := 0 to 9 do p.RenderSample(0);
+    Ok('a held gate does not restart the path', pxo.Sample(0) > s,
+       Format('%.4f -> %.4f', [s, pxo.Sample(0)]));
+  finally
+    p.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
 // Granular synthesis.
 //
 // The test that matters is EXACT RECONSTRUCTION. A periodic Hann window sums to
@@ -3622,6 +3846,7 @@ begin
   TestPatchVoicePoolEvents;
   TestPatchSustainPedal;
   TestGranular;
+  TestVectorSynthesis;
   TestArrangement;
 
   WriteLn;

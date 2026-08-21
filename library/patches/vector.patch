@@ -1,0 +1,64 @@
+# Sintesi vettoriale: quattro suoni ai vertici di un quadrato, e un joystick.
+#
+# Prophet VS e Wavestation misero quattro oscillatori ai quattro angoli e una
+# leva in mezzo. Ma cio' che ne ha fatto una TECNICA e non un mixer a quattro
+# vie e' che la leva SI MUOVE DA SOLA, lungo un percorso con i suoi tempi: il
+# suono arriva dove non era partito, e quel viaggio e' il pad.
+#
+# Qui `vector` e' un incrocio, non un generatore: agli angoli ci sta qualsiasi
+# cosa abbia un'uscita — oscillatori, strumenti interi, nuvole granulari. E
+# `vpath` e' il percorso, in punti x,y,secondi.
+#
+#   D (-1,+1) ----- C (+1,+1)        y
+#       |               |            ^
+#       |       +       |            |
+#       |               |            +---> x
+#   A (-1,-1) ----- B (+1,-1)
+#
+#   bin/<plat>/patch_render library/patches/vector.patch out.wav 6 0 5
+
+module note = note
+module gl   = glide time=0.02
+
+# I quattro angoli, scelti perche' si riconoscano a orecchio uno per uno:
+# fondo rotondo, ottava brillante, nasale, soffio.
+module a    = osc shape=sine
+module b    = osc shape=saw
+module c    = osc shape=pulse
+module d    = noise type=white
+module dbp  = filter mode=bandpass cutoff=2200
+
+module vp   = vpath points=-1,-1,0:-1,-1,0.9:1,-1,1.5:1,-1,2.2:1,1,2.8:1,1,3.5:-1,1,4.1 loop=no
+module vec  = vector law=power
+
+module env  = env a=0.4 d=0.3 s=0.85 r=0.9
+module amp  = amp
+
+set c.pw     = 0.12       # stretta: e' quello che la rende nasale
+set dbp.res  = 0.55
+
+connect note.pitch -> gl.in
+connect gl.out     -> a.pitch
+connect gl.out     -> b.pitch
+connect gl.out     -> c.pitch
+
+# La seconda voce un'ottava sopra: l'angolo B deve staccarsi da A anche di
+# registro, non solo di forma d'onda.
+set b.pitch  = 1.0
+
+connect d.out   -> dbp.in
+connect a.out   -> vec.a
+connect b.out   -> vec.b
+connect c.out   -> vec.c
+connect dbp.out -> vec.d  amount=2.2   # il passabanda toglie molto: qui si recupera
+
+# Il percorso parte quando parte la nota. Da qui in poi il joystick e' suo.
+connect note.gate -> vp.gate
+connect vp.x      -> vec.x
+connect vp.y      -> vec.y
+
+connect vec.out   -> amp.in
+connect env.out   -> amp.gain  amount=0.32   # power law: quattro sorgenti al centro fanno 2.0
+connect note.gate -> env.gate
+
+output amp.out

@@ -74,7 +74,7 @@ sb library/instruments/hammond.bas > library/patches/hammond.patch
 **Check that everything still works.**
 
 ```
-bin/x86_64-linux/saf_regression      # 193 checks, headless
+bin/x86_64-linux/saf_regression      # 233 checks, headless
 bin/x86_64-linux/sedaisid_test       # SID Evo against reSID
 ```
 
@@ -111,7 +111,7 @@ connect env1.out   -> amp.gain  amount=0.3
 output  amp.out
 ```
 
-Seven statements, **40 module types**, and 27 patches shipped in
+Seven statements, **43 module types**, and 29 patches shipped in
 [`library/patches/`](library/patches/). The full grammar, the traps with their
 real error messages, and a **module reference generated from the registry** —
 not transcribed, so it cannot drift — are in
@@ -129,6 +129,10 @@ Some things worth knowing without reading all of it:
 - **Feedback is a technique, not an error.** A cycle is detected, its back edges
   read the previous sample, and that unit delay is what makes the loop
   computable.
+- **Vector synthesis is a crossfade, not an engine.** `vector` puts four
+  *inputs* at the corners of a square and `vpath` walks the joystick across it
+  on its own schedule — so the corners can be oscillators, whole instruments or
+  granular clouds. At a corner the output is bit-exactly that source.
 - **A patch is a voice template.** The pool builds N independent copies, so a
   chord is not one note three times as loud: nothing is shared, so nothing
   phase-locks.
@@ -422,7 +426,7 @@ mapping (`-Target x` ⇄ `--target x`) is in each script's header. Output goes t
 | `test_saf_main` | test | facade test (classic / FM / wavetable) |
 | `audiotest` | test | backend and render path |
 | `sedaisid_test` | test | SID Evo verification against reSID |
-| `saf_regression` | test | headless regression suite, 208 checks |
+| `saf_regression` | test | headless regression suite, 233 checks |
 
 Sources for tools live in `tools/`, QA and the historic frontends in `test/`.
 Local diagnostic probes that are *not* shipped stay in the gitignored
@@ -479,12 +483,12 @@ Live MIDI **input** uses `SedaiMIDIInput` (`TSedaiMIDIInput`): `Enumerate`,
 
 Four independent guards, all runnable.
 
-**`saf_regression` — 208 checks, headless.** The whole render path with no audio
+**`saf_regression` — 233 checks, headless.** The whole render path with no audio
 device: engine to mixer to master, every source type, cycle detection, file
 formats round-tripping, the note queue, sample-accurate events, the sustain
-pedal. It also runs as a Windows binary under Wine, same 208.
+pedal. It also runs as a Windows binary under Wine, same 233.
 
-**Sound fixtures — 26 patches.** Every shipped patch has a signature (hash, peak,
+**Sound fixtures — 27 patches.** Every shipped patch has a signature (hash, peak,
 RMS, spectral centroid). `patch_fixture` says which sounds changed and by how
 much, so a change to the engine cannot alter an instrument quietly. It writes
 the reference **only** with `--update`.
@@ -492,7 +496,7 @@ the reference **only** with `--update`.
 **`sedaisid_test` — bit-exact against reSID.** Not "close": zero mismatches over
 tens of millions of cycles, on both the classic and the distortion filter paths.
 
-**The MODERN round trip — 25 of 25.** A shipped `.patch` is lifted back into
+**The MODERN round trip — 26 of 26.** A shipped `.patch` is lifted back into
 SedaiBasic, run, and the regenerated patch must render **byte-identically** to
 the original. Two effect patches are skipped, because they need an audio input
 and rendering one with nothing connected measures silence, which proves

@@ -552,6 +552,102 @@ Sub Lpg.Init(nm As String)
   This.Idx = SafDeclare(nm, "lpg")
 End Sub
 
+'' vector — declaration keys: law
+Type Vector Extends Module
+  Public:
+    A As Port
+    B As Port
+    C As Port
+    D As Port
+    X As Port
+    Y As Port
+    Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
+End Type
+
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Vector.Bind(nm As String)
+  This.Idx = -1
+  This.Nm = nm
+  This.Out.Path = nm + ".out"
+  This.A.Path = nm + ".a"
+  This.B.Path = nm + ".b"
+  This.C.Path = nm + ".c"
+  This.D.Path = nm + ".d"
+  This.X.Path = nm + ".x"
+  This.Y.Path = nm + ".y"
+End Sub
+
+Sub Vector.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "vector")
+End Sub
+
+'' vpath — declaration keys: loop, points
+Type Vpath Extends Module
+  Public:
+    Gate As Port
+    X As Port
+    Y As Port
+    Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
+End Type
+
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Vpath.Bind(nm As String)
+  This.Idx = -1
+  This.Nm = nm
+  This.Out.Path = nm + ".out"
+  This.Gate.Path = nm + ".gate"
+  This.X.Path = nm + ".x"
+  This.Y.Path = nm + ".y"
+End Sub
+
+Sub Vpath.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "vpath")
+End Sub
+
+'' granular — declaration keys: sample, seed, skirt, speed, window
+Type Granular Extends Module
+  Public:
+    Pos As Port
+    Dens As Port
+    Size As Port
+    Pitch As Port
+    Spread As Port
+    Pspread As Port
+    Pan As Port
+    Amp As Port
+    OutR As Port
+    Declare Sub Init(nm As String)
+    Declare Sub Bind(nm As String)
+End Type
+
+'' Bind names the ports without declaring the module: for something
+'' an included file already declared.
+Sub Granular.Bind(nm As String)
+  This.Idx = -1
+  This.Nm = nm
+  This.Out.Path = nm + ".out"
+  This.Pos.Path = nm + ".pos"
+  This.Dens.Path = nm + ".dens"
+  This.Size.Path = nm + ".size"
+  This.Pitch.Path = nm + ".pitch"
+  This.Spread.Path = nm + ".spread"
+  This.Pspread.Path = nm + ".pspread"
+  This.Pan.Path = nm + ".pan"
+  This.Amp.Path = nm + ".amp"
+  This.OutR.Path = nm + ".outR"
+End Sub
+
+Sub Granular.Init(nm As String)
+  This.Bind(nm)
+  This.Idx = SafDeclare(nm, "granular")
+End Sub
+
 '' karplus — declaration keys: freq
 Type Karplus Extends Module
   Public:

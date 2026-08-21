@@ -402,6 +402,8 @@ patched in, and the range they clamp to.
 | `follow` | both | — | in [audio 0], attack [0..+ 0.005 0.0001..2], release [0..+ 0.12 0.0001..8] | out |
 | `fold` | both | — | in [audio 0], fold [0..+ 1 0..16], sym [-..+ 0 -1..1] | out |
 | `lpg` | both | — | in [audio 0], cv [0..+ 0 0..1], resp [0..+ 0.02 0..1] | out |
+| `vector` | both | law | a [audio 0], b [audio 0], c [audio 0], d [audio 0], x [-..+ 0 -1..1], y [-..+ 0 -1..1] | out |
+| `vpath` | both | loop, points | gate [gate 0] | x, y |
 
 ### Instruments
 
@@ -451,8 +453,6 @@ patched in, and the range they clamp to.
 | `sbody` | block | body, kind, width | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
 | `sconv` | block | ir, irraw | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
 | `seq3` | block | gain, bNtype, bNfreq, bNgain, bNq, bNoff  (N = 0..7) | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
-
-
 <!-- END MODULE REFERENCE -->
 
 
@@ -537,6 +537,55 @@ not of a step response. On a 220 Hz saw a 3 ms setting measures about 9 ms to
 90%, because the detector needs a couple of cycles of the waveform to see the
 peak. That is inherent to following an oscillating signal, not slack in the
 module.
+
+## Vector synthesis
+
+    vector   four audio inputs at the corners of a square, one joystick:
+             `x` and `y`, both -1..+1, `law` = linear | power
+    vpath    the joystick moving by itself: `points` = x,y,seconds : ...
+
+The Prophet VS and the Wavestation put four oscillators at the corners of a
+square and a lever in the middle. What made that a technique rather than a
+four-way fader is that **the lever moves on its own**, along a path with its own
+timing: the sound arrives somewhere it did not start, and that journey is the
+pad.
+
+`vector` is deliberately a **mixer and not a generator**. A vector oscillator
+would contain its four sources and could only ever blend those four; a mixer
+blends whatever is patched into it — four oscillators, four whole instruments,
+four granular clouds, a recording against a synthesised note.
+
+    D (-1,+1) ----- C (+1,+1)        y
+        |               |            ^
+        |       +       |            |
+        |               |            +---> x
+    A (-1,-1) ----- B (+1,-1)
+
+At a corner the output is **exactly** that source: not nearly, exactly, and the
+suite checks it as an equality, because a leaking weight of 1e-7 is a vector
+patch that is never clean anywhere. Past a corner the joystick clamps — an
+unclamped weight would go negative, which inverts a source instead of muting it.
+
+The two laws are worth choosing between. **Linear** keeps the sum of the weights
+at 1 and is right for correlated sources, the same waveform detuned. **Constant
+power** keeps the sum of their *squares* at 1 and is right for independent ones;
+it is what stops the middle of the square from sagging, at the price of four
+correlated sources adding up to 2.0 in the centre, which is why `vector.patch`
+scales its amplifier accordingly.
+
+A path point is `x,y,seconds`, and the seconds are the moment the joystick **is**
+there, not how long it takes to get there — a schedule reads better than a list
+of durations. Between points it interpolates in a straight line; past the last
+one it holds, unless `loop=yes`. It restarts on the gate's **edge**, so a held
+pad walks its path once. Repeat a point to dwell on it. No spaces anywhere in
+`points=`: a module line is split on whitespace, so the whole path has to be one
+word.
+
+`vector.patch` is the demonstration: a sine, a saw an octave up, a narrow pulse
+and filtered noise at the four corners, with the path resting on each in turn.
+Measured at the four dwells its spectral centroid reads 119, 3839, 2644 and
+6719 Hz — four different sounds out of one note, with nothing touched but the
+joystick.
 
 ## The body stage
 

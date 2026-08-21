@@ -52,7 +52,7 @@ touching the registry.
 
 `patch_bas` lifts an existing `.patch` back into MODERN. That exists mostly to
 be a **test**: `.patch → .bas → sb → .patch'` and then require `.patch'` to
-render *byte-identically*. Over the shipped library that is **25 of 25**, with
+render *byte-identically*. Over the shipped library that is **26 of 26**, with
 two effect patches skipped — they need an audio input, as `patch_fixture` also
 skips them.
 

@@ -91,6 +91,73 @@ type
     procedure RenderSample(AIndex: Integer); override;
   end;
 
+  { TSedaiModVector — the vector-synthesis crossfade: four sources, one joystick.
+
+    Prophet VS and Wavestation put four oscillators at the corners of a square
+    and a joystick in the middle. What actually made that a technique rather
+    than a four-way fader is that the joystick MOVES BY ITSELF, along a path
+    with its own timing — that part is `vpath`, below.
+
+    Deliberately a MIXER and not a generator. A vector generator would have to
+    contain four oscillators and would then only ever blend those four; a mixer
+    blends whatever is patched into it — four instruments, four granular clouds,
+    an oscillator against a recording. The corners are:
+
+        D (-1,+1) ---- C (+1,+1)          y
+            |              |              ^
+            |      +       |              |
+            |              |              +---> x
+        A (-1,-1) ---- B (+1,-1)
+
+    Two laws, and the difference is audible. LINEAR keeps the sum of the
+    weights at 1, which is right when the four sources are correlated — the same
+    waveform detuned, say. CONSTANT POWER keeps the sum of the SQUARES at 1,
+    which is right when they are independent, and is what stops the middle of
+    the square from sagging. }
+  TSedaiModVector = class(TSedaiPatchModule)
+  private
+    FA, FB, FC, FD, FXIn, FYIn, FOut: TSedaiPatchPort;
+    FPower: Boolean;
+  public
+    constructor Create; override;
+    function ConfigKeys: string; override;
+    function Configure(const AKey, AValue: string): Boolean; override;
+    procedure RenderSample(AIndex: Integer); override;
+  end;
+
+  { TSedaiModVPath — the joystick that moves on its own.
+
+    A list of points in the square, each with the time to reach it, walked when
+    the gate opens. This is the half of vector synthesis that is not a fader:
+    the sound arrives somewhere it did not start, on its own schedule, and that
+    is what a Wavestation pad is.
+
+      module vp = vpath points=-1,-1,0:1,-1,0.4:1,1,0.9:-1,1,1.6 loop=yes
+
+    No spaces: a module line is split on whitespace, so the whole path has to be
+    one word.
+
+    Each point is x,y,seconds — the time at which the joystick IS there, not how
+    long it takes to get there, because a path is easier to read as a schedule
+    than as a list of durations. Between points it interpolates in a straight
+    line. Past the last one it holds, unless loop=yes. }
+  TSedaiModVPath = class(TSedaiPatchModule)
+  private
+    FGateIn, FXOut, FYOut: TSedaiPatchPort;
+    FPts: array of record X, Y, T: Single; end;
+    FLoop: Boolean;
+    FTime: Double;
+    FRunning: Boolean;
+    FLastGate: Single;
+    function TotalTime: Single;
+  public
+    constructor Create; override;
+    function ConfigKeys: string; override;
+    function Configure(const AKey, AValue: string): Boolean; override;
+    procedure ResetState; override;
+    procedure RenderSample(AIndex: Integer); override;
+  end;
+
   { TSedaiModGlide — portamento, i.e. a slew limiter.
 
     The sliding bass line. Also useful on any control voltage: put it after a
@@ -691,9 +758,206 @@ begin
   FOut.Write(AIndex, FZ1 * G);
 end;
 
+{ TSedaiModVector }
+
+constructor TSedaiModVector.Create;
+begin
+  inherited Create;
+  TypeName := 'vector';
+  Rate := mrBoth;
+  FPower := False;
+  FA := AddInput('a', prAudio, 0.0);
+  FB := AddInput('b', prAudio, 0.0);
+  FC := AddInput('c', prAudio, 0.0);
+  FD := AddInput('d', prAudio, 0.0);
+  // The joystick. Bipolar because the corners are at -1 and +1 and the middle
+  // is nothing: an axis whose rest position is not zero would need a knob to
+  // put it back there.
+  FXIn := AddInput('x', prBipolar, 0.0);
+  FXIn.Min := -1.0; FXIn.Max := 1.0;
+  FYIn := AddInput('y', prBipolar, 0.0);
+  FYIn.Min := -1.0; FYIn.Max := 1.0;
+  FOut := AddOutput('out', prAudio);
+end;
+
+function TSedaiModVector.ConfigKeys: string;
+begin
+  Result := 'law';
+end;
+
+function TSedaiModVector.Configure(const AKey, AValue: string): Boolean;
+begin
+  Result := False;
+  if SameText(AKey, 'law') then
+  begin
+    if SameText(AValue, 'linear') then FPower := False
+    else if SameText(AValue, 'power') then FPower := True
+    else Exit(False);
+    Result := True;
+  end;
+end;
+
+procedure TSedaiModVector.RenderSample(AIndex: Integer);
+var
+  X, Y, WX, WY, WA, WB, WC, WD: Single;
+begin
+  X := FXIn.Read(AIndex);
+  Y := FYIn.Read(AIndex);
+  // Clamped, unlike most inputs: past the corner there is nothing to fade to,
+  // and letting a weight go negative would invert a source rather than mute it.
+  if X < -1.0 then X := -1.0 else if X > 1.0 then X := 1.0;
+  if Y < -1.0 then Y := -1.0 else if Y > 1.0 then Y := 1.0;
+  WX := (X + 1.0) * 0.5;
+  WY := (Y + 1.0) * 0.5;
+
+  WA := (1.0 - WX) * (1.0 - WY);
+  WB := WX * (1.0 - WY);
+  WC := WX * WY;
+  WD := (1.0 - WX) * WY;
+
+  // Square-rooting the weights turns "sum to 1" into "sum of squares to 1",
+  // which is the right law for four sources that are not correlated.
+  if FPower then
+  begin
+    WA := Sqrt(WA); WB := Sqrt(WB); WC := Sqrt(WC); WD := Sqrt(WD);
+  end;
+
+  FOut.Write(AIndex, FA.Read(AIndex) * WA + FB.Read(AIndex) * WB +
+                     FC.Read(AIndex) * WC + FD.Read(AIndex) * WD);
+end;
+
+{ TSedaiModVPath }
+
+constructor TSedaiModVPath.Create;
+begin
+  inherited Create;
+  TypeName := 'vpath';
+  Rate := mrBoth;
+  FLoop := False;
+  FTime := 0.0;
+  FRunning := False;
+  FLastGate := 0.0;
+  SetLength(FPts, 0);
+  FGateIn := AddInput('gate', prGate, 0.0);
+  FXOut := AddOutput('x', prBipolar);
+  FYOut := AddOutput('y', prBipolar);
+end;
+
+function TSedaiModVPath.ConfigKeys: string;
+begin
+  Result := 'loop, points';
+end;
+
+function TSedaiModVPath.Configure(const AKey, AValue: string): Boolean;
+var
+  Groups, Nums: TStringArray;
+  I, N: Integer;
+  FS: TFormatSettings;
+  X, Y, T: Single;
+begin
+  Result := False;
+  FS := DefaultFormatSettings; FS.DecimalSeparator := '.';
+  if SameText(AKey, 'loop') then
+  begin
+    FLoop := SameText(AValue, 'yes') or SameText(AValue, 'true') or (AValue = '1');
+    Exit(True);
+  end;
+  if not SameText(AKey, 'points') then Exit;
+
+  // "x,y,t : x,y,t : ..." — the colon separates points because the comma is
+  // already busy inside one.
+  Groups := AValue.Split([':']);
+  SetLength(FPts, 0);
+  N := 0;
+  for I := 0 to High(Groups) do
+  begin
+    if Trim(Groups[I]) = '' then Continue;
+    Nums := Groups[I].Split([',']);
+    if Length(Nums) <> 3 then Exit(False);
+    if not (TryStrToFloat(Trim(Nums[0]), X, FS) and
+            TryStrToFloat(Trim(Nums[1]), Y, FS) and
+            TryStrToFloat(Trim(Nums[2]), T, FS)) then Exit(False);
+    SetLength(FPts, N + 1);
+    FPts[N].X := X; FPts[N].Y := Y; FPts[N].T := T;
+    Inc(N);
+  end;
+  Result := N > 0;
+end;
+
+function TSedaiModVPath.TotalTime: Single;
+begin
+  if Length(FPts) = 0 then Result := 0.0 else Result := FPts[High(FPts)].T;
+end;
+
+procedure TSedaiModVPath.ResetState;
+begin
+  inherited ResetState;
+  FTime := 0.0;
+  FRunning := False;
+  FLastGate := 0.0;
+end;
+
+procedure TSedaiModVPath.RenderSample(AIndex: Integer);
+var
+  G, T, F, X, Y: Single;
+  I, Last: Integer;
+begin
+  if Length(FPts) = 0 then
+  begin
+    FXOut.Write(AIndex, 0.0);
+    FYOut.Write(AIndex, 0.0);
+    Exit;
+  end;
+
+  G := FGateIn.Read(AIndex);
+  // The path restarts on the EDGE, not while the gate is high: a pad held down
+  // should walk its path once, not begin again on every sample.
+  if (G >= 0.5) and (FLastGate < 0.5) then
+  begin
+    FTime := 0.0;
+    FRunning := True;
+  end;
+  FLastGate := G;
+
+  T := FTime;
+  Last := High(FPts);
+  if FLoop and (TotalTime > 0.0) then
+    while T > TotalTime do T := T - TotalTime;
+
+  if T <= FPts[0].T then
+  begin
+    X := FPts[0].X; Y := FPts[0].Y;
+  end
+  else if T >= FPts[Last].T then
+  begin
+    X := FPts[Last].X; Y := FPts[Last].Y;
+  end
+  else
+  begin
+    X := FPts[Last].X; Y := FPts[Last].Y;
+    for I := 0 to Last - 1 do
+      if (T >= FPts[I].T) and (T <= FPts[I + 1].T) then
+      begin
+        if FPts[I + 1].T > FPts[I].T then
+          F := (T - FPts[I].T) / (FPts[I + 1].T - FPts[I].T)
+        else
+          F := 0.0;
+        X := FPts[I].X + (FPts[I + 1].X - FPts[I].X) * F;
+        Y := FPts[I].Y + (FPts[I + 1].Y - FPts[I].Y) * F;
+        Break;
+      end;
+  end;
+
+  FXOut.Write(AIndex, X);
+  FYOut.Write(AIndex, Y);
+  if FRunning and (FSR > 0) then FTime := FTime + 1.0 / FSR;
+end;
+
 function CreateElectronicModuleByType(const ATypeName: string): TSedaiPatchModule;
 begin
-  if SameText(ATypeName, 'seq') then Result := TSedaiModSeq.Create
+  if SameText(ATypeName, 'vector') then Result := TSedaiModVector.Create
+  else if SameText(ATypeName, 'vpath') then Result := TSedaiModVPath.Create
+  else if SameText(ATypeName, 'seq') then Result := TSedaiModSeq.Create
   else if SameText(ATypeName, 'sh') then Result := TSedaiModSampleHold.Create
   else if SameText(ATypeName, 'ring') then Result := TSedaiModRing.Create
   else if SameText(ATypeName, 'glide') then Result := TSedaiModGlide.Create
@@ -707,7 +971,8 @@ end;
 
 function KnownElectronicTypes: string;
 begin
-  Result := 'seq, sh, ring, glide, noise, quant, follow, fold, lpg';
+  Result := 'seq, sh, ring, glide, noise, quant, follow, fold, lpg, ' +
+            'vector, vpath';
 end;
 
 end.
