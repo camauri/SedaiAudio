@@ -68,6 +68,19 @@ type
 // constructor — never in the audio path.
 function SedaiNextSeed: QWord;
 
+// A seed derived from a NAME rather than from the order things were built in.
+//
+// SedaiNextSeed is reproducible only for the same construction sequence, and
+// that turned out not to be enough: adding one patch to a directory changed the
+// sound of the patches rendered after it, because they were handed different
+// seeds. Measured, not reasoned about — the sound fixtures caught it.
+//
+// A module that seeds itself from its own name depends on nothing else. Two
+// patches can then be rendered in either order, or one of them not at all, and
+// each still sounds the same. Same name in two patches means the same stream,
+// which is right: they are the same module in the same place.
+function SedaiSeedFromName(const AName: string): QWord;
+
 // Restart the dispenser, so that building the same objects again gets the same
 // seeds again and therefore the same sound. This is what a test means when it
 // wants two renders to match: it is the honest replacement for setting the
@@ -123,6 +136,20 @@ var
   // Interlocked because objects may be built on more than one thread; it is
   // touched once per construction and never while rendering.
   GSeedCounter: QWord = 0;
+
+function SedaiSeedFromName(const AName: string): QWord;
+var
+  I: Integer;
+begin
+  // FNV-1a, 64-bit. Small, well spread, and it has no state — which is the
+  // whole point: the answer depends on the name and on nothing else.
+  Result := QWord(14695981039346656037);
+  for I := 1 to Length(AName) do
+  begin
+    Result := Result xor QWord(Ord(AName[I]));
+    Result := Result * QWord(1099511628211);
+  end;
+end;
 
 procedure SedaiSeedSequence(AFrom: QWord);
 begin

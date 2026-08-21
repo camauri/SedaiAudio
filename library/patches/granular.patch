@@ -1,0 +1,29 @@
+# Sintesi granulare: il suono come una nuvola di frammenti brevissimi.
+#
+# Un grano e' qualche decina di millisecondi di una registrazione, sfumato in
+# entrata e in uscita e lasciato cadere da qualche parte nel tempo. Pochi al
+# secondo e si sentono uno per uno; qualche centinaio e si fondono in una
+# materia continua in cui ALTEZZA E VELOCITA' NON SONO PIU' LA STESSA MANOPOLA.
+# E' tutta qui la ragione della tecnica: un campionatore, per accorciare un
+# suono, puo' solo suonarlo piu' in fretta, e cosi' facendo lo alza.
+#
+# ⚠️ `sample=` e' relativo a DA DOVE ESEGUI, non a dove sta la patch — come
+# `ir=` di sconv. Questa punta a un file di prova del repository perche' deve
+# funzionare ovunque; puntala alla tua registrazione e ascolta.
+#
+#   bin/<plat>/patch_render library/patches/granular.patch out.wav 4 0 0
+
+module gr  = granular sample=data/fixtures/tone_s16_stereo.wav window=hann
+module amp = amp
+
+set gr.pos     = 0.0     # dove leggere, 0..1
+set gr.dens    = 55      # grani al secondo
+set gr.size    = 80      # quanto dura un grano, in millisecondi
+set gr.spread  = 0.02    # dispersione della posizione, in secondi
+set gr.pspread = 30      # dispersione dell'altezza, in centesimi
+set gr.pan     = 0.8     # quanto larga sta la nuvola
+set amp.gain   = 0.8
+
+connect gr.out  -> amp.in
+
+output  amp.out

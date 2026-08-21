@@ -27,7 +27,7 @@ uses
   SedaiFLACEncoder, SedaiFLACDecoder, SedaiAutoSpace, SedaiBodyResonator,
   SedaiSpatialChain, SedaiConvolver, SedaiTubeResonator, SedaiFormantBody,
   SedaiPatchGraph, SedaiPatchModules, SedaiPatchEvents, SedaiPatchVoices,
-  SedaiRandom, SedaiArrangement;
+  SedaiRandom, SedaiArrangement, SedaiGranularGenerator;
 
 const
   SR    = 44100;
@@ -3342,6 +3342,124 @@ begin
 end;
 
 // ---------------------------------------------------------------------------
+// Granular synthesis.
+//
+// The test that matters is EXACT RECONSTRUCTION. A periodic Hann window sums to
+// exactly 1 with its neighbour half a grain away, so grains at 50% overlap, at
+// natural speed, with no spread at all, must give back the source. Anything
+// wrong with the scheduler, the window or the read position lands there as a
+// number — long before anyone has to judge a texture by ear, which is the one
+// thing an ear is bad at.
+// ---------------------------------------------------------------------------
+procedure TestGranular;
+const
+  N   = 20000;
+  LEN = 512;                        // grain length in samples
+var
+  buf: TSedaiAudioBuffer;
+  g: TSedaiGranularGenerator;
+  i: Integer;
+  src, outA, outB: array of Single;
+  d, maxd, pk, e1, e2: Single;
+
+  // Render N samples of the current settings into ABuf.
+  procedure RunInto(AGen: TSedaiGranularGenerator; var ABuf: array of Single);
+  var
+    k: Integer;
+  begin
+    AGen.Reset;
+    for k := 0 to N - 1 do ABuf[k] := AGen.GenerateSample;
+  end;
+
+begin
+  WriteLn;
+  WriteLn('== granular synthesis ==');
+  SetLength(src, N); SetLength(outA, N); SetLength(outB, N);
+
+  buf := TSedaiAudioBuffer.Create;
+  buf.Allocate(1, N);
+  for i := 0 to N - 1 do
+  begin
+    src[i] := 0.6 * Sin(2 * Pi * 220 * i / SR) + 0.3 * Sin(2 * Pi * 537 * i / SR);
+    buf.SetSample(0, i, src[i]);
+  end;
+
+  g := TSedaiGranularGenerator.Create;
+  try
+    g.SetSampleRate(SR);
+    Ok('silent with no sample loaded', g.GenerateSample = 0.0);
+    g.LoadSample(buf, False);
+
+    g.GrainMs := LEN * 1000.0 / SR;
+    g.Density := 2.0 * SR / LEN;            // hop = half a grain
+    g.Speed := 1.0; g.Pitch := 1.0;
+    g.Window := gwHann;
+    g.PositionSpread := 0; g.PitchSpread := 0; g.PanSpread := 0;
+    RunInto(g, outA);
+
+    // Steady state only: at the very start one grain is still fading in, and
+    // one grain alone is a window, not a reconstruction.
+    maxd := 0; pk := 0;
+    for i := LEN to N - 1 - LEN do
+    begin
+      d := Abs(outA[i] - src[i]);
+      if d > maxd then maxd := d;
+      if Abs(src[i]) > pk then pk := Abs(src[i]);
+    end;
+    Ok('overlap-add gives the source back', maxd < 1e-5,
+       Format('maxdiff=%.2e on peak %.3f (%.2f ppm)', [maxd, pk, maxd / pk * 1e6]));
+    Ok('two grains overlap, no more', g.ActiveGrains = 2,
+       Format('%d active', [g.ActiveGrains]));
+    Ok('no grain was refused', g.Refused = 0, Format('%d refused', [g.Refused]));
+
+    // The randomness is the object's own, so a seed makes a cloud repeatable —
+    // and two different seeds must not give the same cloud, or the spread is
+    // not doing anything.
+    g.PositionSpread := 0.05; g.PitchSpread := 50; g.PanSpread := 0.8;
+    g.SetSeed(12345); RunInto(g, outA);
+    g.SetSeed(12345); RunInto(g, outB);
+    maxd := 0;
+    for i := 0 to N - 1 do
+      if Abs(outA[i] - outB[i]) > maxd then maxd := Abs(outA[i] - outB[i]);
+    Ok('the same seed gives the same cloud', maxd = 0.0, Format('maxdiff=%.2e', [maxd]));
+
+    g.SetSeed(999); RunInto(g, outB);
+    maxd := 0;
+    for i := 0 to N - 1 do
+      if Abs(outA[i] - outB[i]) > maxd then maxd := Abs(outA[i] - outB[i]);
+    Ok('a different seed gives a different one', maxd > 1e-4, Format('maxdiff=%.3f', [maxd]));
+
+    // Freezing is the thing a sampler cannot do: the head stops, the grains
+    // keep coming, and the sound goes on without going down in pitch.
+    g.PositionSpread := 0; g.PitchSpread := 0; g.PanSpread := 0;
+    g.Speed := 0.0; g.Position := 0.3;
+    RunInto(g, outB);
+    e1 := 0; e2 := 0;
+    for i := N div 2 to N - 1 do
+    begin
+      e1 := e1 + outB[i] * outB[i];
+      e2 := e2 + src[i] * src[i];
+    end;
+    Ok('frozen, it keeps sounding', e1 > 1e-3, Format('energy=%.3f', [e1]));
+    Ok('frozen, it is NOT the source', Abs(outB[N - 100] - src[N - 100]) > 1e-4,
+       Format('%.4f vs %.4f', [outB[N - 100], src[N - 100]]));
+
+    // A pool that fills is a limit, and a limit nobody can see is a bug. Ask
+    // for far more grains than there are slots and it must SAY so.
+    g.Speed := 1.0;
+    g.GrainMs := 500.0;
+    g.Density := 2000.0;
+    g.Reset;
+    for i := 0 to 4999 do g.GenerateSample;
+    Ok('a full pool refuses and counts', g.Refused > 0,
+       Format('%d refused, %d active', [g.Refused, g.ActiveGrains]));
+  finally
+    g.Free;
+    buf.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
 // The arrangement: where the instruments stand.
 //
 // The invariant worth testing is SYMMETRY. Mirror every position across the
@@ -3503,6 +3621,7 @@ begin
   TestPatchNoteVelocity;
   TestPatchVoicePoolEvents;
   TestPatchSustainPedal;
+  TestGranular;
   TestArrangement;
 
   WriteLn;

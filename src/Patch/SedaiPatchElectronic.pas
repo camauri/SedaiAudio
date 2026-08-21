@@ -32,7 +32,7 @@ unit SedaiPatchElectronic;
 interface
 
 uses
-  SysUtils, Math, SedaiAudioTypes, SedaiPatchGraph, SedaiNoiseGenerator;
+  SysUtils, Math, SedaiAudioTypes, SedaiPatchGraph, SedaiNoiseGenerator, SedaiRandom;
 
 const
   SEDAI_SEQ_MAX_STEPS = 32;
@@ -462,6 +462,11 @@ end;
 
 procedure TSedaiModNoise.Prepare(ASampleRate: Cardinal; ABlockSize: Integer);
 begin
+  // Seeded from the module's OWN NAME, so this patch's noise depends on this
+  // patch and on nothing else. Seeding from the global dispenser made the sound
+  // depend on how many other things had been built first — measured: adding one
+  // patch to the library changed the sound of the ones rendered after it.
+  FGen.SetSeed(Cardinal(SedaiSeedFromName('noise.' + ModuleName)));
   inherited Prepare(ASampleRate, ABlockSize);
   FGen.SetSampleRate(ASampleRate);
 end;

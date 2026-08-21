@@ -29,7 +29,7 @@ interface
 uses
   SysUtils, Math, SedaiAudioTypes, SedaiPatchGraph, SedaiOscillator,
   SedaiKarplusGenerator, SedaiModalGenerator, SedaiBowedGenerator,
-  SedaiReedGenerator, SedaiFMOperator;
+  SedaiReedGenerator, SedaiFMOperator, SedaiGranularGenerator, SedaiRandom;
 
 type
   { TSedaiInstrumentModule }
@@ -54,6 +54,10 @@ type
     // the FM operator's phase modulation is the only one today, and without it
     // an operator can only ever be a sine with an envelope on it.
     procedure BeforeSample(AIndex: Integer); virtual;
+    // Engines with a random component seed themselves from the module's own
+    // name, so a patch sounds the same whatever else was built first. Does
+    // nothing for the engines that have none.
+    procedure SeedGen(ASeed: QWord); virtual;
     // Output trim. The engines were each validated on their own and land as
     // much as 24 dB apart (measured at 220 Hz: FM operator RMS 0.458, bowed
     // string 0.030). Patched together the loud one buries the quiet one, so
@@ -74,9 +78,35 @@ type
   TSedaiModKarplus = class(TSedaiInstrumentModule)
   protected
     function CreateGen: TSedaiSignalGenerator; override;
+    procedure SeedGen(ASeed: QWord); override;
     procedure TriggerOn(AFreq: Single; ANote: Integer; AVelocity: Single); override;
   public
     constructor Create; override;
+  end;
+
+  { granular — a cloud of grains read from a recording.
+
+    Deliberately NOT a TSedaiInstrumentModule: that base is shaped around a
+    note, and a cloud is not one. It has no gate and no root pitch; it has a
+    place in a recording, a density and a handful of spreads, and it runs
+    continuously. Forcing it into the note shape would have cost it the one
+    thing granular is for — that speed and pitch stop being the same knob. }
+  TSedaiModGranular = class(TSedaiPatchModule)
+  private
+    FGen: TSedaiGranularGenerator;
+    FPosIn, FDensIn, FSizeIn, FPitchIn: TSedaiPatchPort;
+    FSpreadIn, FPSpreadIn, FPanIn, FAmpIn: TSedaiPatchPort;
+    FOut, FOutR: TSedaiPatchPort;
+    FLoaded: Boolean;
+    FSeedGiven: Boolean;
+  public
+    constructor Create; override;
+    destructor Destroy; override;
+    function ConfigKeys: string; override;
+    function Configure(const AKey, AValue: string): Boolean; override;
+    procedure Prepare(ASampleRate: Cardinal; ABlockSize: Integer); override;
+    procedure ResetState; override;
+    procedure RenderSample(AIndex: Integer); override;
   end;
 
   TSedaiModModal = class(TSedaiInstrumentModule)
@@ -168,6 +198,7 @@ end;
 
 procedure TSedaiInstrumentModule.Prepare(ASampleRate: Cardinal; ABlockSize: Integer);
 begin
+  SeedGen(SedaiSeedFromName(TypeName + '.' + ModuleName));
   inherited Prepare(ASampleRate, ABlockSize);
   if FGen <> nil then FGen.SetSampleRate(ASampleRate);
 end;
@@ -187,6 +218,11 @@ end;
 function TSedaiInstrumentModule.DefaultTrim: Single;
 begin
   Result := 1.0;
+end;
+
+procedure TSedaiInstrumentModule.SeedGen(ASeed: QWord);
+begin
+  // Most engines have nothing random in them.
 end;
 
 procedure TSedaiInstrumentModule.BeforeSample(AIndex: Integer);
@@ -264,6 +300,12 @@ end;
 function TSedaiModKarplus.CreateGen: TSedaiSignalGenerator;
 begin
   Result := TSedaiKarplusGenerator.Create;
+end;
+
+procedure TSedaiModKarplus.SeedGen(ASeed: QWord);
+begin
+  // The noise burst that plucks the string.
+  TSedaiKarplusGenerator(FGen).SetSeed(ASeed);
 end;
 
 procedure TSedaiModKarplus.TriggerOn(AFreq: Single; ANote: Integer; AVelocity: Single);
@@ -413,11 +455,146 @@ begin
   TSedaiFMOperator(FGen).NoteOff;
 end;
 
+{ TSedaiModGranular }
+
+constructor TSedaiModGranular.Create;
+begin
+  inherited Create;
+  TypeName := 'granular';
+  Rate := mrBoth;
+  FGen := TSedaiGranularGenerator.Create;
+  FLoaded := False;
+  FSeedGiven := False;
+
+  // Where in the recording, 0..1. A knob, so an LFO or an envelope patched
+  // here scrubs through the source — which is the gesture the technique is for.
+  FPosIn := AddInput('pos', prUnipolar, 0.0);
+  FPosIn.Min := 0.0; FPosIn.Max := 1.0;
+  // Grains per second. Below about twenty you hear them one by one; above, they
+  // fuse. Both are useful, so nothing here forces the choice.
+  FDensIn := AddInput('dens', prUnipolar, 40.0);
+  FDensIn.Min := 0.1; FDensIn.Max := 2000.0;
+  FSizeIn := AddInput('size', prUnipolar, 50.0);      // milliseconds
+  FSizeIn.Min := 1.0; FSizeIn.Max := 2000.0;
+  // Volts per octave, like every other pitch input in the workbench, so the
+  // same LFO that is vibrato on an oscillator is vibrato here.
+  FPitchIn := AddInput('pitch', prPitch, 0.0);
+  FSpreadIn := AddInput('spread', prUnipolar, 0.0);   // seconds, either side
+  FSpreadIn.Min := 0.0; FSpreadIn.Max := 10.0;
+  FPSpreadIn := AddInput('pspread', prUnipolar, 0.0); // cents, either side
+  FPSpreadIn.Min := 0.0; FPSpreadIn.Max := 2400.0;
+  FPanIn := AddInput('pan', prUnipolar, 0.0);         // 0..1 of the full width
+  FPanIn.Min := 0.0; FPanIn.Max := 1.0;
+  FAmpIn := AddInput('amp', prUnipolar, 1.0);
+  FAmpIn.Min := 0.0; FAmpIn.Max := 4.0;
+
+  FOut := AddOutput('out', prAudio);
+  // The second channel is where the pan spread goes. A patch that wants one
+  // signal simply never connects it.
+  FOutR := AddOutput('outR', prAudio);
+end;
+
+destructor TSedaiModGranular.Destroy;
+begin
+  FGen.Free;
+  inherited Destroy;
+end;
+
+function TSedaiModGranular.ConfigKeys: string;
+begin
+  Result := 'sample, seed, skirt, speed, window';
+end;
+
+function TSedaiModGranular.Configure(const AKey, AValue: string): Boolean;
+var
+  F: Single;
+  FS: TFormatSettings;
+begin
+  FS := DefaultFormatSettings; FS.DecimalSeparator := '.';
+  Result := True;
+  if SameText(AKey, 'sample') then
+  begin
+    if not FGen.LoadSampleFromFile(Trim(AValue)) then
+      raise Exception.CreateFmt('granular: cannot read the sample "%s"', [AValue]);
+    FLoaded := True;
+  end
+  else if SameText(AKey, 'speed') then
+  begin
+    // How fast the head walks the recording. 1 is natural, 0 FREEZES it, and
+    // negative runs it backwards. Freezing is the thing a sampler cannot do at
+    // all, so it is a first-class value here and not an edge case.
+    if not TryStrToFloat(Trim(AValue), F, FS) then Exit(False);
+    FGen.Speed := F;
+  end
+  else if SameText(AKey, 'window') then
+  begin
+    if SameText(AValue, 'hann') then FGen.Window := gwHann
+    else if SameText(AValue, 'triangle') then FGen.Window := gwTriangle
+    else if SameText(AValue, 'tukey') then FGen.Window := gwTukey
+    else Exit(False);
+  end
+  else if SameText(AKey, 'skirt') then
+  begin
+    if not TryStrToFloat(Trim(AValue), F, FS) then Exit(False);
+    FGen.TukeySkirt := F;
+  end
+  else if SameText(AKey, 'seed') then
+  begin
+    FGen.SetSeed(QWord(StrToInt64Def(Trim(AValue), 0)));
+    FSeedGiven := True;
+  end
+  else
+    Result := False;
+end;
+
+procedure TSedaiModGranular.Prepare(ASampleRate: Cardinal; ABlockSize: Integer);
+begin
+  inherited Prepare(ASampleRate, ABlockSize);
+  FGen.SetSampleRate(ASampleRate);
+  // From the module's own name, so the cloud is the same whatever else the
+  // program built first — unless the patch asked for a particular seed, in
+  // which case it wins.
+  if not FSeedGiven then
+    FGen.SetSeed(SedaiSeedFromName('granular.' + ModuleName));
+end;
+
+procedure TSedaiModGranular.ResetState;
+begin
+  inherited ResetState;
+  FGen.Reset;
+end;
+
+procedure TSedaiModGranular.RenderSample(AIndex: Integer);
+var
+  L, R: Single;
+begin
+  if not FLoaded then
+  begin
+    // No recording, no cloud. Silence rather than a guess: a granular module
+    // with nothing to read is a patch that forgot its `sample=`.
+    FOut.Write(AIndex, 0.0);
+    FOutR.Write(AIndex, 0.0);
+    Exit;
+  end;
+  FGen.Position := FPosIn.Read(AIndex);
+  FGen.Density := FDensIn.Read(AIndex);
+  FGen.GrainMs := FSizeIn.Read(AIndex);
+  FGen.Pitch := Power(2.0, FPitchIn.Read(AIndex));
+  FGen.PositionSpread := FSpreadIn.Read(AIndex);
+  FGen.PitchSpread := FPSpreadIn.Read(AIndex);
+  FGen.PanSpread := FPanIn.Read(AIndex);
+  FGen.Amplitude := FAmpIn.Read(AIndex);
+  FGen.GenerateStereo(L, R);
+  FOut.Write(AIndex, L);
+  FOutR.Write(AIndex, R);
+end;
+
 { factory }
 
 function CreateInstrumentModuleByType(const ATypeName: string): TSedaiPatchModule;
 begin
-  if SameText(ATypeName, 'karplus') then Result := TSedaiModKarplus.Create
+  if SameText(ATypeName, 'granular') then Result := TSedaiModGranular.Create
+  else if SameText(ATypeName, 'karplus') then Result := TSedaiModKarplus.Create
   else if SameText(ATypeName, 'modal') then Result := TSedaiModModal.Create
   else if SameText(ATypeName, 'bowed') then Result := TSedaiModBowed.Create
   else if SameText(ATypeName, 'reed') then Result := TSedaiModReed.Create
@@ -427,7 +604,7 @@ end;
 
 function KnownInstrumentTypes: string;
 begin
-  Result := 'karplus, modal, bowed, reed, fmop';
+  Result := 'granular, karplus, modal, bowed, reed, fmop';
 end;
 
 end.

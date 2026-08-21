@@ -407,6 +407,7 @@ patched in, and the range they clamp to.
 
 | type | rate | declaration keys | inputs `[role default min..max]` | outputs |
 |---|---|---|---|---|
+| `granular` | both | sample, seed, skirt, speed, window | pos [0..+ 0 0..1], dens [0..+ 40 0.1..2000], size [0..+ 50 1..2000], pitch [pitch 0], spread [0..+ 0 0..10], pspread [0..+ 0 0..2400], pan [0..+ 0 0..1], amp [0..+ 1 0..4] | out, outR |
 | `karplus` | both | freq | pitch [pitch 0], gate [gate 0], amp [0..+ 1 0..8] | out |
 | `modal` | both | freq | pitch [pitch 0], gate [gate 0], amp [0..+ 1.25 0..8] | out |
 | `bowed` | both | freq | pitch [pitch 0], gate [gate 0], amp [0..+ 5 0..8] | out |
@@ -450,6 +451,8 @@ patched in, and the range they clamp to.
 | `sbody` | block | body, kind, width | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
 | `sconv` | block | ir, irraw | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
 | `seq3` | block | gain, bNtype, bNfreq, bNgain, bNq, bNoff  (N = 0..7) | in [audio 0], inR [audio 0], mix [0..+ 1 0..1] | out, outR |
+
+
 <!-- END MODULE REFERENCE -->
 
 

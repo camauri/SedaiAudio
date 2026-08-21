@@ -238,6 +238,7 @@ them.
 | Waveguide reed | `SedaiReedGenerator` | self-oscillating single reed: nonlinear reed plus bore (clarinet, sax) |
 | Bowed string | `SedaiBowedGenerator` | nonlinear bow friction plus string waveguide |
 | Modal | `SedaiModalGenerator` | a struck body as a bank of ringing modes |
+| Granular | `SedaiGranularGenerator` | a cloud of grains from a recording: pitch and **speed stop being the same knob**, and a sound can be frozen |
 | SID | `SedaiOscillator` (SID mode) | the chip's oscillators as an ordinary voice source; the cycle-exact chip is separate, below |
 
 Noise (`SedaiNoiseGenerator`: white, pink, brown, blue, violet) is a generator
@@ -379,10 +380,11 @@ wrap them.
 3. **Real-time safe.** No allocations in the audio thread; lock-free where it
    matters. The note queue is a fixed ring sized once, because one `malloc` in
    the callback is a click.
-4. **Every generator owns its randomness.** A shared generator means every sound
-   shares one stream: draw a number anywhere and every plucked string changes.
-   Found by measurement, not by reasoning — adding one file to a directory used
-   to change the sound of an instrument.
+4. **Every generator owns its randomness, and seeds itself from its own name.**
+   A shared generator means every sound shares one stream; a shared *dispenser*
+   means the sound depends on how many things were built first. Both were found
+   by measurement rather than reasoning — twice, adding one file to a directory
+   changed the sound of an instrument.
 5. **Testable in isolation**, and tested — see below.
 
 ---
@@ -420,7 +422,7 @@ mapping (`-Target x` ⇄ `--target x`) is in each script's header. Output goes t
 | `test_saf_main` | test | facade test (classic / FM / wavetable) |
 | `audiotest` | test | backend and render path |
 | `sedaisid_test` | test | SID Evo verification against reSID |
-| `saf_regression` | test | headless regression suite, 193 checks |
+| `saf_regression` | test | headless regression suite, 208 checks |
 
 Sources for tools live in `tools/`, QA and the historic frontends in `test/`.
 Local diagnostic probes that are *not* shipped stay in the gitignored
@@ -477,12 +479,12 @@ Live MIDI **input** uses `SedaiMIDIInput` (`TSedaiMIDIInput`): `Enumerate`,
 
 Four independent guards, all runnable.
 
-**`saf_regression` — 193 checks, headless.** The whole render path with no audio
+**`saf_regression` — 208 checks, headless.** The whole render path with no audio
 device: engine to mixer to master, every source type, cycle detection, file
 formats round-tripping, the note queue, sample-accurate events, the sustain
-pedal. It also runs as a Windows binary under Wine, same 193.
+pedal. It also runs as a Windows binary under Wine, same 208.
 
-**Sound fixtures — 25 patches.** Every shipped patch has a signature (hash, peak,
+**Sound fixtures — 26 patches.** Every shipped patch has a signature (hash, peak,
 RMS, spectral centroid). `patch_fixture` says which sounds changed and by how
 much, so a change to the engine cannot alter an instrument quietly. It writes
 the reference **only** with `--update`.
@@ -510,9 +512,9 @@ exercised for real.
 | | |
 |---|---|
 | Units | 81 (~55,000 lines of Pascal) |
-| Synthesis techniques | 11 |
-| Module types in the workbench | 40 |
-| Shipped patches | 27 |
+| Synthesis techniques | 12 |
+| Module types in the workbench | 41 |
+| Shipped patches | 28 |
 | Instrument libraries | 9 `.safinst` |
 | Dependencies | SDL2, for audio output only |
 | Platforms | Linux and Windows, both first-class; developed on both |
@@ -522,7 +524,7 @@ layer, all eleven synthesis techniques, the effect chain, file I/O, SID Evo,
 the GoatTracker player, the patch workbench, live MIDI input, the SedaiBasic
 MODERN bridge.
 
-**Planned**: granular synthesis; vector synthesis; IFFT / spectral resynthesis;
+**Planned**: vector synthesis; IFFT / spectral resynthesis;
 an arrangement layer (buses, position in the room, output format); brass
 physical modelling, which currently does not lock to pitch.
 
