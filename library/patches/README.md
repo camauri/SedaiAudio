@@ -215,6 +215,7 @@ drawback does not exist, so the metaphor is taken without its price.
 | `fx.patch` | The bridge at work: a native lead running into SAF's own distortion, chorus and reverb — units that had been written long before and that no patch could reach. |
 | `vector.patch` | Vector synthesis: four different timbres at the corners of a square and a path that walks the joystick across them on its own. One note, four sounds, nothing touched but the lever. |
 | `wheel.patch` | A mod wheel doing the two things a real one does at once: opening the filter by 2.5 octaves and bringing a vibrato up from nothing. Play it with `data/midi/wheel.mid`, which sweeps the wheel, and no keyboard is needed. |
+| `brass_room.patch` | The same brass, heard from where you would actually hear it: source → radiation → room. The model's bell is inside the model, so what was missing was never timbre — it was distance. |
 | `brass.patch` | Lips and a tube. The breath IS the envelope, so the note starts when the air arrives and stops dead below the threshold; velocity tightens the embouchure instead of just turning it up. |
 | `granular.patch` | A cloud of grains from a recording, where pitch and speed stop being the same knob. Point `sample=` at your own file. |
 | `echo.patch` | A loop through a 120 ms delay line. The graph works out that the shortest cycle carries 5293 samples of delay and advances the loop in chunks of 5293 rather than one at a time - bit-identical output, 42% faster. |
@@ -370,6 +371,14 @@ envelope on the amplifier means silence. Use `patch_play` to hear notes.
 **Voices sum.** Three notes of an ordinary patch pass 1.0; the pool now has a
 soft limiter on the output, linear below 0.70 and asymptotic above, so chords no
 longer square off. Below the knee the signal is untouched.
+
+**A keyboard from an `include` was silent until 2026-08-23.** The voice pool
+looked its `note` module up by NAME, and an included module is called
+`prefix.note`. A patch that got its keyboard from a part loaded, compiled,
+reported voices sounding, and made no sound — which is the worst shape a bug can
+take, because every signal said it was working. It is fixed (the lookup falls
+back to the type) and the suite now has a check whose only evidence is a peak,
+because a peak was the only thing that ever told the two cases apart.
 
 ## Module reference
 

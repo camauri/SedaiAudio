@@ -1,0 +1,39 @@
+# Lo stesso ottone, ma sentito da dove lo si sente davvero.
+#
+# Il modello `brass` e' ASCIUTTO per costruzione: la campana ce l'ha dentro,
+# ma nessuno ascolta un trombone a dieci centimetri dalla campana. Quello che
+# manca non e' timbro — di armoniche ne ha piu' della registrazione — e' la
+# DISTANZA e la STANZA. Un ascoltatore lo dice cosi': "troppo nitido e secco".
+#
+# Qui la catena e' quella del workbench, per intero e in fila:
+#
+#   sorgente (labbra + tubo + campana)  ->  radiazione (dove sta)  ->  stanza
+#
+# Il corpo NON e' uno stadio a parte, in questo strumento: la campana e' gia'
+# dentro il modello. Su un violino lo sarebbe (`formant`, `sbody`); un ottone
+# il suo corpo se lo porta appresso.
+#
+#   bin/<plat>/patch_play library/patches/brass_room.patch out.wav 6 4 48:0,55:1.4,60:2.8 2.0
+
+include "parts/brass_core.patch" as ins
+
+# A tre metri e mezzo, un po' a sinistra e leggermente sopra: la campana di un
+# trombone punta in alto e in avanti, e chi ascolta non ci sta mai davanti.
+module sp  = space ref=1.0 max=40 rolloff=0.9
+set sp.x = -1.2
+set sp.y =  0.6
+set sp.z = -3.5
+
+# La stanza. `size` grande e `damping` alto = una sala, non una piastra: le
+# alte si spengono prima, che e' cio' che fa l'aria e cio' che distingue una
+# stanza vera da un riverbero da studio.
+module rv  = sreverb size=0.82 damping=0.62 width=0.9
+set rv.mix = 0.26
+
+connect ins.amp.out -> sp.in
+
+connect sp.out  -> rv.in   amount=3.0
+connect sp.outR -> rv.inR  amount=3.0
+
+output rv.out
+output rv.outR

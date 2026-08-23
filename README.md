@@ -74,7 +74,7 @@ sb library/instruments/hammond.bas > library/patches/hammond.patch
 **Check that everything still works.**
 
 ```
-bin/x86_64-linux/saf_regression      # 267 checks, headless
+bin/x86_64-linux/saf_regression      # 270 checks, headless
 bin/x86_64-linux/sedaisid_test       # SID Evo against reSID
 ```
 
@@ -111,7 +111,7 @@ connect env1.out   -> amp.gain  amount=0.3
 output  amp.out
 ```
 
-Seven statements, **45 module types**, and 31 patches shipped in
+Seven statements, **45 module types**, and 32 patches shipped in
 [`library/patches/`](library/patches/). The full grammar, the traps with their
 real error messages, and a **module reference generated from the registry** —
 not transcribed, so it cannot drift — are in
@@ -444,7 +444,7 @@ mapping (`-Target x` ⇄ `--target x`) is in each script's header. Output goes t
 | `test_saf_main` | test | facade test (classic / FM / wavetable) |
 | `audiotest` | test | backend and render path |
 | `sedaisid_test` | test | SID Evo verification against reSID |
-| `saf_regression` | test | headless regression suite, 267 checks |
+| `saf_regression` | test | headless regression suite, 270 checks |
 
 Sources for tools live in `tools/`, QA and the historic frontends in `test/`.
 Local diagnostic probes that are *not* shipped stay in the gitignored
@@ -501,12 +501,12 @@ Live MIDI **input** uses `SedaiMIDIInput` (`TSedaiMIDIInput`): `Enumerate`,
 
 Four independent guards, all runnable.
 
-**`saf_regression` — 267 checks, headless.** The whole render path with no audio
+**`saf_regression` — 270 checks, headless.** The whole render path with no audio
 device: engine to mixer to master, every source type, cycle detection, file
 formats round-tripping, the note queue, sample-accurate events, the sustain
-pedal. It also runs as a Windows binary under Wine, same 267.
+pedal. It also runs as a Windows binary under Wine, same 270.
 
-**Sound fixtures — 29 patches.** Every shipped patch has a signature (hash, peak,
+**Sound fixtures — 30 patches.** Every shipped patch has a signature (hash, peak,
 RMS, spectral centroid). `patch_fixture` says which sounds changed and by how
 much, so a change to the engine cannot alter an instrument quietly. It writes
 the reference **only** with `--update`.
@@ -514,7 +514,7 @@ the reference **only** with `--update`.
 **`sedaisid_test` — bit-exact against reSID.** Not "close": zero mismatches over
 tens of millions of cycles, on both the classic and the distortion filter paths.
 
-**The MODERN round trip — 28 of 28.** A shipped `.patch` is lifted back into
+**The MODERN round trip — 29 of 29.** A shipped `.patch` is lifted back into
 SedaiBasic, run, and the regenerated patch must render **byte-identically** to
 the original. Two effect patches are skipped, because they need an audio input
 and rendering one with nothing connected measures silence, which proves
@@ -536,7 +536,7 @@ exercised for real.
 | Units | 84 (~57,600 lines of Pascal) |
 | Synthesis techniques | 13 |
 | Module types in the workbench | 45 |
-| Shipped patches | 31 |
+| Shipped patches | 32 |
 | Instrument libraries | 9 `.safinst` |
 | Dependencies | SDL2, for audio output only |
 | Platforms | Linux and Windows, both first-class; developed on both |

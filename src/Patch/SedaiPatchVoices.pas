@@ -311,7 +311,15 @@ begin
       V.Free;
       Exit;
     end;
+    // The keyboard, by name first and then BY TYPE. The name lookup alone was a
+    // silent trap: an included file prefixes its modules, so a patch whose
+    // keyboard came from `include` was called "note" nowhere, the lookup failed,
+    // FNote stayed nil, and the pool drove NOTHING — the patch loaded, compiled,
+    // reported voices sounding, and made no sound at all. Found while splitting
+    // an instrument into a part so a second patch could reuse it; it would have
+    // hit anyone who did the same.
     M := V.FGraph.ModuleByName('note');
+    if not (M is TSedaiModNote) then M := V.FGraph.ModuleOfType('note');
     if M is TSedaiModNote then V.FNote := TSedaiModNote(M);
 
     SetLength(FVoices, Length(FVoices) + 1);

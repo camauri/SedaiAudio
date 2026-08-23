@@ -3547,6 +3547,61 @@ begin
   DeleteFile(path);
 end;
 
+// The keyboard inside an include.
+//
+// This is here because it shipped broken and nothing caught it. A patch that
+// gets its `note` module from an included file loaded, compiled, reported
+// voices sounding — and made NO SOUND, because the pool looked its keyboard up
+// by the name "note" and an included module is called "prefix.note". Every
+// instrument module went silent the moment an instrument was split into a part
+// so that a second patch could reuse it, which is exactly what includes are for.
+procedure TestIncludedKeyboard;
+const
+  CORE_PATCH =
+    'module note = note'#10 +
+    'module osc1 = osc shape=square freq=220'#10 +
+    'module amp  = amp'#10 +
+    'connect note.pitch -> osc1.pitch'#10 +
+    'connect note.gate  -> amp.gain'#10 +
+    'connect osc1.out   -> amp.in'#10;
+  HOST_PATCH =
+    'include "saf_regr_core.patch" as ins'#10 +
+    'output ins.amp.out'#10;
+var
+  pool: TSedaiPatchVoicePool;
+  corePath, hostPath: string;
+  pk: Single;
+begin
+  WriteLn;
+  WriteLn('== the keyboard inside an include ==');
+  corePath := WritePatch('saf_regr_core.patch', CORE_PATCH);
+  hostPath := WritePatch('saf_regr_host.patch', HOST_PATCH);
+  pool := TSedaiPatchVoicePool.Create;
+  try
+    if not pool.LoadFromFile(hostPath, 2) then
+    begin
+      Ok('a patch including its keyboard loads', False, pool.LastError);
+      Exit;
+    end;
+    Ok('a patch including its keyboard loads', True);
+    pool.Prepare(SR, 512);
+    pool.Limit := False;
+    pool.Reset;
+    pool.NoteOn(60, 1.0);
+    pool.Render(512);
+    pk := MixPeak(pool, 0, 511);
+    // It compiled and allocated a voice either way. The only thing that told
+    // the two cases apart was the sound, which is why this check is a peak.
+    Ok('and the pool actually drives it', pk > 0.1, Format('peak=%.3f', [pk]));
+    Ok('a voice really was allocated', pool.ActiveVoices = 1,
+       Format('%d voices', [pool.ActiveVoices]));
+  finally
+    pool.Free;
+    DeleteFile(hostPath);
+    DeleteFile(corePath);
+  end;
+end;
+
 // ---------------------------------------------------------------------------
 // Controller routing: the mod wheel stops being thrown away.
 //
@@ -4265,6 +4320,7 @@ begin
   TestGranular;
   TestVectorSynthesis;
   TestPatchControllers;
+  TestIncludedKeyboard;
   TestArrangement;
 
   WriteLn;
