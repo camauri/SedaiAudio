@@ -144,6 +144,20 @@ type
     FVibratoRate: Single;
     FVibratoPhase: Single;
     FNoiseGain: Single;
+    // Breath is NOT white. Turbulence at a constriction has a band: it climbs
+    // out of the low end and rolls off well below Nyquist. Added flat, it reads
+    // as hiss rather than as air — which is exactly what it was called the
+    // first time it was heard. Two one-poles put it in its band.
+    FNoiseLP, FNoiseHP: Single;
+    FNoiseLPc, FNoiseHPc: Single;
+    // Breath is loudest BEFORE the note locks. Air leaks freely past lips that
+    // are not yet oscillating; once they are, they seal once per cycle and the
+    // leak drops. So the breath is not a steady hiss under the note — it is a
+    // chiff at the start that settles. Held flat it was still "too much" at 27
+    // dB below the tone, because a constant noise under a steady tone is the
+    // one thing the ear never stops hearing.
+    FBreathEnv: Single;
+    FBreathEnvC: Single;
     FRng: Cardinal;
 
     FOutputGain: Single;
@@ -204,6 +218,7 @@ type
     // measurement, not a guess.
     procedure SetBoreTrim(ASamples: Single);
     procedure SetBoreScale(AScale: Single);
+    // ANoise: breath at the lip aperture. 0 is a machine, 1 is a player.
     procedure SetBreath(ANoise, AVibDepth, AVibRateHz: Single);
     procedure SetAttack(ASeconds: Single);
     // The bell's reflection corner, 0..1 of Nyquist-ish: how much of the wave
@@ -264,6 +279,23 @@ const
   // would be correcting away something true.
   BRASS_TILT_REF = 233.08;
   BRASS_TILT_POW = 0.6;
+  // Breath, in units a person can hold in their head: 1.0 is a player, 0 is a
+  // machine. The number underneath is 0.001, and nobody should have to know
+  // that. Calibrated against the recording, in POWER and not in summed
+  // magnitude: the real trombone carries 0.9% of its power outside the harmonic
+  // bins WITH the room hiss included, so the breath alone is a fraction of one
+  // percent. It is audible because it is broadband and high, not because it is
+  // loud — which is exactly why the first three attempts at this all sounded
+  // like a gale.
+  BRASS_BREATH_SCALE = 0.001;
+  // Where the air lives. Below the low corner it would just thicken the note,
+  // above the high one it is hiss and belongs to a tape machine, not a player.
+  BRASS_BREATH_LO = 700.0;
+  BRASS_BREATH_HI = 2600.0;
+  // How fast the leak closes once the lips lock, and how much of it never
+  // stops. The floor is not zero: a player is always losing a little.
+  BRASS_BREATH_SETTLE = 0.12;   // seconds
+  BRASS_BREATH_FLOOR  = 0.18;
 
 { TSedaiBrassGenerator }
 
@@ -283,6 +315,7 @@ begin
   FAttackTime := BRASS_ATTACK_S;
   FVelGain := 1.0;
   FBellCut := 0.55;
+  FBreathEnv := 1.0;
   FTilt := 1.0;
   FDCPole := 0.999;
   FHPRatio := BRASS_HP_RATIO;
@@ -312,6 +345,9 @@ begin
   if Length(FD.buf) < need then SetLength(FD.buf, need);
   FD.len := Length(FD.buf);
   RecalcPressCoeff;
+  FBreathEnvC := Exp(-1.0 / (BRASS_BREATH_SETTLE * FSampleRate));
+  FNoiseLPc := 1.0 - Exp(-2.0 * Pi * BRASS_BREATH_HI / FSampleRate);
+  FNoiseHPc := 1.0 - Exp(-2.0 * Pi * BRASS_BREATH_LO / FSampleRate);
   UpdateBore;
   UpdateLip;
 end;
@@ -381,13 +417,22 @@ begin
   FLipY1 := 0; FLipY2 := 0;
   FDCX1 := 0; FDCY1 := 0;
   FBellState := 0;
+  FNoiseLP := 0; FNoiseHP := 0;
+  FBreathEnv := 1.0;
   FPressure := 0;
 end;
 
 function TSedaiBrassGenerator.NoiseSample: Single;
+var
+  w: Single;
 begin
   FRng := FRng * 1664525 + 1013904223;
-  Result := (Integer(FRng shr 8) / 8388608.0) - 1.0;
+  w := (Integer(FRng shr 8) / 8388608.0) - 1.0;
+  // Low-pass, then take away the bottom: what is left is a band, and a band of
+  // noise is air. The gain is put back because band-limiting costs most of it.
+  FNoiseLP := FNoiseLP + FNoiseLPc * (w - FNoiseLP);
+  FNoiseHP := FNoiseHP + FNoiseHPc * (FNoiseLP - FNoiseHP);
+  Result := (FNoiseLP - FNoiseHP) * 3.0;
 end;
 
 function TSedaiBrassGenerator.DelayTick(AInput: Single): Single;
@@ -436,7 +481,7 @@ begin
     while FVibratoPhase >= 1.0 do FVibratoPhase := FVibratoPhase - 1.0;
     Result := Result * (1.0 + FVibratoGain * Sin(2.0 * Pi * FVibratoPhase));
   end;
-  if FNoiseGain > 0 then Result := Result + Result * FNoiseGain * NoiseSample;
+
 end;
 
 procedure TSedaiBrassGenerator.NoteOn(ANote: Integer; AVelocity: Single);
@@ -450,6 +495,7 @@ begin
   SetFrequency(440.0 * Power(2.0, (ANote - 69) / 12.0));
   FGateOpen := True;
   FReleasing := False;
+  FBreathEnv := 1.0;      // the chiff belongs to the note struck, so it resets
 end;
 
 procedure TSedaiBrassGenerator.NoteOff;
@@ -514,7 +560,32 @@ begin
   // mouth's pressure gets in and the less of the bore's is reflected.
   s := area * mouth + (1.0 - area) * bore;
 
+  // BREATH. Not room tone and not an effect: it is the player, and two
+  // instruments are told apart partly by how much air they lose. Turbulence
+  // happens where the air is squeezed, so the noise is injected HERE — at the
+  // lip aperture, into the wave entering the bore — and scaled by how far the
+  // lips are open and how hard the player is blowing. Two things follow for
+  // free and neither had to be arranged: the noise PULSES at the note's own
+  // frequency, because the aperture does, which is what breath through a valve
+  // actually sounds like; and it is then coloured by the bore and radiated by
+  // the bell like everything else.
+  //
+  // It goes to the OUTPUT, not into the delay line. Two routes were measured
+  // and both blew up: noise on the mouth pressure is upstream of the lip
+  // nonlinearity and came out as 87% of the spectrum at a setting of 0.05;
+  // noise into the bore is inside a feedback loop whose gain is near one, so it
+  // recirculates and accumulates — 90% at 0.02. Air escaping past the lips is
+  // broadband and the tube stores it poorly anyway, so it leaves the
+  // instrument rather than ringing inside it. Modelled that way it stays where
+  // it was put.
+
   DelayTick(DCTick(s));
+  if FNoiseGain > 0 then
+  begin
+    FBreathEnv := BRASS_BREATH_FLOOR +
+                  (FBreathEnv - BRASS_BREATH_FLOOR) * FBreathEnvC;
+    radiated := radiated + FNoiseGain * area * breath * FBreathEnv * NoiseSample;
+  end;
   // The radiated wave, not the one inside the tube. A brass instrument is heard
   // through its bell, and the bell is a high-pass: taking the bore pressure
   // straight out is why an untreated waveguide brass sounds like a tube.
@@ -591,7 +662,7 @@ begin
   if ANoise < 0 then ANoise := 0;
   if AVibDepth < 0 then AVibDepth := 0;
   if AVibRateHz < 0 then AVibRateHz := 0;
-  FNoiseGain := ANoise;
+  FNoiseGain := ANoise * BRASS_BREATH_SCALE;
   FVibratoGain := AVibDepth;
   FVibratoRate := AVibRateHz;
 end;

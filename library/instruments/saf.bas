@@ -772,7 +772,7 @@ Sub Reed.Init(nm As String)
   This.Idx = SafDeclare(nm, "reed")
 End Sub
 
-'' brass — declaration keys: bell, drive, freq, lipq, tune
+'' brass — declaration keys: bell, drive, freq, lipq, tune, vibrate
 Type Brass Extends Module
   Public:
     Pitch As Port
@@ -780,6 +780,8 @@ Type Brass Extends Module
     Amp As Port
     Press As Port
     Open As Port
+    Breath As Port
+    Vib As Port
     Declare Sub Init(nm As String)
     Declare Sub Bind(nm As String)
 End Type
@@ -795,6 +797,8 @@ Sub Brass.Bind(nm As String)
   This.Amp.Path = nm + ".amp"
   This.Press.Path = nm + ".press"
   This.Open.Path = nm + ".open"
+  This.Breath.Path = nm + ".breath"
+  This.Vib.Path = nm + ".vib"
 End Sub
 
 Sub Brass.Init(nm As String)

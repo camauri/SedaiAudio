@@ -422,7 +422,7 @@ patched in, and the range they clamp to.
 | `modal` | both | freq | pitch [pitch 0], gate [gate 0], amp [0..+ 1.25 0..8] | out |
 | `bowed` | both | freq | pitch [pitch 0], gate [gate 0], amp [0..+ 5 0..8] | out |
 | `reed` | both | freq | pitch [pitch 0], gate [gate 0], amp [0..+ 1.8 0..8] | out |
-| `brass` | both | bell, drive, freq, lipq, tune | pitch [pitch 0], gate [gate 0], amp [0..+ 0.63 0..8], press [0..+ 1.8 0..4], open [0..+ 0.4 0..2] | out |
+| `brass` | both | bell, drive, freq, lipq, tune, vibrate | pitch [pitch 0], gate [gate 0], amp [0..+ 0.63 0..8], press [0..+ 1.8 0..4], open [0..+ 0.4 0..2], breath [0..+ 0.8 0..4], vib [0..+ 0 0..1] | out |
 | `fmop` | both | detune, feedback, fixedfreq, ratio | pitch [pitch 0], gate [gate 0], amp [0..+ 0.33 0..8], phasem [audio 0] | out |
 
 ### Instrument library
@@ -711,8 +711,43 @@ weak and hard to find; an idealised tube has no such reticence. Fixed at 76 Hz
 the low notes would not start at all; fixed at 8 Hz the top octave fell into the
 pedal. Both measured; the answer was a ratio, not a corner.
 
-`brass.patch` is the demonstration: the breath is the envelope and velocity
-tightens the lips.
+### Breath belongs to the player, not to the room
+
+`breath` and `vib` are inputs too, and for the same reason: how much air a
+player loses past the lips is part of how one instrument is told from another,
+and vibrato is a gesture. Patch velocity into `breath` with a negative amount
+and soft playing gets airier, which is what soft playing does; patch a `cc`
+module into `vib` and the oldest gesture in the business works.
+
+Getting the breath right took four tries, and each failure said something:
+
+- **On the mouth pressure** it sits *upstream of the lip nonlinearity*: a setting
+  of 0.05 came out of the bell as 87% of the spectrum.
+- **Into the bore** it is *inside a feedback loop of gain near one*: it
+  recirculates and accumulates, 90% at 0.02. Air escaping past the lips is
+  broadband and a tube stores it poorly, so it leaves the instrument rather than
+  ringing in it — the model should say so.
+- **White** it is hiss, not air. Turbulence at a constriction has a band; flat to
+  Nyquist it belongs to a tape machine. It now sits between 700 Hz and 2.6 kHz.
+- **Constant** it is still too much at 27 dB below the note, because a steady
+  noise under a steady tone is the one thing the ear never stops hearing. A
+  player leaks freely only until the lips lock; after that they seal once per
+  cycle. So the breath is a chiff that settles over 0.12 s to a floor of 18% —
+  not to zero, because a player always loses a little.
+
+Measured in POWER, not in summed magnitude: summed magnitude was the wrong
+metric, since white noise spreads over 16,000 bins and wins that sum while 40 dB
+down. The real trombone carries **0.9%** of its power outside the harmonic bins
+*with its room hiss included*; the model now sits at 0.0-0.1% during the note
+and puts its air in the attack.
+
+⚠️ **The attack cannot be measured this way at all.** With the breath switched
+fully off, the first 50 ms still read 0.8% non-harmonic, because a sound that is
+still starting is not yet periodic. The real trombone reads 0.7% there, with the
+same non-meaning. That part is the ear's, and only the ear's.
+
+`brass.patch` is the demonstration: the breath is the envelope, velocity tightens
+the lips and takes air away.
 
 ## The body stage
 

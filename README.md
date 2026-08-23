@@ -255,7 +255,7 @@ them.
 | Waveguide reed | `SedaiReedGenerator` | self-oscillating single reed: nonlinear reed plus bore (clarinet, sax) |
 | Bowed string | `SedaiBowedGenerator` | nonlinear bow friction plus string waveguide |
 | Modal | `SedaiModalGenerator` | a struck body as a bank of ringing modes |
-| Waveguide lips | `SedaiBrassGenerator` | brass: a lip valve with a resonance of its own, driving a tube through its bell. Measured range MIDI 30..65 |
+| Waveguide lips | `SedaiBrassGenerator` | brass: a lip valve with a resonance of its own, driving a tube through its bell, with the player's breath at the aperture. Measured range MIDI 30..65 |
 | Granular | `SedaiGranularGenerator` | a cloud of grains from a recording: pitch and **speed stop being the same knob**, and a sound can be frozen |
 | SID | `SedaiOscillator` (SID mode) | the chip's oscillators as an ordinary voice source; the cycle-exact chip is separate, below |
 

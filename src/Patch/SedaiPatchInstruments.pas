@@ -161,8 +161,8 @@ type
     makes the bottom of a diminuendo a real edge instead of a fade. }
   TSedaiModBrass = class(TSedaiInstrumentModule)
   private
-    FPressIn, FOpenIn: TSedaiPatchPort;
-    FDrive: Single;
+    FPressIn, FOpenIn, FBreathIn, FVibIn: TSedaiPatchPort;
+    FDrive, FVibRate: Single;
   protected
     function CreateGen: TSedaiSignalGenerator; override;
     function DefaultTrim: Single; override;
@@ -451,6 +451,17 @@ begin
   // about 1.5, stops oscillating.
   FOpenIn := AddInput('open', prUnipolar, 0.4);
   FOpenIn.Min := 0.0; FOpenIn.Max := 2.0;
+  // Breath is a HUMAN parameter, not room tone: how much air a player loses
+  // past the lips is part of how one instrument is told from another. So it is
+  // a port — patch velocity into it and soft playing gets airier, which is what
+  // soft playing does.
+  FBreathIn := AddInput('breath', prUnipolar, 0.8);
+  FBreathIn.Min := 0.0; FBreathIn.Max := 4.0;
+  // Vibrato depth, also a port, because it belongs to the player and not to the
+  // instrument: a mod wheel into here is the oldest gesture in the business.
+  FVibIn := AddInput('vib', prUnipolar, 0.0);
+  FVibIn.Min := 0.0; FVibIn.Max := 1.0;
+  FVibRate := 5.5;
 end;
 
 function TSedaiModBrass.DefaultTrim: Single;
@@ -465,7 +476,7 @@ end;
 
 function TSedaiModBrass.ConfigKeys: string;
 begin
-  Result := 'bell, drive, freq, lipq, tune';
+  Result := 'bell, drive, freq, lipq, tune, vibrate';
 end;
 
 function TSedaiModBrass.ConfigureGen(const AKey, AValue: string;
@@ -481,6 +492,7 @@ begin
   // Lip tuning in semitones: 0 is centred, and pushing it bends the note the
   // way a player's does — far enough and it breaks to the next partial.
   else if SameText(AKey, 'tune') then TSedaiBrassGenerator(FGen).SetLipTuning(AFloat)
+  else if SameText(AKey, 'vibrate') then FVibRate := AFloat
   else Result := inherited ConfigureGen(AKey, AValue, AFloat);
 end;
 
@@ -488,6 +500,10 @@ procedure TSedaiModBrass.BeforeSample(AIndex: Integer);
 begin
   TSedaiBrassGenerator(FGen).SetLip(FDrive, FPressIn.Read(AIndex));
   TSedaiBrassGenerator(FGen).SetLipOpening(FOpenIn.Read(AIndex));
+  // Vibrato depth 0..1 maps to +-8% of breath pressure: past that it stops
+  // being a singer and starts being a siren.
+  TSedaiBrassGenerator(FGen).SetBreath(FBreathIn.Read(AIndex),
+                                       0.08 * FVibIn.Read(AIndex), FVibRate);
 end;
 
 procedure TSedaiModBrass.TriggerOn(AFreq: Single; ANote: Integer; AVelocity: Single);
