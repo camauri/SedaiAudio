@@ -158,6 +158,14 @@ type
     // one thing the ear never stops hearing.
     FBreathEnv: Single;
     FBreathEnvC: Single;
+    // How loud the instrument actually is right now. The breath is tied to it,
+    // because breath that arrives BEFORE the note is not breath: it is a naked
+    // band of noise with a fast decay, and a listener called it "a brush on a
+    // cymbal", which is exactly what that is. The tone takes 100-200 ms to build
+    // — threshold, then envelope — and for that whole time the chiff had nothing
+    // to hide behind.
+    FRadEnv: Single;
+    FRadUp, FRadDn: Single;
     FRng: Cardinal;
 
     FOutputGain: Single;
@@ -296,6 +304,14 @@ const
   // stops. The floor is not zero: a player is always losing a little.
   BRASS_BREATH_SETTLE = 0.12;   // seconds
   BRASS_BREATH_FLOOR  = 0.18;
+  // The follower that ties the breath to the tone: quick to rise so the chiff is
+  // not late, slower to fall so it does not chop.
+  BRASS_RAD_UP   = 0.004;   // seconds
+  BRASS_RAD_DOWN = 0.050;
+  // The follower reads the wave INSIDE the instrument's own scale, which is far
+  // from unity; this puts the breath back on the scale the knob was calibrated
+  // in, so `breath = 1` still means "a player".
+  BRASS_RAD_NORM = 300.0;
 
 { TSedaiBrassGenerator }
 
@@ -316,6 +332,7 @@ begin
   FVelGain := 1.0;
   FBellCut := 0.55;
   FBreathEnv := 1.0;
+  FRadEnv := 0.0;
   FTilt := 1.0;
   FDCPole := 0.999;
   FHPRatio := BRASS_HP_RATIO;
@@ -346,6 +363,8 @@ begin
   FD.len := Length(FD.buf);
   RecalcPressCoeff;
   FBreathEnvC := Exp(-1.0 / (BRASS_BREATH_SETTLE * FSampleRate));
+  FRadUp := 1.0 - Exp(-1.0 / (BRASS_RAD_UP * FSampleRate));
+  FRadDn := 1.0 - Exp(-1.0 / (BRASS_RAD_DOWN * FSampleRate));
   FNoiseLPc := 1.0 - Exp(-2.0 * Pi * BRASS_BREATH_HI / FSampleRate);
   FNoiseHPc := 1.0 - Exp(-2.0 * Pi * BRASS_BREATH_LO / FSampleRate);
   UpdateBore;
@@ -419,6 +438,7 @@ begin
   FBellState := 0;
   FNoiseLP := 0; FNoiseHP := 0;
   FBreathEnv := 1.0;
+  FRadEnv := 0.0;
   FPressure := 0;
 end;
 
@@ -584,7 +604,15 @@ begin
   begin
     FBreathEnv := BRASS_BREATH_FLOOR +
                   (FBreathEnv - BRASS_BREATH_FLOOR) * FBreathEnvC;
-    radiated := radiated + FNoiseGain * area * breath * FBreathEnv * NoiseSample;
+    // Follow what is actually coming out, and scale the breath by it. No tone,
+    // no breath: the noise can no longer arrive before the note it belongs to.
+    if Abs(radiated) > FRadEnv then
+      FRadEnv := FRadEnv + FRadUp * (Abs(radiated) - FRadEnv)
+    else
+      FRadEnv := FRadEnv + FRadDn * (Abs(radiated) - FRadEnv);
+    radiated := radiated +
+                FNoiseGain * area * FBreathEnv * FRadEnv * BRASS_RAD_NORM *
+                NoiseSample;
   end;
   // The radiated wave, not the one inside the tube. A brass instrument is heard
   // through its bell, and the bell is a high-pass: taking the bore pressure

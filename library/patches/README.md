@@ -744,11 +744,35 @@ Getting the breath right took four tries, and each failure said something:
   cycle. So the breath is a chiff that settles over 0.12 s to a floor of 18% —
   not to zero, because a player always loses a little.
 
+**And then it was still too loud, four times over.** Tied to the tone it stopped
+arriving early, but a listener kept asking for less: -30 dB under the note, then
+-34, then -38, then -44, each one "still a bit strong". The setting that stuck is
+**-34 dB, chosen by ear**, and the honest note is that it disagrees with the
+measurement — see below. Two things came out of those rounds that are worth
+keeping:
+
+- **The colour stopped mattering.** Darkening the band from 2.6 kHz to 1.5 kHz
+  changed the render by **-58 dB**: inaudible. Below a certain level only
+  quantity is left, and arguing about timbre is arguing about nothing.
+- **The velocity SUBTRACTS.** `note.vel -> breath amount=-0.6` means a base
+  below 0.6 makes loud notes lose their breath in one step instead of scaling
+  down: a test at 0.35 measured **-219 dB**, which is zero, because the value had
+  gone negative and clamped. It is a cliff, not a slope, and it is documented
+  in the patch rather than left for someone to fall off.
+
 Measured in POWER, not in summed magnitude: summed magnitude was the wrong
 metric, since white noise spreads over 16,000 bins and wins that sum while 40 dB
 down. The real trombone carries **0.9%** of its power outside the harmonic bins
 *with its room hiss included*; the model now sits at 0.0-0.1% during the note
 and puts its air in the attack.
+
+⚠️ **The measured target and the chosen one disagree, and the disagreement is
+left standing.** Net of the room hiss the recording's own breath still sits
+*above* the level a listener accepts on a single dry note. Either the estimate is
+dirty — it comes from a recording peaking at -43 dBFS — or a lone synthetic tone
+tolerates less noise than a recording contains, because in a recording the noise
+has a room to hide in. Nothing here can tell those two apart, so the number is
+the ear's and is labelled as such.
 
 ⚠️ **The attack cannot be measured this way at all.** With the breath switched
 fully off, the first 50 ms still read 0.8% non-harmonic, because a sound that is

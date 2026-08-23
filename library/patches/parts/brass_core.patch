@@ -23,7 +23,20 @@ connect note.vel -> brs.open  amount=-0.36
 # Il soffio. Non e' aria della stanza: e' del MUSICISTA, ed e' anche cosi' che
 # due strumenti si distinguono. Piano si perde piu' aria in proporzione al
 # suono, quindi la velocity lo TOGLIE — ampiezza negativa, come per le labbra.
-set brs.breath = 1.6
+#
+# 1.2 = circa -34 dB sotto il suono, SCELTO A ORECCHIO e provvisorio. Misure
+# fatte: la registrazione di trombone porta lo 0.9% della potenza fuori dalle
+# armoniche, ma l'84% di quell'energia e' fruscio di sala, non fiato — quindi
+# il bersaglio misurato resta piu' alto di quanto un ascoltatore accetti su una
+# nota sola e asciutta. Delle due l'una, e la misura non sa dire quale: o la
+# stima e' sporca, o un suono sintetico solo tollera meno rumore di quanto ne
+# contenga una registrazione. Qui decide l'orecchio, e lo dice il numero
+# accanto.
+#
+# ⚠️ La velocity SOTTRAE: sotto una base di 0.6 le note forti perdono il soffio
+# di colpo invece di scalarlo. A questo valore non succede, ma se lo abbassi,
+# quella sottrazione va cambiata in un rapporto.
+set brs.breath = 1.2
 connect note.vel -> brs.breath  amount=-0.6
 
 connect note.pitch -> brs.pitch
